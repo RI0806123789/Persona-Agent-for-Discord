@@ -89,6 +89,59 @@ test("日時は UTC として読み、pending_log の書式と UNIX 秒にも対
   assert.equal(parseDbTime("読めない", "logTime"), null);
 });
 
+test("Date で表せない UNIX 秒は読めない値として扱う（#394）", () => {
+  // Date の上限はちょうど ±8.64e15 ミリ秒（= 8.64e12 秒）
+  const max = 8.64e12;
+  assert.equal(parseDbTime(1700000000, "unixTime"), 1700000000000);
+  assert.equal(parseDbTime("1700000000", "unixTime"), 1700000000000);
+  assert.equal(parseDbTime(max, "unixTime"), max * 1000);
+  for (const value of [10000000000000, "10000000000000", max + 1, 1e308, "1e308", -1, "", "   ", null]) {
+    assert.equal(parseDbTime(value, "unixTime"), null, String(value));
+  }
+  // ISO 8601 も、Date で表せない年は読めない値にする
+  assert.equal(parseDbTime("+275760-09-14T00:00:00Z", "isoTime"), null);
+  assert.equal(parseDbTime("+275760-09-13T00:00:00Z", "isoTime"), max * 1000);
+});
+
+test("範囲外の日時が1行あっても、同じページのほかの行は描画できる（#394）", async () => {
+  const React = await import("react");
+  const jsxRuntime = await import("react/jsx-runtime");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const compileCjs = (text, modules) => {
+    const exports = {};
+    const output = ts.transpileModule(text, { compilerOptions: {
+      module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
+    } }).outputText;
+    new Function("require", "exports", output)((name) => {
+      assert.ok(name in modules, `未定義の依存: ${name}`);
+      return modules[name];
+    }, exports);
+    return exports;
+  };
+  const read = (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
+  const tables = compileCjs(source, {});
+  const detailSource = (await read("pages/DbTableDetail.tsx")).replace("function RowFields(", "export function RowFields(");
+  const { RowFields } = compileCjs(detailSource, {
+    react: React, "react/jsx-runtime": jsxRuntime,
+    "../api": { api: {}, errorMessage: String },
+    "../components/Collapse": {}, "../components/expressive": {}, "../components/ui": {}, "../hooks": {},
+    "../dbTables": tables,
+    "../format": compileCjs(await read("format.ts"), {}),
+    "../privacy": { MASK: "MASKED", usePrivacy: () => ({ enabled: false }) },
+  });
+  const columns = tables.resolveColumns("affinity", ["last_interaction"]);
+  const page = { users: {} };
+  const values = [1700000000, 10000000000000, "10000000000000", 1e308, "1700000001"];
+  const html = renderToStaticMarkup(React.createElement(React.Fragment, null,
+    ...values.map((value, index) => React.createElement(RowFields, { key: index, columns, page, row: { cells: { last_interaction: value } } }))));
+  // 正常な行は日時として、範囲外の行は元の値のまま並ぶ
+  assert.ok(html.includes('dateTime="2023-11-14T22:13:20.000Z"'), html);
+  assert.ok(html.includes('dateTime="2023-11-14T22:13:21.000Z"'), html);
+  assert.equal(html.match(/<time /g).length, 2);
+  assert.equal(html.match(/>10000000000000</g).length, 2);
+  assert.ok(html.includes(">1e+308<"), html);
+});
+
 test("ペルソナはファイル名で見せる", () => {
   assert.equal(personaName("../prompts/prompt_tsun.txt"), "prompt_tsun");
   assert.equal(personaName("..\\prompts\\prompt_default.txt"), "prompt_default");
