@@ -72,6 +72,33 @@ class ChatAdmissionTests(unittest.TestCase):
         self.admission.release(1)
         self.assertIsNone(self.admission.try_acquire(13, 1))
 
+    def test_release_without_a_slot_preserves_other_guilds_and_dm(self):
+        """未確保・二重の返却で他の枠や受付記録を減らさず、全体上限も保つ。"""
+        for guild in (1, None):
+            self.admission.release(guild)
+        self.assertEqual(self.admission._running, 0)
+        self.assertIsNone(self.admission.try_acquire(11, 1))
+        self.assertIsNone(self.admission.try_acquire(12, None))
+        self.admission.release(2)
+        self.assertEqual(self.admission._running, 2)
+        self.admission.release(1)
+        self.admission.release(1)
+        self.assertEqual(self.admission._running, 1)
+        self.assertEqual(self.admission._running_by_guild, {None: 1})
+        self.admission.release(None)
+        self.admission.release(None)
+        self.assertEqual(self.admission._running, 0)
+        self.assertEqual(self.admission._running_by_guild, {})
+        self.assertEqual(list(self.admission._accepted), [11, 12])
+
+    def test_invalid_release_does_not_bypass_global_capacity(self):
+        for user, guild in ((11, 1), (12, 1), (13, None)):
+            self.assertIsNone(self.admission.try_acquire(user, guild))
+        self.admission.release(2)
+        # 同じ利用者の2件目を別サーバーへ送っても、全体上限は残る。
+        self.assertEqual(self.admission.try_acquire(11, 2), chat_admission.CHAT_BUSY_NOTICE)
+        self.assertEqual(self.admission._running, 3)
+
     def test_record_capacity_preserves_live_windows_and_recovers(self):
         """記録上限でも期間内の利用者を追い出さず、期限切れだけを掃除する。"""
         for user in (11, 12, 13):

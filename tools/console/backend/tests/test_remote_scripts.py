@@ -3,7 +3,8 @@
 本物のボット・Discord・ネットワークには一切触れない（Discord API の接続先は使われていないポートへ差し替える）。
 """
 
-import ast
+import io
+import re
 from contextlib import closing
 import json
 import os
@@ -12,6 +13,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
+import urllib.parse
+import urllib.request
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import remote_commands as rc  # noqa: E402
+from remote_scripts import db_table, insights  # noqa: E402
 from fake_ssh_server import FAKE_OPTED_OUT_USER, FAKE_USERS, make_fake_database  # noqa: E402
 
 FAKE_TOKEN = "fake-token-for-test-only"
@@ -146,56 +151,51 @@ class InsightsScriptTests(unittest.TestCase):
     def insights(self, env: dict | None = None, *, responses=None, journal=None, journal_code=0,
                  journal_grep_code=None, journal_stderr="private journal detail", sudo=False,
                  journal_error=None, settings_cases=None, journal_recent=None) -> dict:
-        # 子プロセス内で外部境界だけを差し替え、スクリプト全体を実行する
-        prelude = ""
-        if responses is not None or journal is not None:
-            prelude = f'''
-import io, json, re, subprocess, urllib.request, urllib.error, urllib.parse
-_responses = {responses!r}
-_journal = {journal!r}
-_journal_calls = []
-def _fake_urlopen(request, **kwargs):
-    parsed = urllib.parse.urlsplit(request.full_url)
-    path = parsed.path.removeprefix('/api/v10')
-    target = path + ('?' + parsed.query if parsed.query else '')
-    value = (_responses or {{}}).get(target, (_responses or {{}}).get(path, 404))
-    if isinstance(value, int):
-        raise urllib.error.HTTPError(request.full_url, value, 'test', {{}}, None)
-    return io.BytesIO(json.dumps(value).encode())
-def _fake_run(command, **kwargs):
-    if 'journalctl' in command:
-        _journal_calls.append(command)
-        assert ('sudo' in command) == {sudo!r}
-        if {journal_error!r} == 'os':
-            raise OSError('架空の実行失敗')
-        if {journal_error!r} == 'timeout':
-            raise subprocess.TimeoutExpired(command, 1)
-        values = (_journal if '-g' in command or {journal_recent!r} is None else {journal_recent!r}) or []
-        if '-g' in command:
-            pattern = command[command.index('-g') + 1]
-            values = [row for row in values if isinstance(row, dict) and re.search(pattern, str(row.get('MESSAGE', '')))][-1:]
-        output = '\\n'.join(json.dumps(row) for row in values)
-        code = {journal_grep_code!r} if '-g' in command else None
-        return subprocess.CompletedProcess(command, {journal_code!r} if code is None else code, output, {journal_stderr!r})
-    if command[0] == 'systemctl':
-        return subprocess.CompletedProcess(command, 0, '', '')
-    raise AssertionError('許可していない外部コマンド')
-urllib.request.urlopen = _fake_urlopen
-subprocess.run = _fake_run
-'''
-        args = ["--insights", str(self.root), "bot"] + (["--journal-sudo"] if sudo else [])
-        # SQLiteではboolが整数へ変換されるため、型検証用の行は関数へ直接渡す。
-        postlude = ""
-        if settings_cases is not None:
-            postlude += f'\nresult["settings_cases"] = [describe_settings(row) for row in {settings_cases!r}]\n'
-        if prelude:
-            postlude += '\nresult["journal_calls"] = _journal_calls\n'
-        postlude += '\nprint(json.dumps(result))\n'
-        completed = run_script(prelude + rc.INSIGHTS_SCRIPT + postlude, args, env={**self.offline_env, **(env or {})})
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.stdout = completed.stdout
-        data = json.loads(completed.stdout.strip().splitlines()[-1])
-        self.journal_calls = data.pop("journal_calls", [])
+        # 通常のimportと収集メソッドを使い、外部との境界だけを差し替える。
+        self.journal_calls = []
+
+        def fake_urlopen(request, **kwargs):
+            if responses is None:
+                raise urllib.error.URLError("架空のオフライン")
+            parsed = urllib.parse.urlsplit(request.full_url)
+            path = parsed.path.removeprefix("/api/v10")
+            target = path + ("?" + parsed.query if parsed.query else "")
+            value = responses.get(target, responses.get(path, 404))
+            if isinstance(value, int):
+                raise urllib.error.HTTPError(request.full_url, value, "test", {}, None)
+            return io.BytesIO(json.dumps(value).encode())
+
+        def fake_run(command, **kwargs):
+            if "journalctl" in command:
+                self.journal_calls.append(command)
+                self.assertEqual("sudo" in command, sudo)
+                if journal_error == "os":
+                    raise OSError("架空の実行失敗")
+                if journal_error == "timeout":
+                    raise subprocess.TimeoutExpired(command, 1)
+                if journal is None:
+                    raise OSError("架空のjournal未設定")
+                values = (journal if "-g" in command or journal_recent is None else journal_recent) or []
+                if "-g" in command:
+                    pattern = command[command.index("-g") + 1]
+                    values = [row for row in values if isinstance(row, dict)
+                              and re.search(pattern, str(row.get("MESSAGE", "")))][-1:]
+                output = "\n".join(json.dumps(row) for row in values)
+                code = journal_grep_code if "-g" in command else None
+                return subprocess.CompletedProcess(command, journal_code if code is None else code,
+                                                   output, journal_stderr)
+            if command[0] == "systemctl":
+                return subprocess.CompletedProcess(command, 0, "", "")
+            raise AssertionError("許可していない外部コマンド")
+
+        with patch.dict(os.environ, {**self.offline_env, **(env or {})}), \
+                patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+                patch("subprocess.run", side_effect=fake_run):
+            collector = insights.InsightsCollector(self.root, "bot", sudo)
+            data = collector.collect()
+            if settings_cases is not None:
+                data["settings_cases"] = [collector.describe_settings(row) for row in settings_cases]
+        self.stdout = json.dumps(data)
         return data
 
     def test_settings_validate_choices_and_types_in_both_layouts(self):
@@ -808,12 +808,7 @@ class DbTableScriptTests(unittest.TestCase):
         return json.loads(completed.stdout.strip().splitlines()[-1])
 
     def test_tables_match_the_backend_whitelist(self) -> None:
-        tree = ast.parse(rc.DB_TABLE_SCRIPT)
-        node = next(
-            item for item in tree.body
-            if isinstance(item, ast.Assign) and any(getattr(target, "id", "") == "TABLES" for target in item.targets)
-        )
-        self.assertEqual(set(ast.literal_eval(node.value)), set(rc.DB_TABLES))
+        self.assertEqual(set(db_table.TABLES), set(rc.DB_TABLES))
 
     def test_every_table_can_be_read(self) -> None:
         for table in rc.DB_TABLES:
@@ -927,22 +922,8 @@ class DbTableScriptTests(unittest.TestCase):
         self.assertEqual(data["errors"], ["bot.db が見つかりません。"])
         self.assertNotIn("fictional-missing", json.dumps(data))
 
-    @staticmethod
-    def load_user_names():
-        """スクリプトは読み込むと main() が走るため、表示名の関数と定数だけを取り出して使う。"""
-        tree = ast.parse(rc.DB_TABLE_SCRIPT)
-        nodes = [
-            node for node in tree.body
-            if (isinstance(node, ast.FunctionDef) and node.name == "user_names")
-            or (isinstance(node, ast.Assign) and any(
-                isinstance(target, ast.Name) and target.id == "NAME_LOOKUP_CHUNK" for target in node.targets))
-        ]
-        namespace = {"sqlite3": sqlite3}
-        exec(compile(ast.Module(body=nodes, type_ignores=[]), "db_table.py", "exec"), namespace)
-        return namespace
 
     def test_names_are_looked_up_only_for_the_shown_users(self) -> None:
-        namespace = self.load_user_names()
         con = sqlite3.connect(":memory:")
         con.execute("CREATE TABLE reminders (reminder_id INTEGER PRIMARY KEY, user_id TEXT, user_name TEXT)")
         con.execute("CREATE TABLE user_stats (user_id TEXT PRIMARY KEY, user_name TEXT)")
@@ -956,7 +937,7 @@ class DbTableScriptTests(unittest.TestCase):
         statements = []
         con.set_trace_callback(statements.append)
 
-        names = namespace["user_names"](con, {"11", "12", "13", "14", "99"})
+        names = db_table.user_names(con, {"11", "12", "13", "14", "99"})
 
         # 新しいリマインダーの名前で上書きし、会話統計の名前を最優先にする。空の名前は使わない
         self.assertEqual(names, {"11": "架空の新名", "12": "架空の統計名", "14": "架空の統計だけ"})
@@ -964,11 +945,10 @@ class DbTableScriptTests(unittest.TestCase):
         self.assertEqual(len(selects), 2)
         self.assertTrue(all("IN (" in sql for sql in selects))
         self.assertFalse(any("1000" in sql for sql in selects))
-        self.assertEqual(namespace["user_names"](con, set()), {})
+        self.assertEqual(db_table.user_names(con, set()), {})
 
     def test_many_shown_users_are_split_into_bounded_queries(self) -> None:
-        namespace = self.load_user_names()
-        chunk = namespace["NAME_LOOKUP_CHUNK"]
+        chunk = db_table.NAME_LOOKUP_CHUNK
         self.assertLess(chunk, 999)  # 古い SQLite の変数の上限
         con = sqlite3.connect(":memory:")
         con.execute("CREATE TABLE user_stats (user_id TEXT PRIMARY KEY, user_name TEXT)")
@@ -976,7 +956,7 @@ class DbTableScriptTests(unittest.TestCase):
         con.executemany("INSERT INTO user_stats VALUES (?, ?)", [(user_id, "架空" + user_id) for user_id in ids])
         statements = []
         con.set_trace_callback(statements.append)
-        names = namespace["user_names"](con, set(ids))
+        names = db_table.user_names(con, set(ids))
         self.assertEqual(len(names), len(ids))
         self.assertEqual(sum(sql.lstrip().upper().startswith("SELECT") and "user_stats" in sql for sql in statements), 3)
 

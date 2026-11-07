@@ -46,13 +46,6 @@ NAME_LOOKUP_CHUNK = 500
 # JavaScript の Number で正確に表せる整数の上限
 MAX_SAFE_INTEGER = 2 ** 53 - 1
 
-result = {"errors": []}
-
-
-def note(message):
-    result["errors"].append(message)
-
-
 def quote(name):
     return '"' + name.replace('"', '""') + '"'
 
@@ -118,12 +111,13 @@ def user_names(con, user_ids):
     return names
 
 
-def read_table(con, table, offset, limit):
+def read_table(con, table, offset, limit, result):
+    """呼出元が所有する結果へ追記する。途中の失敗でも取得済みの列・件数を残す。"""
     spec = TABLES[table]
     columns = [row[1] for row in con.execute("PRAGMA table_info(%s)" % quote(table))]
     if not columns:
-        note("この DB には %s テーブルがありません（スキーマが古い可能性があります）。" % table)
-        return
+        result["errors"].append("この DB には %s テーブルがありません（スキーマが古い可能性があります）。" % table)
+        return result
     result["columns"] = columns
     result["total"] = con.execute("SELECT COUNT(*) FROM %s" % quote(table)).fetchone()[0]
 
@@ -175,34 +169,44 @@ def read_table(con, table, offset, limit):
         output.append(item)
     result["rows"] = output
     result["users"] = user_names(con, seen_users)
+    return result
 
 
-def main():
-    db_path, table = sys.argv[2], sys.argv[3]
+def collect(db_path, table, offset=0, limit=50):
+    """1ページ分を読み取り専用で収集し、実行ごとに独立した結果を返す。"""
     try:
-        offset = max(0, int(sys.argv[4]))
-        limit = max(1, min(int(sys.argv[5]), MAX_LIMIT))
-    except (IndexError, ValueError):
+        offset = max(0, int(offset))
+        limit = max(1, min(int(limit), MAX_LIMIT))
+    except ValueError:
         offset, limit = 0, 50
-    result.update({"table": table, "offset": offset, "limit": limit, "columns": [], "rows": [], "total": 0, "users": {}})
+    result = {"table": table, "offset": offset, "limit": limit, "columns": [], "rows": [], "total": 0, "users": {}, "errors": []}
     if table not in TABLES:
-        note("このテーブルは表示できません。")
-        return
+        result["errors"].append("このテーブルは表示できません。")
+        return result
     if not os.path.exists(db_path):
-        note("bot.db が見つかりません。")
-        return
+        result["errors"].append("bot.db が見つかりません。")
+        return result
     try:
         con = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=3)
         try:
             result["schema_version"] = con.execute("PRAGMA user_version").fetchone()[0]
-            read_table(con, table, offset, limit)
+            read_table(con, table, offset, limit, result)
         finally:
             con.close()
     except (OSError, sqlite3.Error):
         # 例外の文面にはサーバー上のパスが入りうるので、決まった案内だけを返す
-        note("bot.db を読み取れませんでした。ファイルの形式と読み取り権限を確認してください。")
+        result["errors"].append("bot.db を読み取れませんでした。ファイルの形式と読み取り権限を確認してください。")
+    return result
 
 
-main()
-# 日本語は \uXXXX にして ASCII だけで出す（サーバーのロケールが UTF-8 でなくても書き出せるように）
-print(json.dumps(result))
+def main(argv=None):
+    args = sys.argv[1:] if argv is None else argv
+    # 省略時・不正値のときは、従来どおり開始位置と件数を一緒に既定値へ戻す。
+    offset, limit = args[3:5] if len(args) >= 5 else (0, 50)
+    result = collect(args[1], args[2], offset, limit)
+    # 日本語は \uXXXX にして ASCII だけで出す（サーバーのロケールが UTF-8 でなくても書き出せるように）
+    print(json.dumps(result))
+
+
+if __name__ == "__main__":
+    main()

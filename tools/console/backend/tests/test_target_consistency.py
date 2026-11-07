@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app
+from remote_scripts.insights import InsightsCollector
 from deploy import DeployManager, DeployRunner, StepFailed, new_record
 from ssh_session import CommandResult, NotConnectedError
 from test_api import request
@@ -196,16 +197,11 @@ class InsightsChoicesConsistencyTests(unittest.TestCase):
     def test_current_bot_choices_and_defaults_are_read_without_import(self):
         root = Path(__file__).resolve().parents[4]
         config = root / "src/persona_bot/config"
-        constants_tree = ast.parse((config / "constants.py").read_text(encoding="utf-8-sig"))
         choices_tree = ast.parse((config / "choices.py").read_text(encoding="utf-8-sig"))
-        insights_tree = ast.parse((root / "tools/console/backend/remote_scripts/insights.py").read_text(encoding="utf-8-sig"))
-        functions = [node for node in insights_tree.body if isinstance(node, ast.FunctionDef)
-                     and node.name in {"read_constants", "choice_names", "describe_settings"}]
-        self.assertEqual({node.name for node in functions}, {"read_constants", "choice_names", "describe_settings"})
-        scope = {"ast": ast, "parse_file": lambda path: constants_tree}
-        exec(compile(ast.Module(body=functions, type_ignores=[]), "<insights関数>", "exec"), scope)
-        constants = scope["read_constants"](config / "constants.py")
-        scope.update(CONSTANTS=constants, CHOICES_TREE=choices_tree)
+        collector = InsightsCollector(root, "fixture")
+        constants = collector.read_constants(config / "constants.py")
+        collector.constants = constants
+        collector.choices_tree = choices_tree
         defaults = {"MODEL_CHOICES": "DEFAULT_MODEL_NAME", "RESPOND_MODE_CHOICES": "DEFAULT_RESPOND_MODE",
                     "AUTO_TOPIC_INTERVAL_CHOICES": "DEFAULT_AUTO_TOPIC_INTERVAL_HOURS"}
         for choice_name, default_name in defaults.items():
@@ -220,18 +216,18 @@ class InsightsChoicesConsistencyTests(unittest.TestCase):
                 expected[value] = name
             with self.subTest(choice=choice_name):
                 self.assertTrue(expected)
-                self.assertEqual(scope["choice_names"](choice_name), expected)
+                self.assertEqual(collector.choice_names(choice_name), expected)
                 self.assertIn(constants[default_name], expected)
-        scope.update(MODELS=scope["choice_names"]("MODEL_CHOICES"),
-                     MODES=scope["choice_names"]("RESPOND_MODE_CHOICES"),
-                     AUTO_TOPIC_INTERVALS=scope["choice_names"]("AUTO_TOPIC_INTERVAL_CHOICES"),
-                     SETTINGS_COLUMNS=set(), describe_persona=lambda row: {})
-        effective = scope["describe_settings"]({})
-        self.assertEqual(effective["model"], scope["MODELS"][constants["DEFAULT_MODEL_NAME"]])
-        self.assertEqual(effective["respond_mode"], scope["MODES"][constants["DEFAULT_RESPOND_MODE"]])
+        collector.models = collector.choice_names("MODEL_CHOICES")
+        collector.modes = collector.choice_names("RESPOND_MODE_CHOICES")
+        collector.auto_topic_intervals = collector.choice_names("AUTO_TOPIC_INTERVAL_CHOICES")
+        effective = collector.describe_settings({})
+        self.assertEqual(effective["model"], collector.models[constants["DEFAULT_MODEL_NAME"]])
+        self.assertEqual(effective["respond_mode"], collector.modes[constants["DEFAULT_RESPOND_MODE"]])
         self.assertEqual(effective["auto_topic_interval_hours"], constants["DEFAULT_AUTO_TOPIC_INTERVAL_HOURS"])
-        for interval in scope["AUTO_TOPIC_INTERVALS"]:
-            self.assertEqual(scope["describe_settings"]({"auto_topic_interval_hours": interval})["auto_topic_interval_hours"], interval)
+        for interval in collector.auto_topic_intervals:
+            self.assertEqual(collector.describe_settings({"auto_topic_interval_hours": interval})["auto_topic_interval_hours"], interval)
+
 
 
 class SummaryIndexTests(unittest.TestCase):

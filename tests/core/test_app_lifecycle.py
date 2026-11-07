@@ -42,6 +42,66 @@ class RestoreAttachTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ClientCloseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_direct_shutdown_has_a_deadline_without_inherited_owner(self) -> None:
+        client = PersonaClient(genai_client=object(), database=Mock(), intents=discord.Intents.none())
+        release = asyncio.Event()
+        stop = AsyncMock(side_effect=release.wait)
+        client.add_shutdown_callback(stop)
+        with patch.object(discord.Client, "close", new=AsyncMock()) as discord_close, \
+                patch.object(bot_client, "close_genai_client", new=AsyncMock()) as gemini_close, \
+                patch.object(bot_client, "BACKGROUND_SHUTDOWN_TIMEOUT_SECONDS", 0.01):
+            task = asyncio.create_task(client._shutdown())
+            try:
+                with self.assertLogs("persona_bot.core.background", level="ERROR"):
+                    done, _ = await asyncio.wait({task}, timeout=1)
+                    self.assertIn(task, done)
+                    with self.assertRaises(TimeoutError):
+                        await task
+                self.assertIn(client._service_stop_task, client.background_tasks._tasks)
+                self.assertFalse(client._service_stop_task.cancelled())
+                discord_close.assert_not_awaited()
+                gemini_close.assert_not_awaited()
+                client._database.close.assert_not_called()
+            finally:
+                release.set()
+                await asyncio.gather(task, return_exceptions=True)
+                await client.background_tasks.shutdown(timeout=1)
+            await client.close()
+            stop.assert_awaited_once()
+            discord_close.assert_awaited_once()
+            gemini_close.assert_awaited_once()
+            client._database.close.assert_called_once()
+
+    async def test_unfinished_service_is_not_awaited_after_background_drain(self) -> None:
+        client = PersonaClient(genai_client=object(), database=Mock(), intents=discord.Intents.none())
+        release = asyncio.Event()
+        stop = AsyncMock(side_effect=release.wait)
+        client.add_shutdown_callback(stop)
+        with patch.object(discord.Client, "close", new=AsyncMock()) as discord_close, \
+                patch.object(bot_client, "close_genai_client", new=AsyncMock()) as gemini_close, \
+                patch.object(bot_client, "BACKGROUND_SHUTDOWN_TIMEOUT_SECONDS", 0.01), \
+                patch.object(client.background_tasks, "shutdown", new=AsyncMock()):
+            # 通常処理の回収が戻った場合も、終了通知自身の完了を別に確認する。
+            task = asyncio.create_task(client._shutdown())
+            try:
+                done, _ = await asyncio.wait({task}, timeout=1)
+                self.assertIn(task, done)
+                with self.assertRaises(TimeoutError):
+                    await task
+                discord_close.assert_not_awaited()
+                gemini_close.assert_not_awaited()
+                client._database.close.assert_not_called()
+                self.assertFalse(client._service_stop_task.cancelled())
+            finally:
+                release.set()
+                await asyncio.gather(task, return_exceptions=True)
+                await client._service_stop_task
+            await client.close()
+            stop.assert_awaited_once()
+            discord_close.assert_awaited_once()
+            gemini_close.assert_awaited_once()
+            client._database.close.assert_called_once()
+
     async def test_service_stop_precedes_cancellation_of_background_tasks(self) -> None:
         client = PersonaClient(genai_client=object(), database=Mock(), intents=discord.Intents.none())
         started = asyncio.Event()

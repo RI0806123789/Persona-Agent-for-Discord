@@ -88,6 +88,76 @@ class RunInThreadTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TaskOwnerShutdownTests(unittest.IsolatedAsyncioTestCase):
+    def run_without_task(self, coro):
+        """イベントループのコールバックから、Taskで包まずにコルーチンを駆動する。"""
+        loop = asyncio.get_running_loop()
+        result = loop.create_future()
+
+        def advance(_=None):
+            try:
+                awaited = coro.send(None)
+            except StopIteration as finished:
+                result.set_result(finished.value)
+            except BaseException as error:
+                result.set_exception(error)
+            else:
+                awaited.add_done_callback(advance)
+
+        loop.call_soon(advance)
+        return result
+
+    async def test_run_without_current_task_tracks_body_and_children(self):
+        owner = TaskOwner()
+        child = None
+
+        async def work():
+            nonlocal child
+            self.assertIn(asyncio.current_task(), owner._tasks)
+            child = spawn(asyncio.sleep(0), label="架空の子処理")
+            self.assertIn(child, owner._tasks)
+            await child
+            return "架空の結果"
+
+        self.assertEqual(await self.run_without_task(owner.run(work())), "架空の結果")
+        self.assertTrue(child.done())
+        await owner.shutdown()
+        self.assertEqual(owner._tasks, {})
+
+    async def test_run_without_current_task_is_canceled_by_owner(self):
+        owner = TaskOwner()
+        started = asyncio.Event()
+        cleaned = Mock()
+
+        async def work():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleaned()
+
+        result = self.run_without_task(owner.run(work()))
+        await asyncio.wait_for(started.wait(), 1)
+        await owner.shutdown(timeout=1)
+        with self.assertRaises(asyncio.CancelledError):
+            await result
+        cleaned.assert_called_once_with()
+        self.assertEqual(owner._tasks, {})
+
+    async def test_run_without_current_task_rejects_work_after_stop(self):
+        owner = TaskOwner()
+        owner.stop_accepting()
+        body = Mock()
+
+        async def work():
+            body()
+
+        coro = work()
+        with self.assertRaises(asyncio.CancelledError):
+            await self.run_without_task(owner.run(coro))
+        body.assert_not_called()
+        self.assertIsNone(coro.cr_frame)
+        self.assertEqual(owner._tasks, {})
+
     async def test_rejected_spawn_is_tracked_until_cancellation_finishes(self):
         owner = TaskOwner()
         owner.stop_accepting()
