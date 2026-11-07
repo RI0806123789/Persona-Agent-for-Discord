@@ -2,6 +2,7 @@
 import logging
 import io
 import re
+from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from pathlib import Path
 from typing import Any, Callable, Sequence, TypeGuard, TYPE_CHECKING
@@ -177,13 +178,21 @@ async def fetch_channel_history_text(
         return ""
 
 
-def build_summary_source_text(
+@dataclass(frozen=True)
+class SummarySource:
+    """要約へ実際に採用した履歴と、そのメッセージ件数。"""
+
+    text: SanitizedHistory
+    message_count: int
+
+
+def build_summary_source(
     messages: Sequence[discord.Message],
     bot_user: Any,
     tz: tzinfo | None = None,
     *,
     is_blocked: Callable[[int], bool] | None = None,
-) -> str:
+) -> SummarySource:
     """議事録要約用に「発言者名つき」で会話ログを整形する。
 
     通常の履歴整形（build_history_text）は全員を「ユーザー/BOT」の2種類に潰すが、
@@ -217,7 +226,19 @@ def build_summary_source_text(
         # created_at は UTC。表示用のタイムゾーン（既定は SUMMARY_TIMEZONE）へ明示的に変換する。
         timestamp = history_message.created_at.astimezone(display_tz).strftime("%m/%d %H:%M")
         lines.append(f"[{timestamp}] {speaker}: {content}")
-    return SanitizedHistory("\n".join(lines))
+    # 本文の改行数とは無関係に、採用したメッセージ1件につき要素を1つ追加する。
+    return SummarySource(SanitizedHistory("\n".join(lines)), len(lines))
+
+
+def build_summary_source_text(
+    messages: Sequence[discord.Message],
+    bot_user: Any,
+    tz: tzinfo | None = None,
+    *,
+    is_blocked: Callable[[int], bool] | None = None,
+) -> str:
+    """本文だけを必要とする呼び出し元へ、従来どおり整形済み履歴を返す。"""
+    return build_summary_source(messages, bot_user, tz, is_blocked=is_blocked).text
 
 
 async def fetch_messages_since(

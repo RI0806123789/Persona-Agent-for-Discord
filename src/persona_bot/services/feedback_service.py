@@ -59,7 +59,7 @@ from typing import Any
 
 import discord
 
-from persona_bot.core.background import run_in_thread, spawn
+from persona_bot.core.background import run_in_thread, spawn, wait_for_cleanup
 from persona_bot.config.choices import MODEL_DISPLAY_NAMES
 from persona_bot.config.personas import current_persona_catalog
 from persona_bot.config.constants import (
@@ -307,12 +307,14 @@ class FeedbackService:
         vote: _VoteState,
         before: tuple[int, str] | None,
     ) -> None:
-        """評価者の状態の変化を、イベントを受け付けた順のとおりに DB へ反映する。
+        """評価者ごとの保存要求を直列化し、最新の状態を DB へ反映する。
 
-        呼び出し側は状態を書き換えてから、await を挟まずにここへ来ること（版の番号が
-        イベントの到着順になる）。ロックを取れたら、自分の版ではなく**その時点の最新の
-        状態**を書く。後のイベントが先にロックを取っても、遅れた側が古い状態で
-        上書きすることはない（保存済みの版が自分の版以上なら書かずに戻る）。
+        個別イベントは状態を書き換えてから、await を挟まずにここへ来る。一括削除は
+        全評価者の状態を同期更新したあと、キャンセルから保護した子タスクが評価者ごとに
+        ここへ来る。このため版番号は保存要求の識別に使う。ロックを取れたら、要求時点の
+        状態ではなく**その時点の最新の状態**を書く。後のイベントが先にロックを取っても、
+        遅れた側が古い状態で上書きすることはない（保存済みの版が自分の要求以上なら
+        書かずに戻る）。
         保存の失敗・キャンセルでは saved_version を進めないので、次のイベントが最新の
         状態を書き直す。ロックは async with が必ず外す（同期処理の完了待ちは run_in_thread）。
         """
@@ -394,6 +396,59 @@ class FeedbackService:
             await self._save_vote(message_id, user_id, entry, vote, before)
         except Exception as error:
             logger.error("フィードバック: 評価の取り消しに失敗しました。", exc_info=error)
+
+    async def handle_reaction_clear(self, payload: discord.RawReactionClearEvent) -> None:
+        """全リアクションの一括削除を、追跡中の評価者全員へ反映する。"""
+        try:
+            await self._clear_reactions(payload, rating=None)
+        except Exception as error:
+            logger.error("フィードバック: 評価の一括取り消しに失敗しました。", exc_info=error)
+
+    async def handle_reaction_clear_emoji(self, payload: discord.RawReactionClearEmojiEvent) -> None:
+        """1種類の一括削除では、残っている反対の絵文字を評価として採用し直す。"""
+        try:
+            rating = _rating_of(payload.emoji)
+            if rating is not None:
+                await self._clear_reactions(payload, rating=rating)
+        except Exception as error:
+            logger.error("フィードバック: 絵文字単位の評価の取り消しに失敗しました。", exc_info=error)
+
+    async def _clear_reactions(
+        self, payload: discord.RawReactionClearEvent | discord.RawReactionClearEmojiEvent,
+        *, rating: int | None,
+    ) -> None:
+        if not FEEDBACK_ENABLED or self._client.user is None:
+            return
+        message_id = int(payload.message_id)
+        entry = self._tracked.get(message_id)
+        if entry is None:
+            # 再起動後・保持上限外の返信は、個別の追加・削除と同じく追跡しない。
+            return
+        changed: list[tuple[str, _VoteState, tuple[int, str] | None]] = []
+        for user_id, vote in self._votes.get(message_id, {}).items():
+            if rating is not None and rating not in vote.reactions:
+                continue
+            before = vote.adopted()
+            if rating is None:
+                vote.reactions.clear()
+            else:
+                vote.reactions.pop(rating)
+            changed.append((user_id, vote, before))
+        if not changed:
+            return
+        # 全員の状態を最初のawaitより前に更新する。保存待ち中の後着イベントは、
+        # この一括削除より新しい状態として、既存の同じ評価者ロックへ合流する。
+        # 途中の中断で一部の評価者だけ未保存にしないよう、全件の回収を保護する。
+        async def save_cleared_votes() -> None:
+            for user_id, vote, before in changed:
+                try:
+                    await self._save_vote(message_id, user_id, entry, vote, before)
+                except Exception as error:
+                    # 1人の保存障害でも他の評価者の削除は進める。失敗した状態は
+                    # saved_versionを進めず、次のイベントで最新を書き直す。
+                    logger.error("フィードバック: 一括取り消しの保存に失敗しました。", exc_info=error)
+
+        await wait_for_cleanup(save_cleared_votes(), label="フィードバックの一括取り消し")
 
     def _resolve_vote_target(
         self, payload: discord.RawReactionActionEvent

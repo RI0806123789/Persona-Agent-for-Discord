@@ -14,6 +14,8 @@ from persona_bot.core.app_state import GuildSettings
 from tests.helpers.discord_mocks import make_interaction, make_response
 from tests.helpers.persona_helpers import install_persona_catalog
 from persona_bot.services import summary_service
+from persona_bot.services.prompting import SanitizedHistory
+from persona_bot.utils.discord_helpers import SummarySource
 from persona_bot.views import summary_view
 from persona_bot.views.summary_view import RunSummaryButton, SummaryView
 
@@ -154,7 +156,7 @@ class SummaryGenerationTests(unittest.IsolatedAsyncioTestCase):
 
                 gemini = Mock(generate=AsyncMock(return_value=("架空の要約", None, [])))
                 with patch.object(summary_service, "fetch_messages_since", AsyncMock(side_effect=history)), patch.object(
-                    summary_service, "build_summary_source_text", return_value="架空の発言",
+                    summary_service, "build_summary_source", return_value=SummarySource(SanitizedHistory("架空の発言"), 1),
                 ), patch.object(summary_service, "load_persona_template", AsyncMock(side_effect=prompt)) as loader, patch.object(
                     summary_service, "screen_bot_response", AsyncMock(side_effect=lambda text, *args, **kwargs: text),
                 ):
@@ -173,7 +175,7 @@ class SummaryGenerationTests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_summary_after_tag_and_heading_removal_is_rejected(self):
         for text in (" \n\t", "  \n[V:+1, A:+1]", "### \n[V:0, A:0]"):
             with self.subTest(text=text), patch.object(summary_service, "fetch_messages_since", AsyncMock(return_value=[object()])), patch.object(
-                summary_service, "build_summary_source_text", return_value="架空の発言",
+                summary_service, "build_summary_source", return_value=SummarySource(SanitizedHistory("架空の発言"), 1),
             ), patch.object(summary_service, "load_persona_template", AsyncMock(return_value="架空のペルソナ")), patch.object(
                 summary_service, "screen_bot_response", AsyncMock(),
             ) as screen:

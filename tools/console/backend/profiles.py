@@ -173,6 +173,8 @@ def load_profiles() -> tuple[dict[str, Profile], str]:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError as error:
         raise ProfileError(f"{path.name} が見つかりません。") from error
+    except UnicodeError as error:
+        raise ProfileError(f"{path.name} を UTF-8（BOM付きも可）で保存し直してください。文字コードを読み取れませんでした。") from error
     except json.JSONDecodeError as error:
         raise ProfileError(f"{path.name} が JSON として読めません（{error.lineno} 行目）。") from error
 
