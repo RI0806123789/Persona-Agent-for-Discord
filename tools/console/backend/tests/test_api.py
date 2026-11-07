@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import app
+import profiles
 import remote_commands as rc
 from deploy import DeployManager, DeployRunner, new_record
 from fake_ssh_server import start_fake_server
@@ -41,6 +42,30 @@ async def request(path, *, method="GET", host="127.0.0.1", header=True, body=Non
     status = next(message["status"] for message in sent if message["type"] == "http.response.start")
     content = b"".join(message.get("body", b"") for message in sent if message["type"] == "http.response.body")
     return status, content
+
+
+class ProfileEncodingApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_invalid_encoding_returns_safe_json_for_profile_and_connect_endpoints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.json"
+            payload = json.dumps({"profiles": [], "note": "非公開の架空設定値"}, ensure_ascii=False)
+            for data in (payload.encode("cp932"), b'{"profiles": [], "note": "\xff"}'):
+                with self.subTest(data_length=len(data)), mock.patch.object(profiles, "PROFILES_PATH", path), \
+                        mock.patch.object(app.session, "connect", new_callable=mock.AsyncMock) as connect:
+                    path.write_bytes(data)
+                    for route, method, body in (("/api/profiles", "GET", None),
+                                                ("/api/connect", "POST", {"profile_id": "test"})):
+                        status, content = await request(route, method=method, body=body)
+                        detail = json.loads(content)["detail"]
+                        self.assertEqual(status, 500)
+                        self.assertIn("接続先の設定エラー", detail)
+                        self.assertIn("profiles.json", detail)
+                        self.assertIn("UTF-8", detail)
+                        self.assertNotIn(str(path.parent), detail)
+                        self.assertNotIn("非公開の架空設定値", detail)
+                        self.assertNotIn("UnicodeDecodeError", detail)
+                    connect.assert_not_awaited()
+                    self.assertEqual(path.read_bytes(), data)
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):

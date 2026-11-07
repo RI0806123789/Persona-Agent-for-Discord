@@ -309,6 +309,18 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent) -> Non
     await feedback.handle_reaction_remove(payload)
 
 
+@client.event
+async def on_raw_reaction_clear(payload: discord.RawReactionClearEvent) -> None:
+    """全リアクションの一括削除を、フィードバックの評価状態へ反映する。"""
+    await feedback.handle_reaction_clear(payload)
+
+
+@client.event
+async def on_raw_reaction_clear_emoji(payload: discord.RawReactionClearEmojiEvent) -> None:
+    """1種類のリアクションの一括削除を、フィードバックへ反映する。"""
+    await feedback.handle_reaction_clear_emoji(payload)
+
+
 def main() -> None:
     # discord.py 側で別の stderr ハンドラを追加せず、上の共通設定へ揃える。
     client.run(settings.TOKEN_DISCORD, log_handler=None)

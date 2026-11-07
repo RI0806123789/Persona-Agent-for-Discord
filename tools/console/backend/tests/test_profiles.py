@@ -76,6 +76,36 @@ class DeploySettingsTests(unittest.TestCase):
 
 
 class ProfileValidationTests(unittest.TestCase):
+    def test_utf8_profiles_with_and_without_bom_are_loaded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.json"
+            payload = json.dumps({"profiles": [_raw_profile(label="架空の接続先")]}, ensure_ascii=False)
+            for encoding in ("utf-8", "utf-8-sig"):
+                with self.subTest(encoding=encoding), mock.patch.object(profiles, "PROFILES_PATH", path):
+                    path.write_text(payload, encoding=encoding)
+                    loaded, source = profiles.load_profiles()
+                    self.assertEqual(loaded["prod"].label, "架空の接続先")
+                    self.assertEqual(source, "profiles.json")
+
+    def test_invalid_profile_encoding_becomes_safe_actionable_profile_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.json"
+            payload = json.dumps({"profiles": [_raw_profile(note="非公開の架空設定値")]}, ensure_ascii=False)
+            for data in (payload.encode("cp932"), b'{"profiles": [], "note": "\xff"}'):
+                with self.subTest(data_length=len(data)), mock.patch.object(profiles, "PROFILES_PATH", path):
+                    path.write_bytes(data)
+                    with self.assertRaises(profiles.ProfileError) as raised:
+                        profiles.load_profiles()
+                    self.assertIsInstance(raised.exception.__cause__, UnicodeDecodeError)
+                    message = str(raised.exception)
+                    self.assertIn("profiles.json", message)
+                    self.assertIn("UTF-8", message)
+                    self.assertIn("保存し直し", message)
+                    self.assertNotIn(str(path.parent), message)
+                    self.assertNotIn("非公開の架空設定値", message)
+                    self.assertNotIn(str(raised.exception.__cause__), message)
+                    self.assertEqual(path.read_bytes(), data)
+
     def test_rejects_duplicate_ids(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profiles.json"

@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from persona_bot.core.database import Database
 from persona_bot.services import feedback_service
 from persona_bot.services.feedback_service import FeedbackService
+from tests.helpers.discord_mocks import make_channel, make_guild, make_message
 
 GOOD = feedback_service.FEEDBACK_REACTION_GOOD
 BAD = feedback_service.FEEDBACK_REACTION_BAD
@@ -42,8 +43,8 @@ class FeedbackVoteTests(unittest.IsolatedAsyncioTestCase):
 
     def track(self, message_id: int, *, model_name: str = "架空のモデル",
               prompt_file: str = "persona.txt") -> int:
-        sent = SimpleNamespace(id=message_id, channel=SimpleNamespace(id=10),
-                               guild=SimpleNamespace(id=GUILD_ID), add_reaction=AsyncMock())
+        sent = make_message(message_id=message_id, channel=make_channel(channel_id=10),
+                            guild=make_guild(guild_id=GUILD_ID))
         self.service.track_reply(sent, target_user_id="12", model_name=model_name, prompt_file=prompt_file)
         return message_id
 
@@ -59,6 +60,14 @@ class FeedbackVoteTests(unittest.IsolatedAsyncioTestCase):
         payload = self.payload(emoji, **kwargs)
         payload.member = None  # 削除イベントには member が付かない
         await self.service.handle_reaction_remove(payload)
+
+    async def clear(self, emoji: str | None = None, *, message_id: int | None = None) -> None:
+        payload = SimpleNamespace(message_id=message_id or self.message_id)
+        if emoji is None:
+            await self.service.handle_reaction_clear(payload)
+        else:
+            payload.emoji = emoji
+            await self.service.handle_reaction_clear_emoji(payload)
 
     def totals(self) -> tuple[int, int, int]:
         rows = self.db.feedback_summary(GUILD_ID)
@@ -180,6 +189,141 @@ class FeedbackVoteTests(unittest.IsolatedAsyncioTestCase):
         # 追跡を外れた返信へのイベントは従来どおり数えない（記録済みの票は残る）。
         await self.remove(GOOD)
         self.assertEqual(self.totals(), (1, 0, 1))
+
+    # ---- 全削除・絵文字単位の一括削除（#391） ---------------------------------
+
+    async def test_emoji_clear_adopts_opposite_votes_and_all_clear_keeps_tracking(self) -> None:
+        await self.add(GOOD)
+        await self.add(BAD)
+        await self.add(BAD, user_id=13)
+        original = self.vote()
+        await self.clear(BAD)
+        self.assertEqual(self.totals(), (1, 0, 1))
+        self.assertEqual(self.vote().adopted()[0], 1)
+        await self.clear()
+        self.assertEqual(self.totals(), (0, 0, 0))
+        self.assertIn(self.message_id, self.service._tracked)
+        self.assertIs(self.vote(), original)
+        await self.add(BAD)
+        self.assertEqual(self.totals(), (0, 1, 1))
+        self.assertIs(self.vote(), original)
+
+    async def test_clear_ignores_untracked_replies_and_other_emoji(self) -> None:
+        await self.add(GOOD)
+        with patch.object(self.db, "feedback_record", wraps=self.db.feedback_record) as record, \
+                patch.object(self.db, "feedback_delete", wraps=self.db.feedback_delete) as delete:
+            await self.clear("🎉")
+            await self.clear(message_id=999)
+            await self.clear(GOOD, message_id=999)
+        record.assert_not_called()
+        delete.assert_not_called()
+        self.assertEqual(self.totals(), (1, 0, 1))
+
+    async def test_unadopted_emoji_clear_does_not_write(self) -> None:
+        await self.add(GOOD)
+        await self.add(BAD)
+        with patch.object(self.db, "feedback_record", wraps=self.db.feedback_record) as record, \
+                patch.object(self.db, "feedback_delete", wraps=self.db.feedback_delete) as delete:
+            await self.clear(GOOD)
+        record.assert_not_called()
+        delete.assert_not_called()
+        self.assertEqual(self.totals(), (0, 1, 1))
+
+    async def test_clear_after_restart_or_eviction_keeps_historical_votes(self) -> None:
+        await self.add(GOOD)
+        restarted = FeedbackService(self.service._client, self.db)
+        await restarted.handle_reaction_clear(SimpleNamespace(message_id=self.message_id))
+        with patch.object(feedback_service, "FEEDBACK_TRACKED_MESSAGES_MAX", 2):
+            self.track(501)
+            self.track(502)
+        await self.clear()
+        self.assertEqual(self.totals(), (1, 0, 1))
+
+    async def test_delayed_add_cannot_revive_cleared_vote(self) -> None:
+        entered, release, _ = self.block_first_write("feedback_record")
+        first = asyncio.create_task(self.add(GOOD))
+        await asyncio.wait_for(entered.wait(), 2)
+        clearing = asyncio.create_task(self.clear())
+        await asyncio.sleep(0)
+        self.assertEqual(self.vote().reactions, {})
+        release.set()
+        await asyncio.wait_for(asyncio.gather(first, clearing), 5)
+        self.assertEqual(self.totals(), (0, 0, 0))
+
+    async def test_later_other_voter_add_survives_bulk_clear_wait(self) -> None:
+        await self.add(GOOD)
+        await self.add(GOOD, user_id=13)
+        entered, release, _ = self.block_first_write("feedback_delete")
+        clearing = asyncio.create_task(self.clear())
+        await asyncio.wait_for(entered.wait(), 2)
+        # 一括削除は全員の状態を更新済み。別の評価者は、先頭の保存を待たず再追加できる。
+        self.assertEqual(self.service._votes[self.message_id]["13"].reactions, {})
+        await asyncio.wait_for(self.add(BAD, user_id=13), 2)
+        release.set()
+        await asyncio.wait_for(clearing, 5)
+        self.assertEqual(self.totals(), (0, 1, 1))
+
+    async def test_later_same_voter_add_survives_clear_of_an_inflight_vote(self) -> None:
+        entered, release, _ = self.block_first_write("feedback_record")
+        first = asyncio.create_task(self.add(GOOD))
+        await asyncio.wait_for(entered.wait(), 2)
+        clearing = asyncio.create_task(self.clear())
+        await asyncio.sleep(0)
+        later = asyncio.create_task(self.add(BAD))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.wait_for(asyncio.gather(first, clearing, later), 5)
+        self.assertEqual(self.totals(), (0, 1, 1))
+
+    async def test_later_removal_wins_while_emoji_clear_restores_opposite_vote(self) -> None:
+        await self.add(GOOD)
+        await self.add(BAD)
+        entered, release, _ = self.block_first_write("feedback_record")
+        clearing = asyncio.create_task(self.clear(BAD))
+        await asyncio.wait_for(entered.wait(), 2)
+        removing = asyncio.create_task(self.remove(GOOD))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.wait_for(asyncio.gather(clearing, removing), 5)
+        self.assertEqual(self.totals(), (0, 0, 0))
+
+    async def test_cancelled_bulk_clear_finishes_all_voters_before_returning(self) -> None:
+        await self.add(GOOD)
+        await self.add(GOOD, user_id=13)
+        entered, release, _ = self.block_first_write("feedback_delete")
+        clearing = asyncio.create_task(self.clear())
+        await asyncio.wait_for(entered.wait(), 2)
+        for _ in range(2):
+            clearing.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(clearing.done())
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(clearing, 5)
+        self.assertEqual(self.totals(), (0, 0, 0))
+        self.assertTrue(all(not vote.lock.locked() for vote in self.service._votes[self.message_id].values()))
+
+    async def test_failed_clear_save_does_not_skip_other_voters(self) -> None:
+        await self.add(GOOD)
+        await self.add(GOOD, user_id=13)
+        original = self.db.feedback_delete
+        calls = 0
+
+        def delete(*args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("架空の取り消し保存失敗")
+            return original(*args)
+
+        with patch.object(self.db, "feedback_delete", side_effect=delete), \
+                self.assertLogs("persona_bot.services.feedback_service", level="ERROR"):
+            await self.clear()
+        self.assertEqual(calls, 2)
+        self.assertEqual(self.totals(), (1, 0, 1))
+        self.assertLess(self.vote().saved_version, self.vote().version)
+        await self.add(BAD)
+        self.assertEqual(self.totals(), (0, 1, 1))
 
     # ---- 保存の確定順（#154） ------------------------------------------------
 
