@@ -71,13 +71,17 @@ class MessageGateTests(unittest.IsolatedAsyncioTestCase):
     # ---- ブロック中のユーザー --------------------------------------------------
 
     async def test_unsupported_channel_does_not_update_activity_or_resolve_guild_settings(self):
-        from persona_bot.core import message_handler
-        with patch.object(message_handler, "is_supported_message_channel", return_value=False), patch.object(
+        # 判定関数は差し替え口ではないので（#395）、返信できない種別（グループDM）を実際に渡す
+        self.message.channel = Mock(spec=discord.GroupChannel, id=10)
+        with patch.object(
+            self.state, "get_guild_async", side_effect=AssertionError("未対応チャンネルで設定を解決しない"),
+        ), patch.object(
             self.state, "get_guild", side_effect=AssertionError("未対応チャンネルで設定を解決しない"),
         ):
             await self.handler.on_message(self.message)
         self.auto_topic.mark_activity.assert_not_called()
         self.autonomous.mark_activity.assert_not_called()
+        self.moderator.check_and_route.assert_not_awaited()
 
     async def test_blocked_user_is_dropped_before_activity_is_observed(self) -> None:
         self.blacklist.is_blocked.return_value = True

@@ -1,25 +1,41 @@
 """受付済みメッセージの配信・添付・リマインダー・委任を振り分ける。
 
-外部境界は呼出元から注入し、サービスの配線と既存の差し替え口を維持する。
+サービスは `MessageHandler`（引数の self）から、外部操作（履歴取得・画像取得・読み上げ・背景タスク）は
+`ops` から使う。定数と判定・組み立ての関数は直接 import する（#395）。
 """
 
 from __future__ import annotations
 
-from types import ModuleType
+import logging
+from typing import TYPE_CHECKING
 
 import discord
 
+from persona_bot.config.constants import (
+    AGENT_ROUTER_HISTORY_LIMIT, DOCUMENT_QUEUE_FULL_NOTICE, MAX_DOCUMENT_SIZE_BYTES,
+)
 from persona_bot.core.app_state import GuildSettings
-from persona_bot.services.agent_plan import AgentPlan
+from persona_bot.core.message_operations import MESSAGE_LOGGER_NAME, MessageOperations
+from persona_bot.services.agent_plan import AgentPlan, requests_subagent
+from persona_bot.services.prompting import build_agent_declined_section
+from persona_bot.utils.discord_helpers import (
+    REPLY_ALLOWED_MENTIONS, attachment_is_image, close_image_attachments, describe_supported_attachments,
+    is_supported_document_attachment,
+)
+
+if TYPE_CHECKING:
+    from persona_bot.core.message_handler import MessageHandler
+
+logger = logging.getLogger(MESSAGE_LOGGER_NAME)
 
 
 async def _process_accepted_message(
-    self, message: discord.Message, question: str, guild_settings: GuildSettings, *,
+    self: MessageHandler, message: discord.Message, question: str, guild_settings: GuildSettings, *,
     accepts_normally: bool, is_autonomous_comment: bool, image_objects: list | None,
-    runtime: ModuleType,
+    ops: MessageOperations,
 ) -> None:
     guild_id = message.guild.id if message.guild is not None else None
-    is_dm = isinstance(message.channel, runtime.discord.DMChannel)
+    is_dm = isinstance(message.channel, discord.DMChannel)
     # コメントの受付枠は画像のダウンロード・デコードとGeminiを呼ぶ前に確保する。
     # 見送る分も活動観測は上の mark_activity で済ませている。
     claimed_comment_session = None
@@ -40,7 +56,7 @@ async def _process_accepted_message(
     owns_images = False
     try:
         if is_autonomous_comment and not question and image_objects is None:
-            image_objects = await runtime.load_image_attachments(message.attachments)
+            image_objects = await ops.load_image_attachments(message.attachments)
             owns_images = True
             if not image_objects:
                 # 画像確認中に配信が終わったら、通常の文書受付・画像失敗案内へ進める。
@@ -52,14 +68,14 @@ async def _process_accepted_message(
         reminder_request: dict[str, str] | None = None
         agent_plan: AgentPlan | None = None
         if question:
-            if not is_autonomous_comment and runtime.requests_subagent(question):
+            if not is_autonomous_comment and requests_subagent(question):
                 # サブエージェントの使用が明記された発言だけ、同じ1回の判定に委任の判定を足す（#170）。
                 # 「さっきの件」のような依頼を子へ渡せる形に整理させるため、直近の会話も渡す。
-                router_history = await runtime.fetch_channel_history_text(
+                router_history = await ops.fetch_channel_history_text(
                     message.channel,
                     guild_settings.channel_reset_points.get(message.channel.id),
                     self.client.user,
-                    runtime.AGENT_ROUTER_HISTORY_LIMIT,
+                    AGENT_ROUTER_HISTORY_LIMIT,
                     is_blocked=self.blacklist.is_blocked,
                 )
                 is_safe, _reason, memory_category, reminder_request, agent_plan = (
@@ -82,13 +98,13 @@ async def _process_accepted_message(
                 response_settings=response_settings, image_objects=image_objects,
             )
             if response_text and self.autonomous.can_speak_session(message.guild, guild_settings, comment_session):
-                await runtime.play_tts_response(
+                await ops.play_tts_response(
                     message, response_text, response_settings.prompt_file,
                     is_valid=lambda: self.autonomous.can_speak_session(message.guild, guild_settings, comment_session),
                 )
             return
         if not accepts_normally:
-            runtime.logger.info('自律行動: 配信の終了と入れ違いに届いた発言のため、応答しません。')
+            logger.info('自律行動: 配信の終了と入れ違いに届いた発言のため、応答しません。')
             return
 
         # 配信終了後に通常会話へ移る場合も、通常の受付制限を通す。
@@ -105,39 +121,39 @@ async def _process_accepted_message(
         document_attachments = [
             attachment
             for attachment in message.attachments
-            if runtime.is_supported_document_attachment(attachment)
+            if is_supported_document_attachment(attachment)
         ]
         unsupported_attachments = [
             attachment
             for attachment in message.attachments
-            if not runtime.is_supported_document_attachment(attachment) and not runtime.attachment_is_image(attachment)
+            if not is_supported_document_attachment(attachment) and not attachment_is_image(attachment)
         ]
 
         if unsupported_attachments:
             await message.reply(
-                f"未対応の添付ファイルが含まれています。{runtime.describe_supported_attachments()}に対応しています。",
-                allowed_mentions=runtime.REPLY_ALLOWED_MENTIONS,
+                f"未対応の添付ファイルが含まれています。{describe_supported_attachments()}に対応しています。",
+                allowed_mentions=REPLY_ALLOWED_MENTIONS,
             )
             return
 
         if document_attachments:
             for attachment in document_attachments:
-                if attachment.size > runtime.MAX_DOCUMENT_SIZE_BYTES:
+                if attachment.size > MAX_DOCUMENT_SIZE_BYTES:
                     await message.reply(
-                        f"ファイルサイズが上限({runtime.MAX_DOCUMENT_SIZE_BYTES // (1024 * 1024)}MB)を超えています。",
-                        allowed_mentions=runtime.REPLY_ALLOWED_MENTIONS,
+                        f"ファイルサイズが上限({MAX_DOCUMENT_SIZE_BYTES // (1024 * 1024)}MB)を超えています。",
+                        allowed_mentions=REPLY_ALLOWED_MENTIONS,
                     )
                     return
 
             # 未処理件数の上限で受け付けなかった文書には、受付完了を伝えない（#202）。
             if await self.documents.enqueue_from_message(message, question, document_attachments) is None:
-                await message.reply(runtime.DOCUMENT_QUEUE_FULL_NOTICE, allowed_mentions=runtime.REPLY_ALLOWED_MENTIONS)
+                await message.reply(DOCUMENT_QUEUE_FULL_NOTICE, allowed_mentions=REPLY_ALLOWED_MENTIONS)
                 return
-            await message.reply("受付が完了しました。順番に処理しています…", allowed_mentions=runtime.REPLY_ALLOWED_MENTIONS)
+            await message.reply("受付が完了しました。順番に処理しています…", allowed_mentions=REPLY_ALLOWED_MENTIONS)
             return
 
         # --- 会話統計の記録（ボットへの発言のみを集計。失敗してもチャット本体は止めない） ---
-        runtime.spawn(
+        ops.spawn(
             self.stats.record(
                 str(message.author.id),
                 message.author.display_name,
@@ -157,7 +173,7 @@ async def _process_accepted_message(
             confirmation = await self.reminders.create_from_request(message, reminder_request)
             if confirmation:
                 confirmation = self.ng_filter.mask_with_log(confirmation, label="リマインダー登録確認")
-                await message.reply(confirmation, allowed_mentions=runtime.REPLY_ALLOWED_MENTIONS)
+                await message.reply(confirmation, allowed_mentions=REPLY_ALLOWED_MENTIONS)
                 return
 
         response_settings = guild_settings.snapshot_response()
@@ -174,10 +190,10 @@ async def _process_accepted_message(
             await self.handle_chat_message(
                 message, question, memory_category, response_settings=response_settings,
                 image_objects=image_objects,
-                delegation_section=runtime.build_agent_declined_section() if agent_plan is not None else "",
+                delegation_section=build_agent_declined_section() if agent_plan is not None else "",
             )
     finally:
         if normal_slot_acquired:
             self._chat_admission.release(guild_id)
         if owns_images:
-            runtime.close_image_attachments(image_objects)
+            close_image_attachments(image_objects)

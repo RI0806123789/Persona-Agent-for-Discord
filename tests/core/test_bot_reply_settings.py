@@ -18,23 +18,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import discord
 from google.genai import errors, types
-from persona_bot.services.affinity_service import extract_affinity_changes
 from persona_bot.core.app_state import BotState
 from persona_bot.core.database import Database
 from persona_bot.core.background import spawn
 from tests.helpers.message_handler_helpers import make_message_handler
 from tests.helpers.persona_helpers import install_persona_catalog
-from persona_bot.config.constants import (
-    GEMINI_RESPONSE_TIMEOUT_SECONDS, GROUNDING_MODEL_NAME, HISTORY_LIMIT, MAX_DOCUMENT_SIZE_BYTES,
-)
-from persona_bot.services.content_moderator import screen_bot_response_with_status
+from persona_bot.config.constants import GROUNDING_MODEL_NAME
 from persona_bot.services.gemini_service import GeminiService
 from persona_bot.services.feedback_service import FeedbackService
-from persona_bot.utils.discord_helpers import (
-    attachment_is_image, clean_message_content, format_grounding_sources,
-    is_supported_document_attachment, is_supported_message_channel,
-)
-from persona_bot.services.prompting import build_full_prompt, build_memory_sections
 from persona_bot.utils.logging_setup import LOG_DATE_FORMAT, LOG_FORMAT, OperationalFormatter
 
 
@@ -113,7 +104,7 @@ class ReplySettingsTests(unittest.IsolatedAsyncioTestCase):
         self.voice = AsyncMock()
         self.loader = AsyncMock(side_effect=lambda path: f"ペルソナ: {Path(path).as_posix()}")
         self.namespace = {
-            "discord": discord, "state": self.state,
+            "state": self.state,
             "client": SimpleNamespace(user=SimpleNamespace(id=99)),
             "auto_topic": SimpleNamespace(mark_activity=Mock(), watch_channel=Mock()),
             "autonomous": SimpleNamespace(
@@ -144,16 +135,6 @@ class ReplySettingsTests(unittest.IsolatedAsyncioTestCase):
             "fetch_channel_history_text": AsyncMock(return_value=""),
             "load_persona_template": self.loader,
             "send_long_reply": AsyncMock(side_effect=send), "spawn": start,
-            "clean_message_content": clean_message_content,
-            "is_supported_message_channel": is_supported_message_channel,
-            "is_supported_document_attachment": is_supported_document_attachment,
-            "attachment_is_image": attachment_is_image,
-            "format_grounding_sources": format_grounding_sources,
-            "screen_bot_response_with_status": screen_bot_response_with_status,
-            "extract_affinity_changes": extract_affinity_changes,
-            "build_full_prompt": build_full_prompt, "build_memory_sections": build_memory_sections,
-            "HISTORY_LIMIT": HISTORY_LIMIT, "MAX_DOCUMENT_SIZE_BYTES": MAX_DOCUMENT_SIZE_BYTES,
-            "GEMINI_RESPONSE_TIMEOUT_SECONDS": GEMINI_RESPONSE_TIMEOUT_SECONDS,
         }
         self.handler = make_message_handler(self.namespace, self)
         self.on_message = self.handler.on_message

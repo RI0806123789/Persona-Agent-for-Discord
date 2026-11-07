@@ -1,36 +1,52 @@
 """通常応答の生成・出力検査・評価と記憶への後処理を担当する。
 
-外部境界は呼出元から注入し、サービスの配線と既存の差し替え口を維持する。
+サービスは `MessageHandler`（引数の self）から、外部操作（履歴取得・画像取得・ペルソナの読込・送信・
+背景タスク）は `ops` から使う。定数と検査・組み立ての関数は直接 import する（#395）。
 """
 
 from __future__ import annotations
 
-from types import ModuleType
+import logging
+from typing import TYPE_CHECKING
 
 import discord
 
+from persona_bot.config.constants import GEMINI_RESPONSE_TIMEOUT_SECONDS, HISTORY_LIMIT, IMAGE_ONLY_QUESTION
 from persona_bot.core.app_state import ResponseSettings
+from persona_bot.core.message_operations import MESSAGE_LOGGER_NAME, MessageOperations
+from persona_bot.services.affinity_service import extract_affinity_changes
+from persona_bot.services.content_moderator import screen_bot_response_with_status
+from persona_bot.services.prompting import build_full_prompt, build_memory_sections
+from persona_bot.utils.discord_helpers import (
+    REPLY_ALLOWED_MENTIONS, close_image_attachments, describe_supported_attachments,
+    format_grounding_sources, mask_grounding_sources,
+)
+
+if TYPE_CHECKING:
+    from persona_bot.core.message_handler import MessageHandler
+
+logger = logging.getLogger(MESSAGE_LOGGER_NAME)
 
 
-async def _screen_response(self, text, sources, *, log_label: str, screen_sources: bool = False, runtime: ModuleType):
+async def _screen_response(self: MessageHandler, text, sources, *, log_label: str, screen_sources: bool = False):
     """応答を検査し、送信用の出典を付ける。報告は出典も一緒に検査する。"""
     if screen_sources:
         text = self.ng_filter.mask_with_log(text, label=log_label)
-        sources = runtime.mask_grounding_sources(sources, self.ng_filter)
-        formatted = runtime.format_grounding_sources(sources)
-        _, accepted = await runtime.screen_bot_response_with_status(
+        sources = mask_grounding_sources(sources, self.ng_filter)
+        formatted = format_grounding_sources(sources)
+        _, accepted = await screen_bot_response_with_status(
             text + formatted, None, self.moderator, log_label=log_label,
         )
         return text, sources, text + formatted, accepted
-    text, accepted = await runtime.screen_bot_response_with_status(
+    text, accepted = await screen_bot_response_with_status(
         text, self.ng_filter, self.moderator, log_label=log_label,
     )
-    reply = text + runtime.format_grounding_sources(sources, self.ng_filter) if accepted and sources else text
+    reply = text + format_grounding_sources(sources, self.ng_filter) if accepted and sources else text
     return text, sources, reply, accepted
 
 
 async def handle_chat_message(
-    self,
+    self: MessageHandler,
     message: discord.Message,
     question: str,
     memory_category: str = "none",
@@ -39,7 +55,7 @@ async def handle_chat_message(
     delegation_section: str = "",
     delegated_sources: list[dict[str, str]] | None = None,
     image_objects: list | None = None,
-    runtime: ModuleType,
+    ops: MessageOperations,
 ) -> str | None:
     """人格役として返信し、送った本文を返す。
 
@@ -58,7 +74,7 @@ async def handle_chat_message(
         user_id = str(message.author.id)
         owns_images = image_objects is None
         if owns_images:
-            image_objects = await runtime.load_image_attachments(message.attachments)
+            image_objects = await ops.load_image_attachments(message.attachments)
         try:
             if not question:
                 if not image_objects:
@@ -66,17 +82,17 @@ async def handle_chat_message(
                     # Gemini を呼ぶと、見えていない画像への反応を作り話で返してしまうため断る。
                     await message.reply(
                         "画像を読み込めませんでした。"
-                        f"{runtime.describe_supported_attachments(documents=False)}の画像か確認して、もう一度送ってください。",
-                        allowed_mentions=runtime.REPLY_ALLOWED_MENTIONS,
+                        f"{describe_supported_attachments(documents=False)}の画像か確認して、もう一度送ってください。",
+                        allowed_mentions=REPLY_ALLOWED_MENTIONS,
                     )
                     return None
-                question = runtime.IMAGE_ONLY_QUESTION
+                question = IMAGE_ONLY_QUESTION
 
-            history_text = await runtime.fetch_channel_history_text(
+            history_text = await ops.fetch_channel_history_text(
                 message.channel,
                 guild_settings.channel_reset_points.get(message.channel.id),
                 self.client.user,
-                runtime.HISTORY_LIMIT,
+                HISTORY_LIMIT,
                 is_blocked=self.blacklist.is_blocked,
             )
             # 記憶カテゴリは on_message のモデレーション統合判定で既に決まっている
@@ -84,18 +100,18 @@ async def handle_chat_message(
             memory_context, document_context = await self.memory.build_contexts(memory_category, user_id)
 
             try:
-                prompt = await runtime.load_persona_template(response_settings.prompt_file)
+                prompt = await ops.load_persona_template(response_settings.prompt_file)
             except FileNotFoundError:
-                runtime.logger.warning("プロンプトファイルが見つかりません。", exc_info=True)
+                logger.warning("プロンプトファイルが見つかりません。", exc_info=True)
                 await message.reply(
                     "会話設定のファイルが見つかりません。管理者に設定の確認を依頼してください。",
-                    allowed_mentions=runtime.REPLY_ALLOWED_MENTIONS,
+                    allowed_mentions=REPLY_ALLOWED_MENTIONS,
                 )
                 return None
 
-            full_prompt = runtime.build_full_prompt(
+            full_prompt = build_full_prompt(
                 prompt,
-                runtime.build_memory_sections(memory_category, memory_context, document_context),
+                build_memory_sections(memory_category, memory_context, document_context),
                 history_text,
                 question,
                 affinity_prompt=self.affinity.build_dynamic_prompt(str(message.author.id)),
@@ -106,14 +122,14 @@ async def handle_chat_message(
                 full_prompt,
                 response_settings.model_name,
                 image_objects,
-                timeout=runtime.GEMINI_RESPONSE_TIMEOUT_SECONDS,
+                timeout=GEMINI_RESPONSE_TIMEOUT_SECONDS,
                 grounding=response_settings.grounding_enabled and not delegated,
             )
 
             if response_text is None:
                 await message.reply(
                     "エラーが発生しました。（Gemini APIの呼び出しに失敗、または非対応の画像形式です）",
-                    allowed_mentions=runtime.REPLY_ALLOWED_MENTIONS,
+                    allowed_mentions=REPLY_ALLOWED_MENTIONS,
                 )
                 return None
             if delegated:
@@ -125,15 +141,15 @@ async def handle_chat_message(
             )
 
             # タグの抽出だけ先に行い、親密度の更新はモデレーション通過・送信成功後に行う。
-            response_text, emotion_changes = runtime.extract_affinity_changes(response_text)
+            response_text, emotion_changes = extract_affinity_changes(response_text)
 
             # タグを除去した結果、本文が空になった場合は空メッセージ送信を防ぐ
             # （モデルが感情タグだけを返したケース）。
             if not response_text.strip():
-                runtime.logger.info('応答本文が空です（感情タグのみ、または空応答）。')
+                logger.info('応答本文が空です（感情タグのみ、または空応答）。')
                 await message.reply(
                     "申し訳ありません、うまく応答を生成できませんでした。もう一度お試しください。",
-                    allowed_mentions=runtime.REPLY_ALLOWED_MENTIONS,
+                    allowed_mentions=REPLY_ALLOWED_MENTIONS,
                 )
                 return None
 
@@ -144,29 +160,29 @@ async def handle_chat_message(
             )
 
             # 送信の失敗は呼出元へ伝える。
-            sent = await runtime.send_long_reply(message, reply_text, suppress_embeds=bool(accepted and grounding_sources))
+            sent = await ops.send_long_reply(message, reply_text, suppress_embeds=bool(accepted and grounding_sources))
             # ★ ここから先は送信済みの返信に付随する処理。どれが失敗しても、送った本文は
             # 呼出元へ返す（#157）。再生成・再送はしない（二重返信になるため）。
             if accepted and emotion_changes is not None:
                 try:
                     v_change, a_change = emotion_changes
                     self.affinity.update_emotion(user_id, v_change, a_change)
-                    runtime.spawn(self.affinity.save_background(user_id), label="親密度の保存")
+                    ops.spawn(self.affinity.save_background(user_id), label="親密度の保存")
                 except Exception:
-                    runtime.logger.warning("親密度の更新に失敗しました（返信は送信済み）。", exc_info=True)
+                    logger.warning("親密度の更新に失敗しました（返信は送信済み）。", exc_info=True)
             if accepted:
                 self._track_reply_for_feedback(sent, user_id, response_settings, generated_model)
             if accepted and await self._remember_reply(user_id, question, response_text):
-                runtime.spawn(self.memory.flush_if_needed(), label="記憶圧縮（チャット便乗）")
+                ops.spawn(self.memory.flush_if_needed(), label="記憶圧縮（チャット便乗）")
             return response_text
         finally:
             if owns_images:
-                runtime.close_image_attachments(image_objects)
+                close_image_attachments(image_objects)
 
 
 def _track_reply_for_feedback(
-    self, sent: discord.Message, user_id: str, response_settings: ResponseSettings, generated_model: str,
-    runtime: ModuleType,
+    self: MessageHandler, sent: discord.Message, user_id: str, response_settings: ResponseSettings,
+    generated_model: str,
 ) -> None:
     """送った返信を 👍👎 の評価対象として登録する（リアクション付与は裏で走る）。
 
@@ -181,10 +197,10 @@ def _track_reply_for_feedback(
             prompt_file=response_settings.prompt_file,
         )
     except Exception as error:
-        runtime.logger.error(f'評価対象の登録に失敗しました（返信は送信済み）: {type(error).__name__}', exc_info=error)
+        logger.error(f'評価対象の登録に失敗しました（返信は送信済み）: {type(error).__name__}', exc_info=error)
 
 
-async def _remember_reply(self, user_id: str, question: str, response_text: str, *, runtime: ModuleType) -> bool:
+async def _remember_reply(self: MessageHandler, user_id: str, question: str, response_text: str) -> bool:
     """会話を記憶圧縮前の一時ログへ追記し、成功したかを返す。
 
     失敗しても返信は送信済みなので、例外を外へ出さずにログへ残す（成功扱いにはしない。
@@ -193,6 +209,6 @@ async def _remember_reply(self, user_id: str, question: str, response_text: str,
     try:
         await self.memory.append_pending_log(user_id, question, response_text)
     except Exception as error:
-        runtime.logger.error(f'会話記憶: 返信は送信済みですが、記憶への追記に失敗しました（user_id=<ID>）: {type(error).__name__}', exc_info=error)
+        logger.error(f'会話記憶: 返信は送信済みですが、記憶への追記に失敗しました（user_id=<ID>）: {type(error).__name__}', exc_info=error)
         return False
     return True

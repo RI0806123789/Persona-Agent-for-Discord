@@ -6,6 +6,10 @@
 
 既存のテストには、`response` に `defer` しか持たせず「余計なメソッドを呼ぶと`AttributeError`で落ちる」ことを期待したものがあるため、既定の全部入りのほかに、`make_response("defer")` で持たせるメソッドを絞り、`without=ONLY_RESPONSE` で`followup`などを外せる。`user`は省略すると属性ごと持たない（`user_id`だけ渡せば`SimpleNamespace(id=...)`）。追加・上書きしたい属性は`**attributes`で渡す。`utils/test_discord_mocks.py` が既定値・厳密さ・独立性・上書きを確かめる。新しいテストはまずここを使い、移行は既存の挙動を確かめながら1ファイルずつ進める（現在は `test_shared_helpers`・`test_summary_view`・`test_agent_view`・`test_storage_failure_notices`・`test_panel_confirmations`・`test_voice_consent_view`・`test_welcome_message` が使用）。
 
+## メッセージ処理ステージの外部操作の契約（#395）
+
+`core/test_message_operations.py` は、受付・振り分け・応答の各ステージがモジュール全体ではなく `MessageOperations`（6つの外部操作）だけを受け取ることを確認する。`message_handler` の差し替え口が実装へつながっていること、契約の Protocol と実装の引数（名前・種類・既定値の有無・必須の引数）が食い違わないこと、足りない・呼び出せない操作が構築時に名前付きの `TypeError` になること、構築後のモジュールの差し替えが次の呼出しに効くことを検証する。ステージのソースは静的に調べ、操作を直接 import していないこと、`ops.` の参照がすべて契約にあり契約の操作がすべて使われていること、関数内で使う名前がモジュールに定義されていること（`symtable`。import を整理したときの不足を、その経路を実行する前に見つける）を確かめる。`helpers/message_handler_helpers.make_message_handler` はサービスと外部操作だけを受け付け、定数・判定の関数など差し替えても効かない名前を拒否する。
+
 ## 接続切替・音声会話終了の待機中の再開（#344・#345）
 
 `tools/console/frontend/tests/connection.test.mjs` は実際の`DataPage`と`DbTableDetail`を読み込み、ReactフックとAPIを差し替え、接続切替時に子のeffectを親より先に実行する。新接続で選ぶ前の内容取得がないこと、閉じるアニメーション用の中身も引き継がないこと、選択後のページング・行展開・伏せ字を確認する。
@@ -431,6 +435,7 @@ Windows・Python 3.13.3でボット672件・コンソールバックエンド158
 | core | [test_join_command.py](core/test_join_command.py) |
 | core | [test_message_gates.py](core/test_message_gates.py) |
 | core | [test_message_handler_import.py](core/test_message_handler_import.py) |
+| core | [test_message_operations.py](core/test_message_operations.py) |
 | core | [test_profile_absorption.py](core/test_profile_absorption.py) |
 | core | [test_violation_recording.py](core/test_violation_recording.py) |
 | core | [test_voice_chat_ng_gate.py](core/test_voice_chat_ng_gate.py) |
