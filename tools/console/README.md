@@ -318,7 +318,7 @@ npm run build   # 型チェック（tsc --noEmit）+ ビルド
 | `test_dev_launcher.py` | 起動ブラウザの探索順（Edge が先の場所にあっても Chrome を優先、Chrome が無ければ従来のプロファイルで Edge、両方無いときの案内）、画面終了・再読込・起動失敗時の回収、実uvicorn子プロセスでのデプロイ終了→SSH切断→lifespan終了の順序、期限超過時の強制終了と失敗通知、ポート競合の拒否・監視役強制終了時の子孫回収（Windows） |
 | `frontend/tests/fonts.test.mjs` | 共有した依存フォルダからアイコン・本文フォントを配信でき、配信範囲外のファイルは拒否すること |
 | `frontend/tests/connection.test.mjs` | 取得中の切断・接続切替、古いタイマーと同一接続内の応答順序、データ画面の集計破棄と接続先を変えたときにテーブルの中身を閉じること、ホーム所有者・通知・ツールチップの伏せ字を、APIとReactの境界を置き換えて確認 |
-| `frontend/tests/dbTables.test.mjs` | 画面のテーブル定義がバックエンドの `DB_TABLES` と一致すること、ID・名前・本文の列が伏せ字の対象になっていること、日時（ISO 8601・`pending_log` の書式・UNIX 秒）と解析結果の読み取り、古い版の DB の列の扱い |
+| `frontend/tests/dbTables.test.mjs` | 画面のテーブル定義がバックエンドの `DB_TABLES` と一致すること、ID・名前・本文の列が伏せ字の対象になっていること、日時（ISO 8601・`pending_log` の書式・UNIX 秒）と解析結果の読み取り、Date で表せない日時を元の値のまま表示し同じページのほかの行を描画できること（#394）、古い版の DB の列の扱い |
 | `frontend/tests/log-privacy.test.mjs`・`frontend/tests/screen-privacy.test.mjs` | ログ行の公開区分（受信時・一時停止・保持上限・クリア後）と systemd 以外の本文の秘匿、概要・検索・表示の一致。接続先・ブランチ・デプロイ表示の描画時マスクと、確認ダイアログの伏せ字切り替えへの追従・実操作の値の維持を、実際の部品で確認 |
 | `test_deploy_log_privacy.py`（backend/tests） | 再起動ログを含む手順の `output_contains_logs` が、抜粋・文字数上限の後も真のままであること |
 | `frontend/tests/toast-privacy.test.mjs` | 通知の原文保持と描画時の伏せ字、伏せ字の切り替え・後から増えた秘密値・hover/focus 中への追従、消去・上限・再試行の維持 |

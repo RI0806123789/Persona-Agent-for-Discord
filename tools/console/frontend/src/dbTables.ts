@@ -263,11 +263,25 @@ export function resolveColumns(table: string, columns: string[]): ColumnSpec[] {
 
 // ---------------------------------------------------------------- 値の読み取り
 
-/** 日時の列を、ミリ秒（UNIX 時刻）にする。読めなければ null。 */
+/**
+ * JavaScript の Date で表せるミリ秒だけを通す（±8.64e15。#394）。
+ * 有限の数でも範囲外なら Invalid Date になり、`toISOString()` が RangeError を投げて
+ * テーブル全体の描画が止まるため、範囲外は「読めない」として null にする。
+ */
+function validDateMs(ms: number): number | null {
+  return Number.isFinite(ms) && !Number.isNaN(new Date(ms).getTime()) ? ms : null;
+}
+
+/**
+ * 日時の列を、ミリ秒（UNIX 時刻）にする。読めない・Date で表せない値は null
+ * （画面は元の値をそのまま見せる）。★ 返した値は Date として必ず有効であること。
+ * 描画側（DbTableDetail の CellValue）はこれを前提に `toISOString()` を呼ぶ。
+ */
 export function parseDbTime(value: DbValue, kind: "isoTime" | "logTime" | "unixTime"): number | null {
   if (kind === "unixTime") {
     const seconds = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-    return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
+    // 秒が有限でも、ミリ秒への変換で Infinity になったり Date の範囲を超えたりする（手で直した・移行した値など）
+    return Number.isFinite(seconds) && seconds > 0 ? validDateMs(seconds * 1000) : null;
   }
   if (typeof value !== "string" || !value.trim()) return null;
   let text = value.trim();
@@ -280,8 +294,7 @@ export function parseDbTime(value: DbValue, kind: "isoTime" | "logTime" | "unixT
     // タイムゾーンの無い ISO 8601 は、ボットの保存のしかた（UTC）に合わせて UTC として読む
     text = `${text.replace(" ", "T")}Z`;
   }
-  const ms = Date.parse(text);
-  return Number.isFinite(ms) ? ms : null;
+  return validDateMs(Date.parse(text));
 }
 
 /** 「../prompts/prompt_tsun.txt」→「prompt_tsun」 */
