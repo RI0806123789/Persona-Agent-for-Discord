@@ -39,14 +39,21 @@ def _remaining_timeout(deadline: float | None) -> float | None:
     return remaining
 
 
-def _grounding_is_unsupported(status_code: Any, message: str) -> bool:
-    """認証・利用枠・サーバー障害と、検索ツールの非対応を区別する。"""
+def _grounding_is_unsupported(status_code: Any, message: str, *, multimodal: bool = False) -> bool:
+    """認証・利用枠・サーバー障害と、検索ツールの非対応を区別する。
+
+    検索付きの試行で渡すツールは Google 検索だけなので、「ツール（tool/tools）が使えない」という
+    400 も検索の非対応とみなす（#398。画像と検索ツールの併用を断られた場合など）。画像を
+    添えた試行では「multimodal」への言及も同じに扱う。「media」「image」だけの失敗は画像そのものの
+    問題で、検索を外して試し直しても通らないため、代替の生成を増やさないよう対象にしない。
+    """
     if status_code not in (400, 404, 422):
         return False
     normalized = message.lower()
-    return any(name in normalized for name in (
-        "google_search", "google search", "grounding", "search_retrieval",
-    )) and any(reason in normalized for reason in (
+    names = ["google_search", "google search", "grounding", "search_retrieval", "tool"]
+    if multimodal:
+        names.append("multimodal")
+    return any(name in normalized for name in names) and any(reason in normalized for reason in (
         "unsupported", "not supported", "not available", "not enabled", "not found",
         "unknown name", "not permitted", "not allowed",
     ))
@@ -183,7 +190,7 @@ class GeminiService:
                 raise
             except Exception as error:
                 status_code = _error_status_code(error)
-                if use_grounding and _grounding_is_unsupported(status_code, str(error)):
+                if use_grounding and _grounding_is_unsupported(status_code, str(error), multimodal=bool(images)):
                     logger.warning("検索ツールが非対応のため、残り時間内で代替の生成を試します。", exc_info=error)
                     index += 1
                     continue

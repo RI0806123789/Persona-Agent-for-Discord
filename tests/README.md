@@ -16,6 +16,10 @@
 
 `core/test_message_operations.py` は、受付・振り分け・応答の各ステージがモジュール全体ではなく `MessageOperations`（6つの外部操作）だけを受け取ることを確認する。`message_handler` の差し替え口が実装へつながっていること、契約の Protocol と実装の引数（名前・種類・既定値の有無・必須の引数）が食い違わないこと、足りない・呼び出せない操作が構築時に名前付きの `TypeError` になること、構築後のモジュールの差し替えが次の呼出しに効くことを検証する。ステージのソースは静的に調べ、操作を直接 import していないこと、`ops.` の参照がすべて契約にあり契約の操作がすべて使われていること、関数内で使う名前がモジュールに定義されていること（`symtable`。import を整理したときの不足を、その経路を実行する前に見つける）を確かめる。`helpers/message_handler_helpers.make_message_handler` はサービスと外部操作だけを受け付け、定数・判定の関数など差し替えても効かない名前を拒否する。
 
+## サーバー設定の権限・集計ボタン・検索の代替（#398）
+
+`views/test_admin_panel_permissions.py` の `ServerSettingPermissionTests` は、🔍 Google検索の切り替えと 💬 自発会話の確定が、一般メンバーには保留前に断られ、押した後にロールを外された・最新の Member を取れない場合は保留後に断られ、どちらも設定を書き換えず保存もしないことを確かめる。現在の管理者は変更・保存でき、DM の設定は本人が操作できる。`AggregationRepeatPressTests` は、全体比較・フィードバックの集計の実行中にもう一度押すと案内だけを返して集計を重ねず、終了・キャンセルの後はまた押せることを確かめる。`services/test_gemini_service.py` は、画像と検索ツールの併用を断られた場合に検索なしで画像ごと答え、画像そのものの失敗では追加の生成をしないことを、`services/test_reminder_service.py` は、登録時の日時の解釈が夏時間の境目でも繰り返しの次回時刻と同じ規則になることを確かめる。
+
 ## 接続切替・音声会話終了の待機中の再開（#344・#345）
 
 `tools/console/frontend/tests/connection.test.mjs` は実際の`DataPage`と`DbTableDetail`を読み込み、ReactフックとAPIを差し替え、接続切替時に子のeffectを親より先に実行する。新接続で選ぶ前の内容取得がないこと、閉じるアニメーション用の中身も引き継がないこと、選択後のページング・行展開・伏せ字を確認する。

@@ -200,6 +200,30 @@ class ReminderDaylightSavingTests(unittest.TestCase):
                 self.assertEqual([self.local(value).strftime("%H:%M") for value in results],
                                  ["03:30", "02:30", "02:30"])
 
+    def test_registration_parses_boundary_times_like_the_recurrence_rule(self) -> None:
+        """登録時の日時の解釈も fold=0 の規則で、繰り返しの次回時刻と食い違わない（#398）。"""
+        service = ReminderService(None, None, None)
+        service._tz = self.NEW_YORK
+        for text, expected in (
+            # 曖昧な時刻（夏時間の終わり）は1回目＝夏時間の側
+            ("2026-11-01 01:30", "2026-11-01T05:30:00+00:00"),
+            ("2026-11-01T01:30:00", "2026-11-01T05:30:00+00:00"),
+            # 存在しない時刻（夏時間の始まり）は進める前のオフセットで解釈して後ろへずらす（03:30 EDT）
+            ("2026-03-08 02:30", "2026-03-08T07:30:00+00:00"),
+            ("2026-03-08T02:30:00", "2026-03-08T07:30:00+00:00"),
+        ):
+            with self.subTest(text=text):
+                parsed = service._parse_at(text)
+                self.assertEqual(parsed.isoformat(), expected)
+                naive = datetime.fromisoformat(text.replace(" ", "T"))
+                self.assertEqual(parsed, reminder_service._local_to_utc(naive, self.NEW_YORK))
+                # 元の fold に左右されない
+                self.assertEqual(
+                    reminder_service._local_to_utc(naive.replace(fold=1), self.NEW_YORK), parsed,
+                )
+        # 時差の書かれた値はそのまま使う
+        self.assertEqual(service._parse_at("2026-11-01T01:30:00-05:00").isoformat(), "2026-11-01T06:30:00+00:00")
+
     def test_ordinary_days_tokyo_and_month_end_keep_existing_behavior(self) -> None:
         normal = self.next_at("2026-06-10T13:00:00+00:00", "daily",
                               datetime(2026, 6, 10, 13, 0, 1, tzinfo=timezone.utc))
