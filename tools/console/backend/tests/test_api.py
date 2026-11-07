@@ -411,6 +411,18 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         history = self.session.history_list()
         self.assertTrue(any(record["command"].startswith("python3 - --db-table ") for record in history))
 
+    async def test_db_table_rejects_out_of_range_paging_without_running_commands(self):
+        """offset・limit の範囲外はログの行数と同じく 422 にし、遠隔のコマンドを送らない（#399）。"""
+        with mock.patch.object(self.session, "run", wraps=self.session.run) as run:
+            for query in ("offset=-1", "limit=0", "limit=-5", f"limit={rc.DB_TABLE_PAGE_MAX + 1}", "offset=abc"):
+                with self.subTest(query=query):
+                    self.assertEqual((await request(f"/api/db/tables/feedback?{query}"))[0], 422)
+            self.assertEqual(run.await_count, 0)
+        # 境界の値はこれまでどおり読める
+        for query in ("offset=0&limit=1", f"offset=0&limit={rc.DB_TABLE_PAGE_MAX}"):
+            with self.subTest(query=query):
+                self.assertEqual((await request(f"/api/db/tables/feedback?{query}"))[0], 200)
+
     async def test_db_table_rejects_unknown_tables_without_running_commands(self):
         with mock.patch.object(self.session, "run", wraps=self.session.run) as run:
             for path in ("/api/db/tables/sqlite_master", "/api/db/tables/feedback%3B%20id", "/api/db/tables/Feedback"):

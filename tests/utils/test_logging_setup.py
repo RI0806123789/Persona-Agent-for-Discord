@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 sys.path.insert(0, str(SRC))
@@ -78,6 +78,25 @@ class LoggingSetupTests(unittest.TestCase):
         record = logging.LogRecord("persona_bot.core.example", logging.ERROR, __file__, 1,
                                    "失敗しました。", (), (None, None, None))
         self.assertIn("例外情報はありません", OperationalFormatter(LOG_FORMAT, LOG_DATE_FORMAT).format(record))
+
+    def test_malformed_exception_metadata_is_formatted_without_its_content(self) -> None:
+        """呼出元が作った不正な exc_info でも整形を失敗させず、値の中身を出さない（#399）。"""
+        private = "架空の非公開の例外文"
+        formatter = OperationalFormatter(LOG_FORMAT, LOG_DATE_FORMAT)
+        for exc_info, expected in (
+            ((private, None, None), "不明な形式（str）"),
+            ((Mock(), None, None), "不明な形式（Mock）"),
+            ((ValueError, ValueError(private), private), "例外: ValueError"),
+            ((ValueError, None), "例外情報を読み取れませんでした"),
+            ((ValueError, None, None, None), "例外情報を読み取れませんでした"),
+        ):
+            with self.subTest(exc_info=type(exc_info[0]).__name__, size=len(exc_info)):
+                record = logging.LogRecord("persona_bot.core.example", logging.ERROR, __file__, 1,
+                                           "失敗しました。", (), None)
+                record.exc_info = exc_info
+                formatted = formatter.format(record)
+                self.assertIn(expected, formatted)
+                self.assertNotIn(private, formatted)
 
     def test_external_warning_does_not_interpolate_exception_argument(self) -> None:
         private = "架空の非公開接続情報"

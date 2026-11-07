@@ -322,7 +322,7 @@ npm run build   # 型チェック（tsc --noEmit）+ ビルド
 | `frontend/tests/log-privacy.test.mjs`・`frontend/tests/screen-privacy.test.mjs` | ログ行の公開区分（受信時・一時停止・保持上限・クリア後）と systemd 以外の本文の秘匿、概要・検索・表示の一致。接続先・ブランチ・デプロイ表示の描画時マスクと、確認ダイアログの伏せ字切り替えへの追従・実操作の値の維持を、実際の部品で確認 |
 | `test_deploy_log_privacy.py`（backend/tests） | 再起動ログを含む手順の `output_contains_logs` が、抜粋・文字数上限の後も真のままであること |
 | `frontend/tests/toast-privacy.test.mjs` | 通知の原文保持と描画時の伏せ字、伏せ字の切り替え・後から増えた秘密値・hover/focus 中への追従、消去・上限・再試行の維持 |
-| `frontend/tests/ssh-error-privacy.test.mjs`・`backend/tests/test_ssh_error_privacy.py`（backend/tests） | SSH設定エラーの通常の診断文と安全な文面の分離、API・ログWebSocket・接続状態・履歴・通知への受け渡し、伏せ字中の置き換えとOFFでの原文復帰 |
+| `frontend/tests/ssh-error-privacy.test.mjs`・`backend/tests/test_ssh_error_privacy.py`（backend/tests） | SSH設定エラーの通常の診断文と安全な文面の分離、API・ログWebSocket・接続状態・履歴・通知への受け渡し、伏せ字中の置き換えとOFFでの原文復帰、外からの切断では理由を含まない定型文を使うこと（#399） |
 | `frontend/tests/operational-log-privacy.test.mjs` | 運用ログの過去のチャンネル名・識別子の秘匿（ログ本文・検索・概要・デプロイ出力・ツールチップ）と、ボットの現行のログ書式との対応 |
 | `test_remote_commands.py` | コマンドの組み立て（ホワイトリスト・記号を含む名前の拒否・引用符）と、systemctl / free / df / git / journald の出力の読み取り |
 | `test_ssh_integration.py` | 模擬 SSH サーバーを空きポートで起動し、本物の SSH プロトコルで次を確かめる |
@@ -332,7 +332,7 @@ npm run build   # 型チェック（tsc --noEmit）+ ビルド
 | `test_remote_scripts.py` | 一時フォルダに作った架空のボットで `insights.py`・DB 集計・テーブルの中身の取り出しを実行し、次を確かめる |
 | `test_local_repo.py` | 手元の `database.py` からスキーマの版を（import せずに）読めること・読めないときの扱い |
 | `test_app_messages.py` | sudo にパスワードが要るときの案内が、起動・停止・再起動の3つだけを許可する書き方になっていること |
-| `test_api.py` | ASGI の入口で専用ヘッダー・Host・Origin を確認し、模擬 SSH で状態取得・ログ転送と切断時の回収・集計キャッシュの期限と手動更新・再接続・同時要求を検証 |
+| `test_api.py` | ASGI の入口で専用ヘッダー・Host・Origin を確認し、DB テーブルの `offset`・`limit` の範囲外を 422 で拒否し（#399）、模擬 SSH で状態取得・ログ転送と切断時の回収・集計キャッシュの期限と手動更新・再接続・同時要求を検証 |
 | `test_api.py` のサービス・DB の確認 | 起動・停止・再起動と記録、確認後の再接続・異なる接続先の拒否、sudo 失敗時の案内、DB の集計とテーブルの中身（ページ送り・集計の件数との一致・許可していないテーブル名をコマンドを送らずに断ること・壊れた出力でサーバーの文面を出さないこと）、接続切替中の結果の拒否 |
 | `test_profiles.py` | 見本の値（`YOUR_`）のままの接続先を見分けること・`profiles.json` が無いときに見本を読むこと・デプロイ設定の検証と画面へのブランチの通知・見本どうし（接続先・SSH の設定・sudoers）が食い違っていないこと |
 

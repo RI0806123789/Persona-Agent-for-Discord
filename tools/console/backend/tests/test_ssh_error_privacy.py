@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import app
 from profiles import Profile
-from ssh_session import SshError, SshSession
+from ssh_session import CONNECTION_LOST_SAFE_MESSAGE, SshError, SshSession
 from test_api import request
 
 
@@ -196,9 +196,32 @@ class SshErrorPrivacyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_disconnect_does_not_reuse_configuration_safe_message(self):
         session, _ = await self.failure(profile(key_path="fixture-key"), local_path("posix"))
-        self.assertIsInstance(session.snapshot().get("last_error_safe"), str)
+        configuration_safe = session.snapshot().get("last_error_safe")
+        self.assertIsInstance(configuration_safe, str)
         conn = Mock()
         session._conn = conn
         session._handle_connection_lost(conn, None)
-        self.assertIsNone(session.snapshot().get("last_error_safe"))
+        self.assertEqual(session.snapshot().get("last_error_safe"), CONNECTION_LOST_SAFE_MESSAGE)
+        self.assertNotEqual(session.snapshot().get("last_error_safe"), configuration_safe)
         self.assertIn("切れました", session.last_error)
+
+    async def test_disconnect_reason_is_kept_out_of_the_safe_message_and_history(self):
+        """切断理由のホスト名・IP・パスは、伏せ字モード用の文面にも履歴の安全な文面にも出さない（#399）。"""
+        session = SshSession()
+        conn = Mock()
+        session._conn = conn
+        reason = "Connection lost: fictional-host.invalid (192.0.2.10) /fictional/private/path"
+        session._handle_connection_lost(conn, ConnectionResetError(reason))
+        snapshot = session.snapshot()
+        record = session.history_list()[0]
+        # 通常表示の原文には、これまでどおり理由が残る
+        self.assertIn(reason, snapshot["last_error"])
+        self.assertIn(reason, record["error"])
+        for safe in (snapshot["last_error_safe"], record["error_safe"]):
+            self.assertEqual(safe, CONNECTION_LOST_SAFE_MESSAGE)
+            for secret in ("fictional-host.invalid", "192.0.2.10", "/fictional/private/path"):
+                self.assertNotIn(secret, safe)
+        # 再接続・切断で現在の安全な文面は消え、履歴は残る（#218 と同じ扱い）
+        await session.disconnect()
+        self.assertIsNone(session.snapshot().get("last_error_safe"))
+        self.assertEqual(session.history_list()[0]["error_safe"], CONNECTION_LOST_SAFE_MESSAGE)

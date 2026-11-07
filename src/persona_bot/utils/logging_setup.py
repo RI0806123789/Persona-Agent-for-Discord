@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import sys
 import traceback
+from types import TracebackType
 
 from persona_bot.config.constants import LOG_DATE_FORMAT, LOG_FORMAT
 
@@ -38,12 +39,22 @@ class OperationalFormatter(logging.Formatter):
     def formatException(self, exc_info) -> str:
         # SDK等の例外本文はキー・URL・会話を含み得るため出さない。
         # 障害調査に必要な例外型・モジュールのファイル名・行番号だけを残す。
-        kind, _, tb = exc_info
+        # 呼出元が作った不正な exc_info（3要素でない・型でない・トレースバックでない）でも、
+        # 整形自体を失敗させてログ行ごと失わない（#399）。型でない値は、中身を出さないよう
+        # str() せず型名だけを示す。
+        try:
+            kind, _, tb = exc_info
+        except (TypeError, ValueError):
+            return "例外情報を読み取れませんでした。"
         if kind is None:
             return "例外情報はありません。"
-        frames = traceback.extract_tb(tb) if tb is not None else ()
+        if isinstance(kind, type):
+            name = getattr(kind, "__name__", "不明")
+        else:
+            name = f"不明な形式（{type(kind).__name__}）"
+        frames = traceback.extract_tb(tb) if isinstance(tb, TracebackType) else ()
         positions = [f"  {Path(frame.filename).name}:{frame.lineno} ({frame.name})" for frame in frames]
-        return "\n".join([f"例外: {kind.__name__}", *positions])
+        return "\n".join([f"例外: {name}", *positions])
 
 
 class _UnicodeSafeStream:
