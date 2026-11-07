@@ -25,9 +25,13 @@ from persona_bot.services.autonomous_service import compute_talk_desire, describ
 from persona_bot.config.choices import AUTO_TOPIC_INTERVAL_CHOICES, AUTO_TOPIC_INTERVAL_DISPLAY_NAMES
 from persona_bot.config.constants import AUTONOMOUS_IDLE_STOP_MINUTES
 from persona_bot.views.view_parts import (
-    begin_panel_operation, edit_panel_message, BackButton,
+    authorize_administrator_operation, edit_panel_message, BackButton,
     HubFactory, PanelView,
 )
+
+# 自律行動ではボットがボイス/ステージへ自分から入るため、サーバーでは管理者だけが確定できる（#398）。
+# DM の設定は全 DM で共有の1つで、従来どおり本人が操作できる（キャラ設定と同じ扱い）。
+AUTO_TOPIC_ADMIN_NOTICE = "サーバーの自発会話・自律行動の設定を確定できるのは管理者のみです。設定は変更されていません。"
 
 # 「話したいゲージ」を文字で描くときの目盛りの数。
 _GAUGE_BAR_WIDTH = 10
@@ -88,6 +92,8 @@ def _build_status_text(
         lines.append(f"・**配信中**: 🎙️ <#{session.channel_id}>（{kind}）")
 
     lines.append("※ 一度話題提供したら、誰かが発言するまで同じチャンネルには再投稿しません。")
+    if not confirmed:
+        lines.append("※ サーバーの設定の確定は管理者のみ行えます。DMでは本人が変更できます。")
 
     # 抑制する時間帯は「実際に使われているタイムゾーン名つき」で出す。
     # tzdata の無い環境では resolve_timezone が UTC へ落ちるため、定数の
@@ -160,9 +166,10 @@ class AutoTopicConfirmButton(ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view: "AutoTopicView" = self.view  # type: ignore[assignment]
-        begin_panel_operation(view, interaction)
-        await interaction.response.defer(ephemeral=True)
-        if not await view.ensure_settings_current(interaction):
+        # 押した時点の写しで即時に断り、保留の後に最新の Member で管理者かを確かめてから書き込む。
+        if not await authorize_administrator_operation(
+            view, interaction, allow_dm=True, notice=AUTO_TOPIC_ADMIN_NOTICE,
+        ):
             return
 
         # 一時選択値をこのサーバー（ギルド）専用の設定に反映し、DB へ保存する。

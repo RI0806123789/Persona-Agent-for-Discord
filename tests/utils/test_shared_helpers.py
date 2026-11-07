@@ -363,12 +363,18 @@ class GraphSendingTests(unittest.IsolatedAsyncioTestCase):
             for failed in (False, True):
                 with self.subTest(button=button_class.__name__, failed=failed):
                     buffer = io.BytesIO(b"fictional-png")
-                    view = discord.ui.View()
+                    if button_class is stats_view.RankingButton:
+                        # 全体比較の実行中の印は StatsView が持つ（#398）ので、実際のパネルに載せる
+                        view = stats_view.StatsView(SimpleNamespace(
+                            get_user_options=Mock(return_value=[]), build_ranking_graph=AsyncMock(return_value=buffer),
+                        ), viewer_id="11", is_admin=True, feedback=None)
+                        button = next(item for item in view.children if isinstance(item, button_class))
+                    else:
+                        view = discord.ui.View()
+                        view.usage = SimpleNamespace(has_data=Mock(return_value=True), build_graph_buffer=AsyncMock(return_value=buffer))
+                        button = button_class()
+                        view.add_item(button)
                     self.addCleanup(view.stop)
-                    view.usage = SimpleNamespace(has_data=Mock(return_value=True), build_graph_buffer=AsyncMock(return_value=buffer))
-                    view.stats = SimpleNamespace(build_ranking_graph=AsyncMock(return_value=buffer))
-                    button = button_class()
-                    view.add_item(button)
                     interaction = make_interaction(user=make_member(admin=True))
                     if failed:
                         interaction.followup.send.side_effect = [OSError("架空の送信失敗"), None]

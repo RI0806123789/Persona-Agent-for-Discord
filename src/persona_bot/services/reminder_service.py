@@ -321,7 +321,8 @@ class ReminderService:
         """LLM が返した日時文字列を UTC の datetime に変換する。解釈できなければ None。
 
         文字列にタイムゾーンが無い場合は REMINDER_TIMEZONE のローカル時刻とみなす
-        （プロンプトでその基準の現在日時を渡しているため）。
+        （プロンプトでその基準の現在日時を渡しているため）。夏時間の境目の曖昧・存在しない時刻は、
+        繰り返しの次回時刻と同じ `_local_to_utc`（fold=0 に固定）で解釈する（#398）。
         """
         text = (at_text or "").strip()
         if not text:
@@ -329,8 +330,7 @@ class ReminderService:
 
         for fmt in _AT_FORMATS:
             try:
-                naive = datetime.strptime(text, fmt)
-                return naive.replace(tzinfo=self._tz).astimezone(timezone.utc).replace(microsecond=0)
+                return _local_to_utc(datetime.strptime(text, fmt), self._tz)
             except (ValueError, OverflowError):
                 continue
 
@@ -338,7 +338,7 @@ class ReminderService:
         try:
             parsed = parse_iso_datetime(text)
             if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=self._tz)
+                return _local_to_utc(parsed, self._tz)
             return parsed.astimezone(timezone.utc).replace(microsecond=0)
         except (ValueError, OverflowError):
             logger.warning("リマインダー: 日時を解釈できませんでした。", exc_info=True)

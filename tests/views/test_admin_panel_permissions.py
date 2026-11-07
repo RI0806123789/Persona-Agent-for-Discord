@@ -11,10 +11,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import discord
-from persona_bot.core.app_state import GuildSettings
-from persona_bot.views.functions_view import FunctionsView, UnblockButton
+from persona_bot.core.app_state import BotState, GuildSettings
+from persona_bot.views.auto_topic_view import AUTO_TOPIC_ADMIN_NOTICE, AutoTopicConfirmButton, AutoTopicView
+from persona_bot.views.functions_view import (
+    GROUNDING_ADMIN_NOTICE, FunctionsView, GroundingToggleButton, UnblockButton,
+)
 from persona_bot.views.stats_view import (
-    FeedbackButton, RankingButton, StatsItemSelect, StatsUserSelect, StatsView,
+    AGGREGATION_BUSY_NOTICE, FeedbackButton, RankingButton, StatsItemSelect, StatsUserSelect, StatsView,
 )
 from persona_bot.views.unblock_view import UnblockSelect, UnblockView
 from persona_bot.views.view_parts import BackButton
@@ -208,6 +211,155 @@ class AdministratorPanelPermissionsTests(unittest.IsolatedAsyncioTestCase):
         interaction.response.send_message.assert_awaited_once_with(
             "この機能はボット所有者のみ利用できます。", ephemeral=True,
         )
+
+
+class ServerSettingPermissionTests(unittest.IsolatedAsyncioTestCase):
+    """🔍 Google検索の切り替えと 💬 自発会話の確定は、サーバーでは管理者だけ（#398）。"""
+
+    def panel(self, kind, settings):
+        if kind == "grounding":
+            view = FunctionsView(settings, Mock(), Mock(), Mock(), Mock(), Mock(), Mock(), Mock())
+            view.blocked_user_check = None
+            button = GroundingToggleButton
+        else:
+            view = AutoTopicView(settings)
+            # 確定で書き込まれる値を、既定（どちらも OFF）から変えておく
+            view.temp_auto_topic_enabled = view.temp_autonomous_enabled = True
+            button = AutoTopicConfirmButton
+        self.addCleanup(view.stop)
+        return view, next(item for item in view.children if isinstance(item, button))
+
+    @staticmethod
+    def snapshot(settings):
+        return (settings.grounding_enabled, settings.auto_topic_enabled, settings.autonomous_enabled)
+
+    @staticmethod
+    def interaction(user, *, guild=True):
+        response = SimpleNamespace(is_done=Mock(return_value=False), send_message=AsyncMock(), edit_message=AsyncMock())
+
+        async def defer(**kwargs):
+            response.is_done.return_value = True
+
+        response.defer = AsyncMock(side_effect=defer)
+        return SimpleNamespace(
+            user=user, response=response, extras={}, edit_original_response=AsyncMock(),
+            guild=SimpleNamespace(id=1) if guild else None, followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+    def settings(self, guild_id=1):
+        settings = BotState().get_guild(guild_id)
+        settings.persist = AsyncMock()
+        return settings
+
+    async def test_non_administrator_is_refused_before_any_change(self):
+        for kind, notice in (("grounding", GROUNDING_ADMIN_NOTICE), ("auto", AUTO_TOPIC_ADMIN_NOTICE)):
+            with self.subTest(kind=kind):
+                settings = self.settings()
+                before = self.snapshot(settings)
+                _view, button = self.panel(kind, settings)
+                interaction = self.interaction(make_member(admin=False))
+                await button.callback(interaction)
+                interaction.response.send_message.assert_awaited_once_with(notice, ephemeral=True)
+                interaction.response.defer.assert_not_awaited()
+                settings.persist.assert_not_awaited()
+                self.assertEqual(self.snapshot(settings), before)
+
+    async def test_role_removed_before_the_write_is_refused_with_the_current_member(self):
+        for kind, notice in (("grounding", GROUNDING_ADMIN_NOTICE), ("auto", AUTO_TOPIC_ADMIN_NOTICE)):
+            for lookup_fails in (False, True):
+                with self.subTest(kind=kind, lookup_fails=lookup_fails):
+                    settings = self.settings()
+                    before = self.snapshot(settings)
+                    _view, button = self.panel(kind, settings)
+                    member = make_member(admin=True, fresh_admin=False)
+                    if lookup_fails:
+                        member.guild.fetch_member.side_effect = RuntimeError("架空の取得失敗")
+                    interaction = self.interaction(member)
+                    await button.callback(interaction)
+                    interaction.response.defer.assert_awaited_once()
+                    self.assertEqual(interaction.edit_original_response.await_args.kwargs["content"], notice)
+                    settings.persist.assert_not_awaited()
+                    self.assertEqual(self.snapshot(settings), before)
+
+    async def test_current_administrator_changes_and_saves_the_setting(self):
+        for kind in ("grounding", "auto"):
+            with self.subTest(kind=kind):
+                settings = self.settings()
+                before = self.snapshot(settings)
+                _view, button = self.panel(kind, settings)
+                await button.callback(self.interaction(make_member(admin=True)))
+                settings.persist.assert_awaited_once()
+                self.assertNotEqual(self.snapshot(settings), before)
+
+    async def test_dm_settings_stay_operable_by_the_user(self):
+        for kind in ("grounding", "auto"):
+            with self.subTest(kind=kind):
+                settings = self.settings(None)
+                before = self.snapshot(settings)
+                _view, button = self.panel(kind, settings)
+                interaction = self.interaction(Mock(spec=discord.User, id=11), guild=False)
+                await button.callback(interaction)
+                interaction.response.send_message.assert_not_awaited()
+                settings.persist.assert_awaited_once()
+                self.assertNotEqual(self.snapshot(settings), before)
+
+
+class AggregationRepeatPressTests(unittest.IsolatedAsyncioTestCase):
+    """全体比較・フィードバックの集計を、実行中にもう一度押しても重ねない（#398）。"""
+
+    def panel(self, stats, feedback):
+        view = StatsView(stats, viewer_id="11", is_admin=True, feedback=feedback)
+        self.addCleanup(view.stop)
+        return view
+
+    @staticmethod
+    def interaction():
+        return SimpleNamespace(
+            user=make_member(admin=True), guild_id=1, extras={},
+            response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+    async def test_second_press_while_running_is_refused_and_the_button_frees_afterwards(self):
+        for kind in ("ranking", "feedback"):
+            with self.subTest(kind=kind):
+                release = asyncio.Event()
+
+                async def slow(*args):
+                    await release.wait()
+                    return None if kind == "ranking" else "架空の集計"
+
+                stats = SimpleNamespace(get_user_options=Mock(return_value=[]), build_ranking_graph=AsyncMock(side_effect=slow))
+                feedback = SimpleNamespace(build_summary_text=AsyncMock(side_effect=slow))
+                view = self.panel(stats, feedback)
+                button = next(item for item in view.children
+                              if isinstance(item, RankingButton if kind == "ranking" else FeedbackButton))
+                work = stats.build_ranking_graph if kind == "ranking" else feedback.build_summary_text
+
+                first = asyncio.create_task(button.callback(self.interaction()))
+                await asyncio.sleep(0)
+                second = self.interaction()
+                await button.callback(second)
+                second.response.send_message.assert_awaited_once_with(AGGREGATION_BUSY_NOTICE, ephemeral=True)
+                second.response.defer.assert_not_awaited()
+                self.assertEqual(work.await_count, 1)
+
+                release.set()
+                await first
+                # 終わったら、また押せる（失敗・キャンセルでも finally で印を外す）
+                third = self.interaction()
+                await button.callback(third)
+                third.response.defer.assert_awaited_once()
+                self.assertEqual(work.await_count, 2)
+
+    async def test_failure_or_cancellation_frees_the_button(self):
+        stats = SimpleNamespace(get_user_options=Mock(return_value=[]),
+                                build_ranking_graph=AsyncMock(side_effect=asyncio.CancelledError))
+        view = self.panel(stats, None)
+        button = next(item for item in view.children if isinstance(item, RankingButton))
+        with self.assertRaises(asyncio.CancelledError):
+            await button.callback(self.interaction())
+        self.assertTrue(view.try_begin_aggregation("ranking"))
 
 
 if __name__ == "__main__":

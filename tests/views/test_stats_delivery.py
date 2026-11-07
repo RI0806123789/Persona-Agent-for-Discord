@@ -202,6 +202,13 @@ class AdministratorRecheckTests(unittest.IsolatedAsyncioTestCase):
         member.guild.fetch_member.assert_not_awaited()
         self.assertEqual(interaction.edit_original_response.await_args.kwargs["content"], "架空の統計")
 
+    def ranking_button(self, buffer) -> RankingButton:
+        """実際の StatsView に載った全体比較ボタン（実行中の印をパネルが持つため。#398）。"""
+        stats = SimpleNamespace(get_user_options=Mock(return_value=[]), build_ranking_graph=AsyncMock(return_value=buffer))
+        view = StatsView(stats, viewer_id="11", is_admin=True, feedback=None)
+        self.addCleanup(view.stop)
+        return next(item for item in view.children if isinstance(item, RankingButton))
+
     async def test_ranking_is_not_sent_after_role_removed_during_rendering(self) -> None:
         for lookup_fails in (False, True):
             with self.subTest(lookup_fails=lookup_fails):
@@ -212,11 +219,7 @@ class AdministratorRecheckTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     member.fresh.guild_permissions.administrator = False
                 interaction = self.interaction(member)
-                view = discord.ui.View()
-                self.addCleanup(view.stop)
-                view.stats = SimpleNamespace(build_ranking_graph=AsyncMock(return_value=buffer))
-                button = RankingButton()
-                view.add_item(button)
+                button = self.ranking_button(buffer)
                 with patch.object(stats_view, "send_graph_ephemeral", new=AsyncMock()) as sending:
                     await button.callback(interaction)
                 sending.assert_not_awaited()
@@ -226,11 +229,7 @@ class AdministratorRecheckTests(unittest.IsolatedAsyncioTestCase):
     async def test_ranking_sends_for_a_current_administrator(self) -> None:
         buffer = io.BytesIO(b"png")
         interaction = self.interaction(make_member(admin=True))
-        view = discord.ui.View()
-        self.addCleanup(view.stop)
-        view.stats = SimpleNamespace(build_ranking_graph=AsyncMock(return_value=buffer))
-        button = RankingButton()
-        view.add_item(button)
+        button = self.ranking_button(buffer)
         with patch.object(stats_view, "send_graph_ephemeral", new=AsyncMock()) as sending:
             await button.callback(interaction)
         sending.assert_awaited_once()

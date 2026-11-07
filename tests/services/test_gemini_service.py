@@ -268,6 +268,53 @@ class GeminiGenerationTests(GeminiRequestFixture):
         self.assertEqual(self.models(), [gemini_service.GROUNDING_MODEL_NAME] * 2)
         self.assertEqual(self.search_flags(), [True, False])
 
+    async def test_image_with_search_tool_rejection_falls_back_without_search(self) -> None:
+        """画像と検索ツールの併用を断られても、検索なしで画像ごと答える（#398）。"""
+        image = object()
+        refusal = api_error(400, "Tools are not supported with multimodal inputs")
+        self.sdk_request.side_effect = [refusal, refusal, self.response]
+        result = await self.service.generate("質問", "selected-model", images=[image], timeout=30, grounding=True)
+        self.assertEqual(result[0], "架空の応答")
+        self.assertEqual(self.search_flags(), [True, True, False])
+        self.assertTrue(all(call.kwargs["contents"] == ["質問", image] for call in self.sdk_request.call_args_list))
+
+    async def test_multimodal_refusal_falls_back_only_when_images_were_sent(self) -> None:
+        refusal = api_error(400, "Multimodal input is not supported in this configuration")
+        with patch.object(gemini_service, "GROUNDING_SUBMODEL_RETRY_ENABLED", False):
+            self.sdk_request.side_effect = [refusal, self.response]
+            result = await self.service.generate("質問", "selected-model", images=[object()], timeout=30, grounding=True)
+            self.assertEqual(result[0], "架空の応答")
+            self.assertEqual(self.search_flags(), [True, False])
+
+            self.sdk_request.reset_mock()
+            self.sdk_request.side_effect = [refusal, self.response]
+            self.assertEqual(await self.service.generate("質問", "selected-model", timeout=30, grounding=True),
+                             (None, None, []))
+            self.sdk_request.assert_awaited_once()
+
+    async def test_image_format_errors_do_not_start_search_fallbacks(self) -> None:
+        """画像そのものの失敗は検索を外しても通らないので、追加の生成をしない。"""
+        for message in ("Unsupported media type", "The image is not supported"):
+            with self.subTest(message=message):
+                self.sdk_request.reset_mock()
+                self.sdk_request.side_effect = [api_error(400, message), self.response]
+                self.assertEqual(
+                    await self.service.generate("質問", "selected-model", images=[object()], timeout=30, grounding=True),
+                    (None, None, []),
+                )
+                self.sdk_request.assert_awaited_once()
+
+    def test_search_unsupported_detection_keeps_other_failures_apart(self) -> None:
+        detect = gemini_service._grounding_is_unsupported
+        self.assertTrue(detect(400, "Tool use is not supported for this model"))
+        self.assertTrue(detect(400, "google_search is not supported for this model"))
+        self.assertTrue(detect(400, "Multimodal inputs are not allowed here", multimodal=True))
+        self.assertFalse(detect(400, "Multimodal inputs are not allowed here"))
+        for code in (401, 403, 429, 500, 503):
+            with self.subTest(code=code):
+                self.assertFalse(detect(code, "Tools are not supported with multimodal inputs", multimodal=True))
+        self.assertFalse(detect(400, "Request contains an invalid argument", multimodal=True))
+
     async def test_images_are_preserved_in_all_fallbacks(self) -> None:
         image = object()
         self.sdk_request.side_effect = [unsupported_search(), unsupported_search(), self.response]

@@ -22,11 +22,14 @@ from persona_bot.views.summary_view import SummaryView
 from persona_bot.views.unblock_view import UnblockView
 from persona_bot.utils.usage_graph import UsageTracker
 from persona_bot.views.view_parts import (
-    authorize_panel_operation, begin_panel_operation, edit_panel_message, PanelView, send_graph_ephemeral, swap_panel,
+    authorize_administrator_operation, authorize_panel_operation, begin_panel_operation, edit_panel_message,
+    PanelView, send_graph_ephemeral, swap_panel,
 )
 
 
 logger = logging.getLogger(__name__)
+
+GROUNDING_ADMIN_NOTICE = "サーバーのGoogle検索の設定を切り替えられるのは管理者のみです。設定は変更されていません。"
 
 
 class OpenSettingsButton(ui.Button):
@@ -126,9 +129,11 @@ class GroundingToggleButton(ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         hub: "FunctionsView" = self.view  # type: ignore[assignment]
-        begin_panel_operation(hub, interaction)
-        await interaction.response.defer(ephemeral=True)
-        if not await hub.ensure_settings_current(interaction):
+        # サーバー全体の設定なので、サーバーでは管理者だけが切り替えられる（#398）。押した時点の写しで
+        # 即時に断り、保留の後に最新の Member で確かめてから書き込む。DM は従来どおり本人が操作できる。
+        if not await authorize_administrator_operation(
+            hub, interaction, allow_dm=True, notice=GROUNDING_ADMIN_NOTICE,
+        ):
             return
         hub.guild_settings.grounding_enabled = not hub.guild_settings.grounding_enabled
         # このトグルは確定操作が無く押した瞬間に反映されるため、その場で保存する
@@ -402,7 +407,7 @@ class FunctionsView(PanelView):
             "　└ 💬 自発会話 … テキストへの話題提供と、🎙️ 自律行動"
             "（ボットが自分からボイス/ステージへ出て配信する）の ON/OFF",
             "・📊 グラフ / 🔄 NGワード再読込 … その場で実行",
-            f"・🔍 Google検索: {grounding_display} … ボタンでその場で切替",
+            f"・🔍 Google検索: {grounding_display} … ボタンでその場で切替（サーバーでは管理者のみ）",
             "・❓ 使い方 … 会話のしかたと各機能の説明を表示",
             "・🔒 統計プライバシー … 会話統計の収集停止・データ削除（あなた自身の分だけ）",
         ]

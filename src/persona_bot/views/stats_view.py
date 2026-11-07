@@ -16,6 +16,9 @@ from persona_bot.views.view_parts import (
 
 logger = logging.getLogger(__name__)
 
+# 同じ集計の実行中にもう一度押されたときの案内（#398）
+AGGREGATION_BUSY_NOTICE = "集計中です。結果が届くまでお待ちください。"
+
 # 項目セレクトの値 → 表示名
 _ITEM_LABELS = {
     "all": "全部",
@@ -150,7 +153,16 @@ class RankingButton(ui.Button):
                 "この機能はサーバー管理者のみ利用できます。", ephemeral=True
             )
             return
+        if not view.try_begin_aggregation("ranking"):
+            await interaction.response.send_message(AGGREGATION_BUSY_NOTICE, ephemeral=True)
+            return
+        try:
+            await self._show_ranking(view, interaction)
+        finally:
+            view.end_aggregation("ranking")
 
+    @staticmethod
+    async def _show_ranking(view: "StatsView", interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         buffer = None
         try:
@@ -219,6 +231,16 @@ class FeedbackButton(ui.Button):
             )
             return
 
+        if not view.try_begin_aggregation("feedback"):
+            await interaction.response.send_message(AGGREGATION_BUSY_NOTICE, ephemeral=True)
+            return
+        try:
+            await self._show_summary(feedback, interaction)
+        finally:
+            view.end_aggregation("feedback")
+
+    @staticmethod
+    async def _show_summary(feedback: FeedbackService, interaction: discord.Interaction) -> None:
         # パネルは残したまま、集計を新しいエフェメラルメッセージとして送る。
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
@@ -271,8 +293,22 @@ class StatsView(PanelView):
         self.temp_item: str = "all"
         # 対象ユーザー。一般ユーザーは自分固定、管理者は選択で変更できる。
         self.temp_target_id: str = viewer_id
+        # 実行中の集計（全体比較・フィードバック）。連打で重い描画・集計を重ねず、
+        # 同じ結果を何通も送らないため（#398）。パネルの操作世代では止められない
+        # （結果はパネルの編集ではなく別の followup で送る）ので、別に持つ。
+        self._running_aggregations: set[str] = set()
 
         self._add_all_items()
+
+    def try_begin_aggregation(self, name: str) -> bool:
+        """同じ集計が実行中なら False を返す。判定と登録の間に await を挟まないこと。"""
+        if name in self._running_aggregations:
+            return False
+        self._running_aggregations.add(name)
+        return True
+
+    def end_aggregation(self, name: str) -> None:
+        self._running_aggregations.discard(name)
 
     def refresh_permissions(self, user: discord.Member | discord.User) -> None:
         """操作時の権限に合わせ、管理者でなくなったら対象を本人へ戻す。"""
