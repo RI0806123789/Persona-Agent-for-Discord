@@ -85,6 +85,9 @@ class TaskOwner:
             coro.close()
             raise asyncio.CancelledError
         task = asyncio.current_task()
+        if task is None:
+            # 手動で駆動されたコルーチンも、実行本体を所有タスクとして回収できるようにする。
+            return await spawn(coro, label="イベント処理", owner=self)
         self._track(task)
         try:
             with self.scope():

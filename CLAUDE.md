@@ -179,6 +179,8 @@ python bot.py     # 成功時に "ログイン成功: <bot>" と表示される
 
 ## 開発者用ダッシュボード (`tools/console/`)
 
+`backend/remote_scripts/insights.py` と `db_table.py` は、`collect(...)` が呼出しごとの状態を作って結果の辞書を返し、`main()` とmainガードだけでargv解釈・JSON出力を行う。import時に設定ファイル・DB・Discord・journalへ触れない境界を保つ。サーバーへ送るのは引き続き標準ライブラリだけの1ファイルで、ボット本体のimportや別ファイルの配備を必要としない。収集処理のテストは通常のimportと関数・メソッドの呼出しを使い、実行用コードをASTから再構築しない（設定ソースをASTで読む処理は維持する）。
+
 データ画面の開いているテーブルと閉じるアニメーション中のテーブルは、選択時の`connectionKey`と組で保持する。現在の接続と一致する選択だけを描画し、接続変更時のeffectだけに解除を任せない（子の取得effectが先に動くため）。新しい接続では明示的な選択までテーブル内容を取得しない（#344）。
 
 サーバー設定インサイトはスキーマ15の`autonomous_stage_channel_id` / `autonomous_voice_channel_id`も取得する。正の整数のIDは精度を保つ文字列、指定なしは`null`、列が無い旧版は項目なしとして区別する。サーバー一覧とDM設定の専用欄は描画時に`mask`し、`collectSecrets`にも登録する。設定名を取得するためのDiscord API呼出しは増やさない（#292）。
@@ -256,6 +258,8 @@ Discordの参加サーバー一覧は`limit=200`・`after`で最大50ページ�
 
 `PersonaClient.background_tasks`（`TaskOwner`）がボット単位の所有者。`PersonaClient.start` とDiscordイベントからコンテキストを引き継ぎ、その配下の `spawn` を自動登録する。単独で起動する処理は `spawn(..., owner=client.background_tasks)` または `with client.background_tasks.scope()` で所有者を明示する。管理外の処理や別の所有者のタスクは終了対象に含めない。周期処理は `make_guarded_loop(..., owner=client.background_tasks)` で登録する。
 
+`TaskOwner.run` は通常は呼出元のTaskを追跡する。Taskを伴わず手動で駆動された場合は本体を所有者付きの子Taskへ渡し、同じ受付停止・終了待機の対象にする。サービス終了通知も所有者を明示し、回収後にも完了済みか確認してから共有リソースを閉じる。
+
 スラッシュコマンドはDiscordが本体タスクを直接生成するため、コンテキストの継承だけでは所有集合へ登録されない。`bot.py`から`register_commands(..., task_owner=client.background_tasks)`へ明示的に渡し、`/functions`・`/join`・`/leave`の共通入口で本体と失敗通知までを`TaskOwner.run`に登録する。本体の例外は所有期間内で`handle_command_error`へ渡し、通知は`wait_for_cleanup`で完了を待つ。停止開始後はブラックリスト判定を含む本体を開始せず、実行中の本体・失敗通知と保護付きの後片付けを回収してから共有接続を閉じる。所有者を省略した単独登録では専用の`TaskOwner`を使う。
 
 終了は一つのタスクを共有する。受付停止・周期処理のキャンセル後、文書ワーカー・自律配信・音声会話の終了callbackを先に呼び、所有するイベントと背景タスクを中断して終了を待つ。`run_in_thread` の同期ワーカーと `wait_for_cleanup` の後片付けは直接キャンセルせず、親タスクも完了まで待つ。終了通知と回収の共通期限は `BACKGROUND_SHUTDOWN_TIMEOUT_SECONDS`。超過時は `TimeoutError` を返し、使用中の共有リソースを閉じない。停止中の新規タスクもキャンセル完了まで追跡する。終了タスク自身は所有集合から分離し、後片付けを通常の `spawn` で起動しないこと（停止後は新規受付を拒否する）。回収後に Discord → Gemini → DBの順に閉じる。`close` の重複・呼出元の繰り返しキャンセルでも終了通知は一度だけ実行する。期限超過後の再終了では、同じ終了通知タスクを待ち直す。同期スレッドそのものの強制終了はできないため、期限超過は正常終了を意味しない。
@@ -317,6 +321,8 @@ Discordの参加サーバー一覧は`limit=200`・`after`で最大50ページ�
 `prompting.sanitize_prompt_data` は、生の発言・質問・コメント・名前・記憶・文書要約・子の報告などに含まれる見出し行とロール行を全角化する。発言本文へ適用した後、履歴整形側が正規の`ユーザーの質問:` / `BOTの回答:`を付ける。履歴・要約元ログのビルダーは無害化済みの結果を `SanitizedHistory` として返し、プロンプト組立時に再走査しない。通常の文字列は `preserve_history_roles=True` で正規ロールを維持しつつ見出しを再確認する。外部入力を直接 `SanitizedHistory` に包む入口は作らない。処理はべき等で、通常文と改行・コードが生成したセクション・ペルソナ・JSON出力の形式契約を維持する。区切りの無害化だけでAIへの判定誘導を完全に防ぐものではない（#281）。
 
 ### データベース (`database.py`)
+
+SQLiteのロック待機上限は `DATABASE_BUSY_TIMEOUT_SECONDS`（既定30秒）。`sqlite3.connect(timeout=...)` が同じ接続の `busy_timeout` をミリ秒で設定するため、別のPRAGMAで重複設定しない。期限までにロックが解放されなければ例外を返し、無制限の再試行は行わない。
 
 guild_settings の列構成は初期化時に検証し、保存時は `schema_version` が変わった場合だけ `table_info` を取り直す。外部のスキーマ変更で未知の列が増えた場合は、設定の置換で消さずにエラーにする。
 

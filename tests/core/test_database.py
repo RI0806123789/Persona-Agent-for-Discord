@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -28,6 +29,63 @@ class DatabaseInitializationTests(unittest.TestCase):
         self.path = Path(directory.name) / "nested" / "bot.db"
         self.db = Database(self.path)
         self.addCleanup(lambda: self.db.close())
+
+    def test_connection_configures_sqlite_busy_timeout(self) -> None:
+        self.assertEqual(
+            self.db._conn.execute("PRAGMA busy_timeout").fetchone()[0],
+            int(database.DATABASE_BUSY_TIMEOUT_SECONDS * 1000),
+        )
+
+    def test_write_waits_for_another_connection_and_then_succeeds(self) -> None:
+        self.db.close()
+        with patch.object(database, "DATABASE_BUSY_TIMEOUT_SECONDS", 1.0):
+            self.db = Database(self.path)
+        self.db.initialize()
+        started, finished = threading.Event(), threading.Event()
+        errors = []
+
+        def trace(statement):
+            if statement.startswith("INSERT OR REPLACE INTO profile"):
+                started.set()
+
+        def save():
+            try:
+                self.db.profile_merge("fictional-user", {"趣味": "架空の工作"})
+            except Exception as error:
+                errors.append(error)
+            finally:
+                finished.set()
+
+        self.db._conn.set_trace_callback(trace)
+        with closing(sqlite3.connect(self.path)) as other:
+            other.execute("BEGIN IMMEDIATE")
+            worker = threading.Thread(target=save)
+            worker.start()
+            try:
+                self.assertTrue(started.wait(2))
+                self.assertFalse(finished.wait(0.05))
+            finally:
+                other.rollback()
+                worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(self.db.profile_load("fictional-user"), {"趣味": "架空の工作"})
+
+    def test_busy_wait_remains_bounded_and_does_not_write_on_timeout(self) -> None:
+        self.db.close()
+        with patch.object(database, "DATABASE_BUSY_TIMEOUT_SECONDS", 0.03):
+            self.db = Database(self.path)
+        self.db.initialize()
+        with closing(sqlite3.connect(self.path)) as other:
+            other.execute("BEGIN IMMEDIATE")
+            started = time.monotonic()
+            with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                self.db.profile_merge("fictional-user", {"趣味": "架空の工作"})
+            elapsed = time.monotonic() - started
+            other.rollback()
+        self.assertLess(elapsed, 2.0)
+        self.assertFalse(self.db._conn.in_transaction)
+        self.assertEqual(self.db.profile_load("fictional-user"), {})
 
     def test_fresh_database_applies_all_migrations(self) -> None:
         self.db.initialize()

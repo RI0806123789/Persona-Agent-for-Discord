@@ -54,6 +54,7 @@ from persona_bot.config.constants import (
     AFFINITY_MAX,
     AFFINITY_MIN,
     AFFINITY_NEUTRAL,
+    DATABASE_BUSY_TIMEOUT_SECONDS,
     LEGACY_BACKUP_MAX_SUFFIX,
     REMINDER_MAX_PENDING_PER_USER,
     STATS_HOURLY_BUCKETS,
@@ -399,7 +400,10 @@ class Database:
         self._lock = threading.Lock()
         self._guild_settings_schema_version: int | None = None
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        # connectのtimeoutがSQLiteのbusy_timeout（ミリ秒）も設定する。
+        self._conn = sqlite3.connect(
+            self._db_path, timeout=DATABASE_BUSY_TIMEOUT_SECONDS, check_same_thread=False,
+        )
         self._conn.row_factory = sqlite3.Row  # 行に列名でアクセスできるようにする
         # WAL モード: ボット稼働中でも sqlite3 CLI 等から安全に読み取れる
         self._conn.execute("PRAGMA journal_mode=WAL")

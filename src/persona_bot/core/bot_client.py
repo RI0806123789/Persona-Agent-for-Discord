@@ -70,12 +70,17 @@ class PersonaClient(discord.Client):
         # 新規受付停止後もサービスの後片付けは保護して実行する。
         deadline = asyncio.get_running_loop().time() + BACKGROUND_SHUTDOWN_TIMEOUT_SECONDS
         if self._service_stop_task is None:
-            self._service_stop_task = spawn(stop_services(), label="サービスの終了通知", _protected=True)
+            self._service_stop_task = spawn(
+                stop_services(), label="サービスの終了通知", owner=self.background_tasks, _protected=True,
+            )
         stopping = self._service_stop_task
         await asyncio.wait({stopping}, timeout=BACKGROUND_SHUTDOWN_TIMEOUT_SECONDS)
         # サービスが期限内に終わらない場合も、通常処理の中断と追跡は行う。
         # 超過時は例外を返し、まだ使われているDiscord・Gemini・DBを閉じない。
         await self.background_tasks.shutdown(timeout=max(0.0, deadline - asyncio.get_running_loop().time()))
+        if not stopping.done():
+            # 所有者の回収方法にかかわらず、期限後に無期限の待機へ進まない。
+            raise ShutdownTimeoutError("サービスの終了通知が期限を超えました。")
         try:
             await stopping
         finally:

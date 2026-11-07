@@ -65,9 +65,12 @@ class ChatAdmission:
 
     def release(self, guild_id: int | None) -> None:
         """処理中の枠だけを返し、期間内の受付数は失敗・中断でも戻さない。"""
-        remaining = self._running_by_guild[guild_id] - 1
+        running = self._running_by_guild.get(guild_id, 0)
+        if running <= 0:
+            return
+        remaining = running - 1
         if remaining:
             self._running_by_guild[guild_id] = remaining
         else:
             del self._running_by_guild[guild_id]
-        self._running -= 1
+        self._running = max(0, self._running - 1)

@@ -1,5 +1,11 @@
 # 回帰テスト
 
+## 遠隔集計の読込境界・終了処理の防御（#396・#397）
+
+`tools/console/backend/tests/test_remote_collection.py` は、遠隔スクリプトをimportしてもargvの解釈・設定読込・DB・外部通信・JSON出力を行わないこと、連続した収集で行・エラー・設定・期限が混ざらないこと、従来の標準入力CLIの引数とJSON出力を保つことを確認する。ページング・設定解決・表示名取得の既存テストも、ASTで関数を作り直さず通常のimportと呼出しで実行する。
+
+`core/test_app_lifecycle.py` は所有者のコンテキストを継承しない直接の終了処理と、回収後の終了通知の完了確認を検証する。`core/test_background.py` はTaskを伴わない手動駆動、`core/test_chat_admission.py` は未確保枠の返却、`core/test_database.py` は接続の待機設定・別接続のロック解放後の書込・期限超過時のロールバックを検証する。外部サービスと本番DBは使用しない。
+
 ## テスト用Discordモックの共通化（#378）
 
 `helpers/discord_mocks.py` が、`Interaction`・`Message`・`Channel`・`Guild` の架空オブジェクトを作る（`make_interaction`・`make_response`・`make_followup`・`make_message`・`make_channel`・`make_guild`）。送信・応答は呼ぶたびに新しい`AsyncMock`なので、テスト間で呼び出し履歴が混ざらない。

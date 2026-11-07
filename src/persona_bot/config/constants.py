@@ -12,6 +12,9 @@ LOG_DATE_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 # 超過時は失敗を返し、使用中の共有クライアントやDBを先に閉じない。
 BACKGROUND_SHUTDOWN_TIMEOUT_SECONDS = 60.0
 
+# 別接続の短い書き込みと競合した場合の待機上限。超過したロックは例外として扱う。
+DATABASE_BUSY_TIMEOUT_SECONDS = 30.0
+
 # ペルソナ（キャラクター設定）のプロンプトを置くフォルダ。Git が管理するのは書式見本の
 # テンプレートだけで、キャラ別のファイルは利用者が各自のパソコン・サーバーで作る
 # （.gitignore で除外済み）。ここにある .txt がキャラ設定の選択肢になる（personas.py）。
