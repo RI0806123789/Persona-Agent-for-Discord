@@ -573,8 +573,16 @@ async def get_db_summary() -> dict:
 
 
 @app.get("/api/db/tables/{table}")
-async def get_db_table(table: str, offset: int = 0, limit: int = 50) -> dict:
-    """bot.db の1つのテーブルの行（会話・記憶の本文と ID を含む）を、読み取り専用で取り寄せる。"""
+async def get_db_table(
+    table: str,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=rc.DB_TABLE_PAGE_MAX)] = 50,
+) -> dict:
+    """bot.db の1つのテーブルの行（会話・記憶の本文と ID を含む）を、読み取り専用で取り寄せる。
+
+    範囲外の offset・limit は 422 にする（ログの行数と同じく、API の仕様として拒否する。#399）。
+    `db_table_command` の丸めは、直接呼ばれた場合の最後の砦として残す。
+    """
     if table not in rc.DB_TABLES:
         raise HTTPException(status_code=404, detail="このテーブルは表示できません。")
     profile = session.require_profile()

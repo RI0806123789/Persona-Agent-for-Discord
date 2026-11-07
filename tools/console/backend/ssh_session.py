@@ -25,6 +25,8 @@ CONNECT_TIMEOUT_SECONDS = 10
 COMMAND_TIMEOUT_SECONDS = 20
 KEEPALIVE_SECONDS = 30
 HISTORY_MAX = 200
+# 接続が外から切れたときの、伏せ字モード用の文面（切断理由の原文を含めない。#399）
+CONNECTION_LOST_SAFE_MESSAGE = "SSH 接続が切れました。もう一度接続してください。"
 
 
 def _safe_config_location(path: Path, *, key: bool = False) -> str:
@@ -250,9 +252,14 @@ class SshSession:
         self.server_info = None
         reason = f"（{exc}）" if exc else ""
         self.last_error = f"SSH 接続が切れました{reason}。もう一度接続してください。"
-        self.last_error_safe = None
+        # 切断理由（exc）には接続先のホスト名・IP アドレス・ローカルのパスなど、画面が秘密として
+        # 知らない値が入りうる。伏せ字モードでは理由を含まない定型文を出す（#399）。
+        self.last_error_safe = CONNECTION_LOST_SAFE_MESSAGE
         self.history.append(
-            CommandRecord(time.time(), "接続断", "-", None, 0, ok=False, error=self.last_error)
+            CommandRecord(
+                time.time(), "接続断", "-", None, 0, ok=False,
+                error=self.last_error, error_safe=CONNECTION_LOST_SAFE_MESSAGE,
+            )
         )
 
     # ------------------------------------------------------------ コマンド実行
