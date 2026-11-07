@@ -1,4 +1,9 @@
-"""起動処理から分離したメッセージ処理。サービスは bot.py から注入する。"""
+"""起動処理から分離したメッセージ処理。サービスは bot.py から注入する。
+
+受付・振り分け・応答の各ステージへは、サービス（このクラスのフィールド）と、型付きの外部操作
+（`message_operations.MessageOperations`）だけを渡す。外部操作はこのモジュールの同名の属性から
+呼出しのたびに組み立てるので、テストはここを差し替えればよい（#395）。
+"""
 
 from __future__ import annotations
 
@@ -9,31 +14,24 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from persona_bot.services.affinity_service import extract_affinity_changes
 from persona_bot.core.app_state import BotState, GuildSettings, ResponseSettings
-from persona_bot.core.background import run_in_thread, spawn
 from persona_bot.core.chat_admission import ChatAdmission
 from persona_bot.core import message_admission, message_routing, message_response
 from persona_bot.core.agent_request import handle_agent_request
-from persona_bot.config.constants import (
-    AGENT_ROUTER_HISTORY_LIMIT, GEMINI_RESPONSE_TIMEOUT_SECONDS,
-    DOCUMENT_QUEUE_FULL_NOTICE, HISTORY_LIMIT, IMAGE_ONLY_QUESTION, MAX_DOCUMENT_SIZE_BYTES,
-)
-from persona_bot.services.agent_plan import AgentPlan, requests_subagent
-from persona_bot.services.content_moderator import screen_bot_response_with_status
+from persona_bot.core.message_operations import MessageOperations
+from persona_bot.services.agent_plan import AgentPlan
 from persona_bot.services.violation_notice import record_violation_notice
-from persona_bot.utils.discord_helpers import (
-    attachment_is_image, clean_message_content, describe_supported_attachments,
-    fetch_channel_history_text, format_grounding_sources, mask_grounding_sources, is_supported_document_attachment,
-    close_image_attachments, is_connected_voice_chat, is_supported_message_channel,
-    load_image_attachments, REPLY_ALLOWED_MENTIONS, send_long_reply,
-)
-from persona_bot.config.paths import load_persona_template
-from persona_bot.services.prompting import (
-    build_agent_declined_section, build_full_prompt, build_memory_sections,
-)
-from persona_bot.audio.voice import play_tts_response
+from persona_bot.utils.discord_helpers import REPLY_ALLOWED_MENTIONS
 from persona_bot.views.agent_thread import AgentWebhooks, start_agent_progress
+
+# ★ 外部操作の差し替え口（MessageOperations のフィールドと同名）。ここで使っていなくても消さないこと。
+# 各ステージはこれらを直接 import せず、MessageOperations 経由で呼ぶ。
+from persona_bot.audio.voice import play_tts_response  # noqa: F401
+from persona_bot.config.paths import load_persona_template  # noqa: F401
+from persona_bot.core.background import spawn  # noqa: F401
+from persona_bot.utils.discord_helpers import (  # noqa: F401
+    fetch_channel_history_text, load_image_attachments, send_long_reply,
+)
 
 if TYPE_CHECKING:
     from persona_bot.services.affinity_service import AffinityService
@@ -77,14 +75,24 @@ class MessageHandler:
     agent: AgentService
 
     def __post_init__(self) -> None:
+        # 外部操作の不足は、その経路を通るまで待たずに構築時に知らせる（#395）
+        self._operations()
         self._chat_admission = ChatAdmission()
         # サブエージェントの作業スレッドへ子が投稿する Webhook（チャンネルごとに使い回す。#267）
         self._agent_webhooks = AgentWebhooks()
 
+    @staticmethod
+    def _operations() -> MessageOperations:
+        """このモジュールの差し替え口から、ステージへ渡す外部操作を組み立てる。
+
+        ★ 構築時に1回だけ作って持ち回さないこと。テストは MessageHandler を作った後に
+        モジュールの属性を差し替える（make_message_handler・patch.object）ため、呼出しのたびに読み直す。
+        """
+        return MessageOperations.from_namespace(sys.modules[__name__])
+
     async def _screen_response(self, text, sources, *, log_label: str, screen_sources: bool = False):
         return await message_response._screen_response(
             self, text, sources, log_label=log_label, screen_sources=screen_sources,
-            runtime=sys.modules[__name__],
         )
 
     async def notify_violation(self, message: discord.Message, notice: str) -> None:
@@ -131,7 +139,7 @@ class MessageHandler:
         return False
 
     async def on_message(self, message: discord.Message) -> None:
-        await message_admission.on_message(self, message, runtime=sys.modules[__name__])
+        await message_admission.on_message(self, message)
 
     async def _process_accepted_message(
         self, message: discord.Message, question: str, guild_settings: GuildSettings, *,
@@ -140,7 +148,7 @@ class MessageHandler:
         await message_routing._process_accepted_message(
             self, message, question, guild_settings, accepts_normally=accepts_normally,
             is_autonomous_comment=is_autonomous_comment, image_objects=image_objects,
-            runtime=sys.modules[__name__],
+            ops=self._operations(),
         )
 
     async def _handle_agent_request(
@@ -161,17 +169,13 @@ class MessageHandler:
         return await message_response.handle_chat_message(
             self, message, question, memory_category, response_settings=response_settings,
             delegation_section=delegation_section, delegated_sources=delegated_sources,
-            image_objects=image_objects, runtime=sys.modules[__name__],
+            image_objects=image_objects, ops=self._operations(),
         )
 
     def _track_reply_for_feedback(
         self, sent: discord.Message, user_id: str, response_settings: ResponseSettings, generated_model: str,
     ) -> None:
-        message_response._track_reply_for_feedback(
-            self, sent, user_id, response_settings, generated_model, runtime=sys.modules[__name__],
-        )
+        message_response._track_reply_for_feedback(self, sent, user_id, response_settings, generated_model)
 
     async def _remember_reply(self, user_id: str, question: str, response_text: str) -> bool:
-        return await message_response._remember_reply(
-            self, user_id, question, response_text, runtime=sys.modules[__name__],
-        )
+        return await message_response._remember_reply(self, user_id, question, response_text)

@@ -1,16 +1,24 @@
 """メッセージの受付条件・活動観測・入力検査を担当する。
 
-外部境界は呼出元から注入し、サービスの配線と既存の差し替え口を維持する。
+サービスは `MessageHandler`（引数の self）から使う。この段は外部操作（`MessageOperations`）を
+呼ばない。判定の関数は直接 import する（#395）。
 """
 
 from __future__ import annotations
 
-from types import ModuleType
+from typing import TYPE_CHECKING
 
 import discord
 
+from persona_bot.utils.discord_helpers import (
+    clean_message_content, is_connected_voice_chat, is_supported_message_channel,
+)
 
-async def on_message(self, message: discord.Message, *, runtime: ModuleType) -> None:
+if TYPE_CHECKING:
+    from persona_bot.core.message_handler import MessageHandler
+
+
+async def on_message(self: MessageHandler, message: discord.Message) -> None:
     if self.client.user is None:
         return
     if message.author == self.client.user or message.author.bot:
@@ -24,10 +32,10 @@ async def on_message(self, message: discord.Message, *, runtime: ModuleType) -> 
     # 進む前にここで打ち切る。後段に置くと、結局返信できない発言のために API を1回
     # 無駄打ちし、違反警告の message.reply() も失敗してしまう。
     channel = message.channel
-    if not runtime.is_supported_message_channel(channel):
+    if not is_supported_message_channel(channel):
         return
 
-    is_dm = isinstance(message.channel, runtime.discord.DMChannel)
+    is_dm = isinstance(message.channel, discord.DMChannel)
     # DM はギルドに属さないため guild_id=None として「全DM共有」の設定スロットへ収束させる。
     guild_id = message.guild.id if message.guild is not None else None
     guild_settings = await self.state.get_guild_async(guild_id)
@@ -54,13 +62,13 @@ async def on_message(self, message: discord.Message, *, runtime: ModuleType) -> 
         # ローカルのNGワード判定にかける（#172）。「返信する条件」と「NG判定の対象」を分け、
         # ボットが居合わせている通話のチャットを見守る。AI判定は呼ばない（宛先でない
         # 発言ごとに Gemini を呼ぶとコストが発散する）。他のチャンネルへは広げない。
-        if runtime.is_connected_voice_chat(message.guild, message.channel.id):
+        if is_connected_voice_chat(message.guild, message.channel.id):
             await self._reject_ng_input(
-                message, runtime.clean_message_content(message, self.client.user), "NGワードが含まれています。",
+                message, clean_message_content(message, self.client.user), "NGワードが含まれています。",
             )
         return
 
-    question = runtime.clean_message_content(message, self.client.user)
+    question = clean_message_content(message, self.client.user)
     if not question and not message.attachments:
         return
 

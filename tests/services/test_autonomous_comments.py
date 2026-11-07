@@ -20,14 +20,9 @@ from persona_bot.services.autonomous_service import AutonomousService
 from persona_bot.services.agent_plan import AgentPlan
 from persona_bot.core.background import spawn
 from persona_bot.config.constants import (
-    AUTONOMOUS_COMMENT_COOLDOWN_SECONDS, CHAT_MAX_CONCURRENT_PER_GUILD,
-    MAX_DOCUMENT_SIZE_BYTES, MAX_IMAGE_SIZE_BYTES,
+    AUTONOMOUS_COMMENT_COOLDOWN_SECONDS, CHAT_MAX_CONCURRENT_PER_GUILD, MAX_IMAGE_SIZE_BYTES,
 )
 from persona_bot.utils import discord_helpers
-from persona_bot.utils.discord_helpers import (
-    attachment_is_image, clean_message_content, is_supported_document_attachment,
-    is_supported_message_channel,
-)
 from tests.helpers.message_handler_helpers import make_message_handler
 
 
@@ -87,17 +82,12 @@ class AutonomousCommentAdmissionTests(unittest.IsolatedAsyncioTestCase):
         self.notify = AsyncMock()
         self.topic = SimpleNamespace(mark_activity=Mock(), watch_channel=Mock())
         namespace = {
-            "discord": discord, "client": self.client, "state": self.state,
+            "client": self.client, "state": self.state,
             "auto_topic": self.topic, "autonomous": self.service,
             "blacklist": SimpleNamespace(is_blocked=Mock(return_value=False)),
             "ng_filter": self.ng_filter, "moderator": self.moderator,
             "stats": SimpleNamespace(record=AsyncMock()), "spawn": start,
-            "notify_violation": self.notify, "play_tts_response": AsyncMock(),
-            "clean_message_content": clean_message_content,
-            "is_supported_message_channel": is_supported_message_channel,
-            "is_supported_document_attachment": is_supported_document_attachment,
-            "attachment_is_image": attachment_is_image,
-            "MAX_DOCUMENT_SIZE_BYTES": MAX_DOCUMENT_SIZE_BYTES,
+            "play_tts_response": AsyncMock(),
         }
         self.handler = make_message_handler(namespace, self)
         self.handler.handle_chat_message = self.normal_reply
