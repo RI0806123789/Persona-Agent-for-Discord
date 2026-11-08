@@ -22,6 +22,7 @@ from persona_bot.views.autonomous_channel_view import (
 )
 from persona_bot.views.settings_view import OpenAutonomousChannelButton, SettingsView
 from persona_bot.views.view_parts import BackButton
+from tests.helpers import discord_mocks
 from tests.helpers.member_helpers import make_member, make_owner_client
 from tests.helpers.persona_helpers import install_empty_persona_catalog, install_persona_catalog
 
@@ -33,27 +34,26 @@ def make_channel(channel_id: int, name: str, **denied: bool):
     )
     for key, value in denied.items():
         setattr(permissions, key, value)
-    return SimpleNamespace(id=channel_id, name=name, instance=None, permissions_for=Mock(return_value=permissions))
+    return discord_mocks.make_channel(
+        channel_id=channel_id, name=name, instance=None, permissions_for=Mock(return_value=permissions),
+    )
 
 
 def make_guild(*, stages: int = 2, voices: int = 2):
-    return SimpleNamespace(
-        id=1, me=object(),
+    return discord_mocks.make_guild(
+        me=object(),
         stage_channels=[make_channel(2000 + index, f"架空のステージ{index}") for index in range(stages)],
         voice_channels=[make_channel(3000 + index, f"架空のボイス{index}") for index in range(voices)],
     )
 
 
 def make_interaction(*, admin: bool = True, fresh_admin: bool | None = None, guild=None):
-    interaction = SimpleNamespace(
+    interaction = discord_mocks.make_interaction(
         user=make_member(admin=admin, fresh_admin=fresh_admin),
         guild=guild,
         extras={},
-        response=SimpleNamespace(
-            defer=AsyncMock(), edit_message=AsyncMock(), send_message=AsyncMock(), is_done=Mock(return_value=False),
-        ),
-        edit_original_response=AsyncMock(),
         original_response=AsyncMock(return_value=SimpleNamespace(edit=AsyncMock())),
+        without=("followup",),
     )
     async def defer(**kwargs):
         interaction.response.is_done.return_value = True

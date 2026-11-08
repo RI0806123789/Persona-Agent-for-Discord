@@ -4,13 +4,14 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from persona_bot.core.app_state import BotState
 from persona_bot.views.settings_view import ConfirmButton, SettingsView
 from persona_bot.views.view_parts import begin_panel_operation
+from tests.helpers.discord_mocks import make_interaction, make_response
 from tests.helpers.member_helpers import make_member
 from tests.helpers.persona_helpers import install_persona_catalog
 
@@ -26,18 +27,17 @@ class SettingsAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.button = next(item for item in self.view.children if isinstance(item, ConfirmButton))
 
     def interaction(self, *, admin=True, fresh_admin=None, dm=False):
-        response = SimpleNamespace(
-            defer=AsyncMock(), send_message=AsyncMock(), is_done=Mock(return_value=False),
-        )
+        response = make_response("defer", "send_message", "is_done")
 
         async def defer(**kwargs):
             response.is_done.return_value = True
 
         response.defer.side_effect = defer
-        return SimpleNamespace(
-            response=response, edit_original_response=AsyncMock(), extras={},
+        return make_interaction(
+            response=response, extras={},
             guild=None if dm else SimpleNamespace(id=1),
             user=SimpleNamespace(id=11) if dm else make_member(admin=admin, fresh_admin=fresh_admin),
+            without=("followup", "original_response"),
         )
 
     async def test_nonadministrator_is_denied_without_waiting_or_fetch(self):

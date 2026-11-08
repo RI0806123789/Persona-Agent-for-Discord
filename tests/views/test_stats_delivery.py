@@ -16,6 +16,7 @@ from persona_bot.views import stats_view
 from persona_bot.views.unblock_view import UnblockSelect, UnblockView
 from persona_bot.utils.discord_helpers import is_current_administrator
 from persona_bot.views.stats_view import FeedbackButton, RankingButton, RunStatsButton, StatsUserSelect, StatsView
+from tests.helpers.discord_mocks import make_http_response, make_interaction, make_response
 from tests.helpers.member_helpers import make_member, make_owner_client
 
 
@@ -32,10 +33,9 @@ class StatsDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.view = StatsView(self.stats, viewer_id="11", is_admin=True)
         self.addCleanup(self.view.stop)
         self.button = next(item for item in self.view.children if isinstance(item, RunStatsButton))
-        self.interaction = SimpleNamespace(
+        self.interaction = make_interaction(
             user=make_member(admin=True),
-            response=SimpleNamespace(edit_message=AsyncMock(), send_message=AsyncMock()),
-            edit_original_response=AsyncMock(), followup=SimpleNamespace(send=AsyncMock()),
+            response=make_response("edit_message", "send_message"), without=("original_response",),
         )
 
     async def test_success_and_send_failure_release_files_before_buffers(self) -> None:
@@ -149,7 +149,7 @@ class AdministratorRecheckTests(unittest.IsolatedAsyncioTestCase):
                 user.guild.fetch_member.assert_awaited_once_with(11)
 
     async def test_helper_denies_when_member_cannot_be_confirmed(self) -> None:
-        response = SimpleNamespace(status=404, reason="架空")
+        response = make_http_response(404, "架空")
         for error in (discord.NotFound(response, "脱退済み"), discord.HTTPException(response, "取得失敗"), RuntimeError("想定外")):
             with self.subTest(error=type(error).__name__):
                 user = make_member(admin=True)
@@ -165,10 +165,9 @@ class AdministratorRecheckTests(unittest.IsolatedAsyncioTestCase):
             await is_current_administrator(SimpleNamespace(user=user))
 
     def interaction(self, member):
-        return SimpleNamespace(
+        return make_interaction(
             user=member, guild_id=1,
-            response=SimpleNamespace(edit_message=AsyncMock(), send_message=AsyncMock(), defer=AsyncMock()),
-            edit_original_response=AsyncMock(), followup=SimpleNamespace(send=AsyncMock()),
+            response=make_response("edit_message", "send_message", "defer"), without=("original_response",),
         )
 
     async def test_other_user_stats_denied_when_member_lookup_fails(self) -> None:
@@ -182,7 +181,7 @@ class AdministratorRecheckTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(view.stop)
         view.temp_target_id = "22"
         member = make_member(admin=True)
-        member.guild.fetch_member.side_effect = discord.HTTPException(SimpleNamespace(status=500, reason="架空"), "障害")
+        member.guild.fetch_member.side_effect = discord.HTTPException(make_http_response(500, "架空"), "障害")
         interaction = self.interaction(member)
         await next(item for item in view.children if isinstance(item, RunStatsButton)).callback(interaction)
         interaction.followup.send.assert_not_awaited()
@@ -256,11 +255,10 @@ class UnblockPermissionTests(unittest.IsolatedAsyncioTestCase):
                 self.addCleanup(view.stop)
                 select = next(item for item in view.children if isinstance(item, UnblockSelect))
                 select._values = ["22"]
-                interaction = SimpleNamespace(
+                interaction = make_interaction(
                     user=make_member(admin=True),
                     client=make_owner_client(owner_id=11 if owner else 99),
-                    response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
-                    edit_original_response=AsyncMock(),
+                    response=make_response("defer", "send_message"), without=("followup", "original_response"),
                 )
                 await select.callback(interaction)
                 if owner:

@@ -2,14 +2,15 @@
 
 from pathlib import Path
 import sys
-from types import SimpleNamespace
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import discord
-from tests.helpers.discord_mocks import ONLY_RESPONSE, make_interaction as make_discord_interaction, make_response
+from tests.helpers.discord_mocks import (
+    ONLY_RESPONSE, make_http_response, make_interaction as make_discord_interaction, make_response,
+)
 from persona_bot.services.voice_conversation import ConsentState
 from persona_bot.views.voice_consent_view import VoiceConsentView, build_consent_panel_text
 
@@ -99,7 +100,7 @@ class ConsentViewTests(unittest.IsolatedAsyncioTestCase):
     async def test_reply_failure_keeps_the_accepted_change(self):
         interaction = make_interaction()
         interaction.response.send_message.side_effect = discord.HTTPException(
-            SimpleNamespace(status=500, reason="架空"), "架空の失敗",
+            make_http_response(500, "架空"), "架空の失敗",
         )
         with self.assertLogs("persona_bot.views.voice_consent_view", level="WARNING"):
             await self.press("grant", interaction)

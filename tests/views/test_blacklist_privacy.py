@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -15,6 +14,7 @@ from persona_bot.core.app_state import GuildSettings
 from persona_bot.services.blacklist_service import BlacklistService
 from persona_bot.views.functions_view import FunctionsView, OpenSettingsButton, UnblockButton
 from persona_bot.views.unblock_view import UnblockSelect
+from tests.helpers.discord_mocks import make_interaction, make_response
 from tests.helpers.member_helpers import make_member, make_owner_client
 
 
@@ -42,17 +42,16 @@ class BlacklistPrivacyTests(unittest.IsolatedAsyncioTestCase):
         return view
 
     def interaction(self, *, guild_id=1, owner=False, admin=True):
-        response = SimpleNamespace(is_done=Mock(return_value=False), send_message=AsyncMock())
+        response = make_response()
 
         async def respond(**kwargs):
             response.is_done.return_value = True
 
-        response.defer = AsyncMock(side_effect=respond)
-        response.edit_message = AsyncMock(side_effect=respond)
-        return SimpleNamespace(
+        response.defer.side_effect = respond
+        response.edit_message.side_effect = respond
+        return make_interaction(
             user=make_member(admin=admin), client=make_owner_client(owner_id=11 if owner else 99),
-            guild_id=guild_id, extras={}, response=response,
-            edit_original_response=AsyncMock(), original_response=AsyncMock(),
+            guild_id=guild_id, extras={}, response=response, without=("followup",),
         )
 
     async def test_admins_of_two_guilds_cannot_read_or_unblock_global_records(self):

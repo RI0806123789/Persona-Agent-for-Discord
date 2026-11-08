@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import discord
 from persona_bot.core.app_state import GuildSettings
-from tests.helpers.discord_mocks import make_interaction, make_response
+from tests.helpers.discord_mocks import make_http_response, make_interaction, make_response
 from tests.helpers.persona_helpers import install_persona_catalog
 from persona_bot.services import summary_service
 from persona_bot.services.prompting import SanitizedHistory
@@ -21,7 +21,7 @@ from persona_bot.views.summary_view import RunSummaryButton, SummaryView
 
 
 def forbidden() -> discord.Forbidden:
-    return discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "架空の権限エラー")
+    return discord.Forbidden(make_http_response(403, "Forbidden"), "架空の権限エラー")
 
 
 class RunSummaryFailureTests(unittest.IsolatedAsyncioTestCase):

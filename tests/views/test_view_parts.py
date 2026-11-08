@@ -8,11 +8,13 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from persona_bot.views.view_parts import BackButton, PanelView, send_graph_ephemeral, swap_panel
 from persona_bot.core.background import TaskOwner
 from discord import ui
+from tests.helpers.discord_mocks import ONLY_RESPONSE, make_followup, make_interaction, make_response
 
 
 class PanelNavigationTests(unittest.IsolatedAsyncioTestCase):
@@ -25,9 +27,9 @@ class PanelNavigationTests(unittest.IsolatedAsyncioTestCase):
         # 通常メッセージの編集はエフェメラルでは失敗する。使えばテストを失敗させる。
         channel_message = SimpleNamespace(edit=AsyncMock(side_effect=AssertionError("通常の編集は使用できません。")))
         webhook_message = SimpleNamespace(edit=AsyncMock())
-        return SimpleNamespace(
+        return make_interaction(
             message=channel_message, original_response=AsyncMock(return_value=webhook_message),
-            response=SimpleNamespace(edit_message=AsyncMock(), is_done=Mock(return_value=False)),
+            response=make_response("edit_message", "is_done"), without=("followup", "edit_original_response"),
         ), webhook_message
 
     async def test_subpanel_timeout_edits_original_response_and_stops_hub(self):
@@ -94,9 +96,9 @@ class PanelNavigationTests(unittest.IsolatedAsyncioTestCase):
         for followup in (False, True):
             with self.subTest(followup=followup):
                 sending = AsyncMock(side_effect=RuntimeError("架空の送信失敗"))
-                interaction = SimpleNamespace(
-                    response=SimpleNamespace(send_message=sending, is_done=Mock(return_value=False)),
-                    followup=SimpleNamespace(send=sending),
+                interaction = make_interaction(
+                    response=make_response("send_message", "is_done", send_message=sending),
+                    followup=make_followup(send=sending), without=("edit_original_response", "original_response"),
                 )
                 buffer = io.BytesIO(b"png")
                 await send_graph_ephemeral(interaction, buffer, "graph.png", "グラフ", followup=followup)
@@ -124,10 +126,10 @@ class PanelNavigationTests(unittest.IsolatedAsyncioTestCase):
         button._run_checks = AsyncMock(return_value=True)
         button._refresh_state = Mock()
 
-        interaction = SimpleNamespace(
-            response=SimpleNamespace(is_done=Mock(return_value=False), defer=AsyncMock()),
+        interaction = make_interaction(
+            response=make_response("is_done", "defer"),
             extras={}, message=SimpleNamespace(edit=AsyncMock()),
-            data={},
+            data={}, without=ONLY_RESPONSE,
         )
 
         panel._panel_state.current = panel

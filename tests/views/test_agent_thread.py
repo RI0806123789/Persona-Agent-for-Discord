@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import discord
@@ -33,6 +34,9 @@ from persona_bot.views.agent_thread import (
     webhook_username,
 )
 from persona_bot.views.agent_view import AgentProgress
+from tests.helpers.discord_mocks import (
+    ONLY_RESPONSE, make_guild, make_http_response, make_interaction, make_message, make_response,
+)
 
 BOT_ID = 99
 PLAN = AgentPlan(True, "架空の調査担当", "架空の街のカフェを調べる", "箇条書き", ("候補の検索", "特徴の比較"))
@@ -104,9 +108,9 @@ class NameAndTextTests(unittest.TestCase):
 
 class EligibilityTests(unittest.TestCase):
     def message(self, **overrides):
-        values = dict(guild=SimpleNamespace(id=1, me=SimpleNamespace(id=BOT_ID)), channel=make_channel())
+        values = dict(guild=make_guild(me=SimpleNamespace(id=BOT_ID)), channel=make_channel())
         values.update(overrides)
-        return SimpleNamespace(**values)
+        return make_message(**values)
 
     def test_text_channel_with_permissions_can_use_thread(self) -> None:
         self.assertIsNone(thread_unavailable_reason(self.message()))
@@ -116,7 +120,7 @@ class EligibilityTests(unittest.TestCase):
             "DM": self.message(guild=None),
             "スレッドの中": self.message(channel=Mock(spec=discord.Thread, id=10)),
             "ボイスのチャット": self.message(channel=Mock(spec=discord.VoiceChannel, id=10)),
-            "メンバー情報なし": self.message(guild=SimpleNamespace(id=1, me=None)),
+            "メンバー情報なし": self.message(guild=make_guild(me=None)),
         }
         for name, message in cases.items():
             with self.subTest(case=name):
@@ -185,8 +189,8 @@ class ThreadProgressTests(unittest.IsolatedAsyncioTestCase):
         self.handoff = SimpleNamespace(edit=AsyncMock())
         self.thread = SimpleNamespace(id=700, send=AsyncMock(return_value=self.handoff))
         self.fallback_message = SimpleNamespace(edit=AsyncMock())
-        self.message = SimpleNamespace(
-            author=SimpleNamespace(id=11), guild=SimpleNamespace(id=1, me=SimpleNamespace(id=BOT_ID)),
+        self.message = make_message(
+            author_id=11, guild=make_guild(me=SimpleNamespace(id=BOT_ID)),
             channel=self.channel, create_thread=AsyncMock(return_value=self.thread),
             reply=AsyncMock(return_value=self.fallback_message),
         )
@@ -287,13 +291,13 @@ class ThreadProgressTests(unittest.IsolatedAsyncioTestCase):
         run = asyncio.create_task(progress.run(slow()))
         await started.wait()
         button = self.thread.send.await_args_list[0].kwargs["view"].children[0]
-        await button.callback(SimpleNamespace(user=SimpleNamespace(id=11), response=SimpleNamespace(defer=AsyncMock())))
+        await button.callback(make_interaction(user_id=11, response=make_response("defer"), without=ONLY_RESPONSE))
         with patch("persona_bot.views.agent_thread.logger"):
             self.assertEqual(await run, ("canceled", None))
 
     async def test_deleted_webhook_is_forgotten_and_does_not_stop_work(self) -> None:
         progress = await self.open()
-        self.webhook.send.side_effect = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "架空")
+        self.webhook.send.side_effect = discord.NotFound(make_http_response(404, "Not Found"), "架空")
         replacement = own_webhook()
         self.channel.webhooks.return_value = [replacement]
         with patch("persona_bot.views.agent_thread.logger"):
@@ -310,7 +314,7 @@ class ThreadProgressTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cached_webhook_deleted_before_start_is_recreated(self) -> None:
         self.webhooks._cache[self.channel.id] = self.webhook
-        self.webhook.send.side_effect = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "架空")
+        self.webhook.send.side_effect = discord.NotFound(make_http_response(404, "Not Found"), "架空")
         replacement = own_webhook()
         self.channel.webhooks.return_value = []
         self.channel.create_webhook.return_value = replacement
@@ -320,7 +324,7 @@ class ThreadProgressTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_deleted_webhook_retries_only_failed_chunk_and_preserves_send_options(self) -> None:
         progress = await self.open()
-        missing = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "架空")
+        missing = discord.NotFound(make_http_response(404, "Not Found"), "架空")
         self.webhook.send.reset_mock()
         self.webhook.send.side_effect = [None, missing]
         replacement = own_webhook()
@@ -339,7 +343,7 @@ class ThreadProgressTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_second_not_found_stops_retrying_and_forgets_replacement(self) -> None:
         progress = await self.open()
-        missing = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "架空")
+        missing = discord.NotFound(make_http_response(404, "Not Found"), "架空")
         self.webhook.send.side_effect = missing
         replacement = own_webhook(send=AsyncMock(side_effect=missing))
         self.channel.webhooks.reset_mock()
@@ -353,8 +357,8 @@ class ThreadProgressTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_webhook_recovery_failure_does_not_stop_work(self) -> None:
         progress = await self.open()
-        self.webhook.send.side_effect = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "架空")
-        self.channel.webhooks.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "架空")
+        self.webhook.send.side_effect = discord.NotFound(make_http_response(404, "Not Found"), "架空")
+        self.channel.webhooks.side_effect = discord.Forbidden(make_http_response(403, "Forbidden"), "架空")
         with patch("persona_bot.views.agent_thread.logger"):
             await progress.update(0, "候補の検索")
             await progress.finish("done", AgentReport("架空の報告の本文", []))
@@ -387,7 +391,7 @@ class ThreadProgressTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_falls_back_when_thread_cannot_be_created(self) -> None:
         self.message.create_thread.side_effect = discord.HTTPException(
-            SimpleNamespace(status=400, reason="Bad Request"), "架空の作成失敗",
+            make_http_response(400, "Bad Request"), "架空の作成失敗",
         )
         await self.assert_fallback()
 

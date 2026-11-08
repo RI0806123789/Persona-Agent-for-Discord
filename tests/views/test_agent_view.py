@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import discord
 
-from tests.helpers.discord_mocks import ONLY_RESPONSE, make_interaction, make_response
+from tests.helpers.discord_mocks import ONLY_RESPONSE, make_http_response, make_interaction, make_response
 from persona_bot.config.constants import AGENT_DEFAULT_LINES
 from persona_bot.core.background import TaskOwner, spawn
 from persona_bot.services.agent_plan import AgentPlan
@@ -308,7 +308,7 @@ class CancelButtonTests(unittest.IsolatedAsyncioTestCase):
                 event = asyncio.Event()
                 view = agent_view.AgentCancelView(11, event)
                 self.addCleanup(view.stop)
-                error = discord.HTTPException(SimpleNamespace(status=400, reason="Bad Request"), "架空の送信失敗")
+                error = discord.HTTPException(make_http_response(400, "Bad Request"), "架空の送信失敗")
                 interaction = make_interaction(
                     user_id=user_id, without=ONLY_RESPONSE,
                     response=make_response(

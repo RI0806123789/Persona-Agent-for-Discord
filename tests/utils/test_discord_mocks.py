@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -14,6 +14,7 @@ from tests.helpers.discord_mocks import (
     make_channel,
     make_followup,
     make_guild,
+    make_history,
     make_interaction,
     make_message,
     make_response,
@@ -108,6 +109,56 @@ class ChannelGuildMessageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(guild.voice_client)
         self.assertIsNot(make_guild().me, make_guild().me)
         self.assertEqual(make_guild(name="架空のサーバー").name, "架空のサーバー")
+
+    async def test_channel_history_yields_the_given_messages_in_order_and_records_calls(self) -> None:
+        messages = [SimpleNamespace(id=3), SimpleNamespace(id=2), SimpleNamespace(id=1)]
+        channel = make_channel(history_messages=messages)
+        yielded = [item async for item in channel.history(limit=20, after=None, oldest_first=False)]
+        self.assertEqual(yielded, messages)
+        channel.history.assert_called_once_with(limit=20, after=None, oldest_first=False)
+
+    async def test_channel_history_can_be_iterated_again_and_follows_the_list(self) -> None:
+        # 呼ぶたびに新しい generator なので、同じチャンネルを続けて読んでも空にならない。
+        messages = [SimpleNamespace(id=1)]
+        channel = make_channel(history_messages=messages)
+        self.assertEqual([item async for item in channel.history()], messages)
+        later = SimpleNamespace(id=2)
+        messages.append(later)
+        self.assertEqual([item async for item in channel.history()], [*messages])
+        self.assertIs([item async for item in channel.history()][-1], later)
+
+    async def test_empty_history_messages_gives_an_empty_history_not_a_missing_one(self) -> None:
+        channel = make_channel(history_messages=[])
+        self.assertEqual([item async for item in channel.history(limit=5)], [])
+
+    async def test_history_can_stop_with_a_failure_after_some_messages(self) -> None:
+        # 取得の途中で失敗する履歴は、make_history を土台に generator を包んで作れる。
+        first = SimpleNamespace(id=1)
+
+        async def failing(**kwargs):
+            yield first
+            raise RuntimeError("架空の取得失敗")
+
+        channel = make_channel(history=Mock(side_effect=failing))
+        seen = []
+        with self.assertRaises(RuntimeError):
+            async for item in channel.history(limit=5):
+                seen.append(item)
+        self.assertEqual(seen, [first])
+
+    def test_history_is_absent_unless_requested_and_not_combined_with_an_explicit_one(self) -> None:
+        self.assertFalse(hasattr(make_channel(), "history"))
+        self.assertIsNot(make_channel(history_messages=[]).history, make_channel(history_messages=[]).history)
+        explicit = Mock()
+        self.assertIs(make_channel(history=explicit).history, explicit)
+        with self.assertRaises(ValueError):
+            make_channel(history_messages=[], history=explicit)
+
+    async def test_make_history_can_be_attached_to_a_channel_built_another_way(self) -> None:
+        history = make_history([1, 2])
+        channel = make_channel(history=history)
+        self.assertEqual([item async for item in channel.history(limit=2)], [1, 2])
+        self.assertEqual(history.call_count, 1)
 
     async def test_message_defaults_and_overrides(self) -> None:
         channel = make_channel()

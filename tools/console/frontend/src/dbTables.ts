@@ -1,5 +1,5 @@
 // bot.db のテーブルの見せ方（列の名前・種類・一覧に出すかどうか）と、値の読み取り。
-// 列はボットの src/persona_bot/core/database.py（スキーマ バージョン10）に合わせている。
+// 列はボットの src/persona_bot/core/db_migrations.py（テーブルの定義と移行。スキーマ バージョン10）に合わせている。
 // 表示の部品に依存しない（tests/dbTables.test.mjs が、このファイルだけを変換して確かめる）。
 import type { IconName } from "./components/Icon";
 import type { Tone } from "./status";

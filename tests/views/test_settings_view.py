@@ -4,13 +4,15 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from persona_bot.core.app_state import BotState
 from persona_bot.utils.discord_helpers import fetch_channel_history_text
 from persona_bot.views.settings_view import ResetButton, SettingsView
+from tests.helpers.discord_mocks import ONLY_RESPONSE, make_channel, make_interaction, make_response
 
 
 class ConversationResetTests(unittest.IsolatedAsyncioTestCase):
@@ -40,13 +42,13 @@ class ConversationResetTests(unittest.IsolatedAsyncioTestCase):
             for message in sorted(filtered, key=lambda m: m.id, reverse=not oldest_first)[:limit]:
                 yield message
 
-        channel = SimpleNamespace(id=10, history=Mock(side_effect=history))
-        interaction = SimpleNamespace(
+        channel = make_channel(history=Mock(side_effect=history))
+        interaction = make_interaction(
             id=300,
             guild_id=guild_id,
             channel=channel,
             message=SimpleNamespace(id=100) if has_panel_message else None,
-            response=SimpleNamespace(edit_message=AsyncMock()),
+            response=make_response("edit_message"), without=ONLY_RESPONSE,
         )
         await button.callback(interaction)
         text = await fetch_channel_history_text(
@@ -83,9 +85,9 @@ class ConversationResetTests(unittest.IsolatedAsyncioTestCase):
         view = SettingsView(settings, 0, "未登録")
         self.addCleanup(view.stop)
         button = next(item for item in view.children if isinstance(item, ResetButton))
-        interaction = SimpleNamespace(
+        interaction = make_interaction(
             id=300, channel=None, message=SimpleNamespace(id=100),
-            response=SimpleNamespace(edit_message=AsyncMock()),
+            response=make_response("edit_message"), without=ONLY_RESPONSE,
         )
         await button.callback(interaction)
         self.assertEqual(settings.channel_reset_points, {10: 50})

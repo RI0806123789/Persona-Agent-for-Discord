@@ -114,7 +114,7 @@ WindowsでPowerShellの実行ポリシーにより`npm`が使えない場合は`
 - 変数・関数・クラス名は英語を使い、既存コードの命名とインデントに合わせる。
 - コメント、ドキュメント、ユーザー向け文言、ログは日本語で書く。
 - モデル名、タイムアウト、上限などの調整値は `src/persona_bot/config/constants.py` に集約する。
-- Geminiの呼び出しはサービス層、SQLは `src/persona_bot/core/database.py`、プロンプトの組み立ては `src/persona_bot/services/prompting.py` に置く。
+- Geminiの呼び出しはサービス層、SQLは `src/persona_bot/core/database.py`（スキーマの定義と適用は `db_migrations.py`、旧データの読み取りは `db_legacy_importers.py`）、プロンプトの組み立ては `src/persona_bot/services/prompting.py` に置く。
 - サーバーごとの設定は `GuildSettings` で扱い、ユーザーごとの記憶を混ぜない。
 - バックグラウンド処理の起動には `background.spawn` を使う。
 - DBの変更は既存スキーマを直接書き換えず、マイグレーションと保存・復元処理を揃える。

@@ -10,7 +10,15 @@
 
 `helpers/discord_mocks.py` が、`Interaction`・`Message`・`Channel`・`Guild` の架空オブジェクトを作る（`make_interaction`・`make_response`・`make_followup`・`make_message`・`make_channel`・`make_guild`）。送信・応答は呼ぶたびに新しい`AsyncMock`なので、テスト間で呼び出し履歴が混ざらない。
 
-既存のテストには、`response` に `defer` しか持たせず「余計なメソッドを呼ぶと`AttributeError`で落ちる」ことを期待したものがあるため、既定の全部入りのほかに、`make_response("defer")` で持たせるメソッドを絞り、`without=ONLY_RESPONSE` で`followup`などを外せる。`user`は省略すると属性ごと持たない（`user_id`だけ渡せば`SimpleNamespace(id=...)`）。追加・上書きしたい属性は`**attributes`で渡す。`utils/test_discord_mocks.py` が既定値・厳密さ・独立性・上書きを確かめる。新しいテストはまずここを使い、移行は既存の挙動を確かめながら1ファイルずつ進める（現在は `test_shared_helpers`・`test_summary_view`・`test_agent_view`・`test_storage_failure_notices`・`test_panel_confirmations`・`test_voice_consent_view`・`test_welcome_message` が使用）。
+既存のテストには、`response` に `defer` しか持たせず「余計なメソッドを呼ぶと`AttributeError`で落ちる」ことを期待したものがあるため、既定の全部入りのほかに、`make_response("defer")` で持たせるメソッドを絞り、`without=ONLY_RESPONSE` で`followup`などを外せる。`user`は省略すると属性ごと持たない（`user_id`だけ渡せば`SimpleNamespace(id=...)`）。追加・上書きしたい属性は`**attributes`で渡す。`utils/test_discord_mocks.py` が既定値・厳密さ・独立性・上書きを確かめる。新しいテストはまずここを使い、移行は既存の挙動を確かめながら1ファイルずつ進める（`tests/views/` の各テストと `test_shared_helpers`・`test_welcome_message` などが使用。#400 で `views/` の残りも移した）。
+
+## テスト用モックの横断適用と履歴ヘルパー・DB層の分離（#400）
+
+`helpers/discord_mocks.py` に、チャンネルの履歴取得を模す `make_history(messages)` と、HTTP 応答を模す `make_http_response(status, reason)` を足した。`make_channel(history_messages=[...])` は渡した順にそのまま yield する `history` を持つ（呼ぶたびに新しい async generator で、`Mock` なので `channel.history.call_args.kwargs["after"]` のように呼び出しの引数も検証できる。`fetch_channel_history_text` は新しい順に取得するため、新しい順に並べて渡す）。Discord のように `after`・`limit`・`oldest_first` で絞る挙動が要るテストは、自前の generator を `make_channel(history=Mock(side_effect=...))` で渡す。`history_messages` と `history` は同時に指定できない。`utils/test_discord_mocks.py` が順序・再走査・空の履歴・併用の拒否を確かめる。
+
+`views/` の各テストは、手書きの Interaction・response・followup と `discord.Forbidden(SimpleNamespace(status=...))` を、`make_interaction`・`make_response`・`make_http_response` へ移した。元の厳密さ（持たせるメソッドを `defer` だけに絞る、`followup` や `original_response` を持たせない）は `make_response("defer")`・`without=` で保つ。サービスの代役（`stats`・`blacklist` など）と、本文や `author=None` といった独自の形の message は、共通化しても得るものがないため手書きのまま残している。
+
+`core/test_db_modules.py` は、`database.py` から分けた `db_migrations.py`（スキーマの定義と `apply_migrations`）と `db_legacy_importers.py`（旧 JSON・テキストの読み取りと解釈）を単体で確かめる。`SCHEMA_VERSION` が `MIGRATIONS` の最大のキーと一致し欠番がないこと、`database._MIGRATIONS` が定義側と同じ辞書であること、管理コンソールが ast と正規表現で読む `SCHEMA_VERSION = <整数>`・`_QUEUE_ACTIVE_STATUSES`・`DELETE FROM reminders WHERE status IN (...)` が `database.py` に残っていること、パーサーが sqlite3・threading・logging を import しないことを検査する。`Database` を通した移行の途中失敗・旧ファイルの取り込みと改名は、従来どおり `core/test_database.py` などが確かめる。
 
 ## メッセージ処理ステージの外部操作の契約（#395）
 
@@ -441,6 +449,7 @@ Windows・Python 3.13.3でボット672件・コンソールバックエンド158
 | core | [test_command_blacklist.py](core/test_command_blacklist.py) |
 | core | [test_database.py](core/test_database.py) |
 | core | [test_database_json_values.py](core/test_database_json_values.py) |
+| core | [test_db_modules.py](core/test_db_modules.py) |
 | core | [test_guild_settings_persist.py](core/test_guild_settings_persist.py) |
 | core | [test_join_command.py](core/test_join_command.py) |
 | core | [test_message_gates.py](core/test_message_gates.py) |
