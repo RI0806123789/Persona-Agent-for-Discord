@@ -81,11 +81,7 @@ class HistoryExclusionTests(unittest.IsolatedAsyncioTestCase):
             for message_id, content in ((3, "後の発言"), (2, "受付後に編集した架空の本文"), (1, "前の発言"))
         ]
 
-        async def history(**kwargs):
-            for message in messages:
-                yield message
-
-        channel = SimpleNamespace(id=10, history=Mock(side_effect=history))
+        channel = make_channel(history_messages=messages)
         text = await fetch_channel_history_text(channel, None, SimpleNamespace(id=99), 50, exclude_message_id=2)
         self.assertEqual(text, "ユーザーの質問: 前の発言\nユーザーの質問: 後の発言")
         self.assertIn("受付後に編集した架空の本文", await fetch_channel_history_text(channel, None, SimpleNamespace(id=99), 50))

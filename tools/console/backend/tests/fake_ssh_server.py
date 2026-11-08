@@ -475,7 +475,7 @@ def insights_output(bot: FakeBot) -> str:
 # 本当に実行する（件数と中身が食い違わず、スクリプトそのものも SSH 越しに確かめられるように）。
 # 人・サーバー・チャンネル・メッセージの ID と名前、会話の文はすべて架空のもの。
 
-# ボットの bot.db（スキーマ バージョン15）と同じ形。src/persona_bot/core/database.py の初版の定義に
+# ボットの bot.db（スキーマ バージョン15）と同じ形。src/persona_bot/core/db_migrations.py の初版の定義に
 # 移行をすべて適用した後の形を書き写したもの（ボットのコードは import しない）。
 FAKE_DB_SCHEMA_VERSION = 15
 FAKE_DB_TABLES = (

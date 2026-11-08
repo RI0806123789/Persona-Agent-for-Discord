@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from discord import ui
@@ -15,6 +16,7 @@ from persona_bot.core.background import TaskOwner
 from persona_bot.utils.logging_setup import LOG_DATE_FORMAT, LOG_FORMAT, OperationalFormatter
 from persona_bot.views.view_parts import PanelView, send_graph_ephemeral
 from persona_bot.views.agent_view import AgentCancelView
+from tests.helpers.discord_mocks import ONLY_RESPONSE, make_interaction, make_response
 
 
 LOG_FORMATTER = OperationalFormatter(LOG_FORMAT, LOG_DATE_FORMAT)
@@ -54,8 +56,8 @@ class PanelLoggingTests(unittest.IsolatedAsyncioTestCase):
                 button = ui.Button(label="架空の非公開ラベル", custom_id="private-item")
                 button.callback = AsyncMock(side_effect=error)
                 panel.add_item(button)
-                interaction = SimpleNamespace(
-                    data={}, response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+                interaction = make_interaction(
+                    data={}, response=make_response("send_message", "defer"), without=ONLY_RESPONSE,
                 )
 
                 with self.assertLogs("persona_bot.views.view_parts", level="ERROR") as logs, \
@@ -89,9 +91,9 @@ class PanelLoggingTests(unittest.IsolatedAsyncioTestCase):
         view = AgentCancelView(11, event)
         self.addCleanup(view.stop)
         error = RuntimeError("架空の非公開本文")
-        interaction = SimpleNamespace(
-            data={}, user=SimpleNamespace(id=11),
-            response=SimpleNamespace(defer=AsyncMock(side_effect=error), send_message=AsyncMock()),
+        interaction = make_interaction(
+            data={}, user_id=11, without=ONLY_RESPONSE,
+            response=make_response("defer", "send_message", defer=AsyncMock(side_effect=error)),
         )
 
         with self.assertLogs("persona_bot.views.agent_view", level="ERROR") as logs, \
@@ -108,8 +110,8 @@ class PanelLoggingTests(unittest.IsolatedAsyncioTestCase):
     async def test_graph_failure_omits_filename_and_context_but_closes_buffer(self):
         error = OSError("架空の非公開本文")
         sending = AsyncMock(side_effect=[error, None])
-        interaction = SimpleNamespace(
-            response=SimpleNamespace(send_message=sending, is_done=lambda: False),
+        interaction = make_interaction(
+            response=make_response("send_message", "is_done", send_message=sending), without=ONLY_RESPONSE,
         )
         buffer = io.BytesIO(b"fictional-png")
 

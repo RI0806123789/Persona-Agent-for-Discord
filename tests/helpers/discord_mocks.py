@@ -1,6 +1,8 @@
 """Discord の Interaction・Message・Channel・Guild を模した、テスト用の架空オブジェクトを作る。
 
 各テストが SimpleNamespace を手書きして重複していた Discord 周りの模擬を集約する（#378）。
+チャンネルの履歴取得（`make_history`・`make_channel(history_messages=...)`）と、Discord の例外へ渡す
+HTTP 応答（`make_http_response`）もここにある（#400）。
 実通信は行わず、送信・応答のメソッドは AsyncMock なので、呼ばれた引数をそのまま検証できる。
 ファクトリは呼ぶたびに新しいオブジェクトと新しい AsyncMock を返すので、テスト間で呼び出し履歴が混ざらない。
 
@@ -12,6 +14,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Sequence
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -50,6 +53,15 @@ def make_response(*methods: str, **overrides: Any) -> SimpleNamespace:
 def make_followup(**overrides: Any) -> SimpleNamespace:
     """`interaction.followup` の模擬。`send` は AsyncMock。"""
     return SimpleNamespace(**{"send": AsyncMock(), **overrides})
+
+
+def make_http_response(status: int, reason: str = "架空") -> SimpleNamespace:
+    """`discord.HTTPException`・`Forbidden`・`NotFound` の第1引数（HTTP 応答）の模擬。
+
+    例: `discord.Forbidden(make_http_response(403, "Forbidden"), "架空の権限エラー")`。
+    実物の `aiohttp.ClientResponse` は使わず、例外が参照する `status` と `reason` だけを持つ。
+    """
+    return SimpleNamespace(status=status, reason=reason)
 
 
 def make_interaction(
@@ -91,12 +103,44 @@ def make_interaction(
     return SimpleNamespace(**values)
 
 
-def make_channel(*, channel_id: int = 10, name: str | None = None, **attributes: Any) -> SimpleNamespace:
+def make_history(messages: Sequence[Any] = ()) -> Mock:
+    """`channel.history(...)` の模擬を作る。呼ぶたびに新しい async generator を返す。
+
+    messages は渡した順にそのまま yield する（Discord のように after・limit・oldest_first で
+    絞ったり並べ替えたりはしない）。`fetch_channel_history_text` は新しい順に取得する想定なので、
+    新しい順に並べて渡すこと。引数はどんな形でも受け取り、`Mock` なので
+    `channel.history.call_args.kwargs["after"]` のように呼び出しの引数も検証できる。
+    渡したリストは参照のまま使うので、呼ぶ前に追加・並べ替えした内容が反映される。
+    after・limit に応じて絞るなど、より実物に近い挙動が要るテストは、自前の async generator を
+    `make_channel(history=Mock(side_effect=...))` で渡す。
+    """
+    async def generate(*args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        for item in messages:
+            yield item
+
+    return Mock(side_effect=generate)
+
+
+def make_channel(
+    *,
+    channel_id: int = 10,
+    name: str | None = None,
+    history_messages: Sequence[Any] | None = None,
+    **attributes: Any,
+) -> SimpleNamespace:
     """テキストチャンネルの模擬。`send` は AsyncMock。権限などは attributes で足す
-    （例: `permissions_for=lambda member: SimpleNamespace(view_channel=True, send_messages=True)`）。"""
+    （例: `permissions_for=lambda member: SimpleNamespace(view_channel=True, send_messages=True)`）。
+
+    history_messages を渡すと、`history` を `make_history(history_messages)` にする
+    （渡さなければ `history` 属性を持たない）。`history` を別に attributes で渡すこととは併用できない。
+    """
+    if history_messages is not None and "history" in attributes:
+        raise ValueError("history_messages と history は同時に指定できません")
     values: dict[str, Any] = {"id": channel_id, "send": AsyncMock()}
     if name is not None:
         values["name"] = name
+    if history_messages is not None:
+        values["history"] = make_history(history_messages)
     values.update(attributes)
     return SimpleNamespace(**values)
 

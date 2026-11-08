@@ -17,6 +17,7 @@ from persona_bot.core.database import Database
 from persona_bot.services.stats_service import StatsService
 from persona_bot.views.functions_view import FunctionsView, StatsButton
 from persona_bot.views.stats_view import RankingButton, RunStatsButton, StatsUserSelect, StatsView
+from tests.helpers.discord_mocks import make_interaction, make_response
 from tests.helpers.member_helpers import make_member
 
 
@@ -50,17 +51,16 @@ class StatsEntryTests(unittest.IsolatedAsyncioTestCase):
         return hub
 
     def interaction(self, *, admin: bool = False) -> SimpleNamespace:
-        response = SimpleNamespace(is_done=Mock(return_value=False), send_message=AsyncMock())
+        response = make_response("is_done", "send_message", "edit_message")
 
         async def edit(**kwargs):
             response.is_done.return_value = True
 
-        response.edit_message = AsyncMock(side_effect=edit)
+        response.edit_message.side_effect = edit
         message = SimpleNamespace(edit=AsyncMock())
-        return SimpleNamespace(
+        return make_interaction(
             user=make_member(admin=admin), guild_id=1, extras={}, response=response,
-            edit_original_response=AsyncMock(), original_response=AsyncMock(return_value=message),
-            followup=SimpleNamespace(send=AsyncMock()),
+            original_response=AsyncMock(return_value=message),
         )
 
     async def open_stats(self, *, admin: bool = False) -> StatsView:

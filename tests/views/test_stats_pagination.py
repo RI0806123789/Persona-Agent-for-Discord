@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 import discord
 
 from persona_bot.views.stats_view import FeedbackButton, RunStatsButton, StatsView
+from tests.helpers.discord_mocks import make_interaction, make_response
 from tests.helpers.member_helpers import make_member
 
 
@@ -26,10 +27,9 @@ class StatsPaginationTests(unittest.IsolatedAsyncioTestCase):
         self.feedback = SimpleNamespace(build_summary_text=AsyncMock(return_value="架空の集計"))
         self.view = StatsView(self.stats, viewer_id="11", is_admin=True, feedback=self.feedback)
         self.addCleanup(self.view.stop)
-        self.interaction = SimpleNamespace(
+        self.interaction = make_interaction(
             user=make_member(admin=True), guild_id=1,
-            response=SimpleNamespace(defer=AsyncMock(), edit_message=AsyncMock(), send_message=AsyncMock()),
-            edit_original_response=AsyncMock(), followup=SimpleNamespace(send=AsyncMock()),
+            response=make_response("defer", "edit_message", "send_message"), without=("original_response",),
         )
 
     def button(self, kind):

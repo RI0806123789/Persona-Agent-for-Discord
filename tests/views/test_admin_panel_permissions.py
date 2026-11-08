@@ -21,6 +21,7 @@ from persona_bot.views.stats_view import (
 )
 from persona_bot.views.unblock_view import UnblockSelect, UnblockView
 from persona_bot.views.view_parts import BackButton
+from tests.helpers.discord_mocks import make_interaction, make_response
 from tests.helpers.member_helpers import make_member, make_owner_client
 
 
@@ -57,17 +58,16 @@ class AdministratorPanelPermissionsTests(unittest.IsolatedAsyncioTestCase):
         return next(item for item in view.children if isinstance(item, kind))
 
     def interaction(self, *, admin=True):
-        response = SimpleNamespace(is_done=Mock(return_value=False), send_message=AsyncMock())
+        response = make_response()
 
         async def respond(**kwargs):
             response.is_done.return_value = True
 
-        response.defer = AsyncMock(side_effect=respond)
-        response.edit_message = AsyncMock(side_effect=respond)
-        return SimpleNamespace(
+        response.defer.side_effect = respond
+        response.edit_message.side_effect = respond
+        return make_interaction(
             user=make_member(admin=admin), response=response, extras={},
             client=make_owner_client(),
-            edit_original_response=AsyncMock(), followup=SimpleNamespace(send=AsyncMock()),
             original_response=AsyncMock(return_value=SimpleNamespace(edit=AsyncMock())),
         )
 
@@ -235,15 +235,15 @@ class ServerSettingPermissionTests(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def interaction(user, *, guild=True):
-        response = SimpleNamespace(is_done=Mock(return_value=False), send_message=AsyncMock(), edit_message=AsyncMock())
+        response = make_response()
 
         async def defer(**kwargs):
             response.is_done.return_value = True
 
-        response.defer = AsyncMock(side_effect=defer)
-        return SimpleNamespace(
-            user=user, response=response, extras={}, edit_original_response=AsyncMock(),
-            guild=SimpleNamespace(id=1) if guild else None, followup=SimpleNamespace(send=AsyncMock()),
+        response.defer.side_effect = defer
+        return make_interaction(
+            user=user, response=response, extras={}, without=("original_response",),
+            guild=SimpleNamespace(id=1) if guild else None,
         )
 
     def settings(self, guild_id=1):
@@ -314,10 +314,10 @@ class AggregationRepeatPressTests(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def interaction():
-        return SimpleNamespace(
+        return make_interaction(
             user=make_member(admin=True), guild_id=1, extras={},
-            response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
-            followup=SimpleNamespace(send=AsyncMock()),
+            response=make_response("send_message", "defer"),
+            without=("edit_original_response", "original_response"),
         )
 
     async def test_second_press_while_running_is_refused_and_the_button_frees_afterwards(self):

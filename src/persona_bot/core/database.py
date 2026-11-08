@@ -1,7 +1,13 @@
 """SQLite データベース層（data/memory/bot.db）。
 
-以下の10テーブルを SQLite で管理する。SQL 文はすべてこのモジュールに集約する。
+以下の10テーブルを SQLite で管理する。データの読み書きの SQL 文はすべてこのモジュールに集約する。
 旧 JSON / テキストファイルから移したデータと、その後追加した機能のデータを持つ。
+
+`Database` は窓口（ファサード）で、次の2つの責務を別のモジュールへ分けている。
+  - db_migrations.py        … スキーマの定義（初版のテーブル作成・バージョンごとの変更）と、その適用
+  - db_legacy_importers.py  … 旧ファイルの読み取りと解釈（DB・ロック・ログには触れない）
+どちらも `Database` のメソッドを通して使い、外から見たメソッド名・引数・挙動は分離前と同じ。
+DB への書き込み・ロック・取り込み後の改名・ログは、このモジュールが担当する。
 
   - affinity     … ユーザーごとの親密度・感情（旧 affinity.json）
   - user_stats   … ユーザー別会話統計（旧 user_stats.json）
@@ -32,19 +38,17 @@ profile.json は毎回の起動時にチェックされ、中身があれば pro
 その内容が自動的にデータベースの記憶へ追加される。
 
 ■ スキーマを後から変更したくなったら（列の追加など）
-SCHEMA_VERSION を 1 つ上げ、_MIGRATIONS にそのバージョン番号で変更用の SQL 文を
-追記する。対応する読み込み・保存処理も更新する。
+db_migrations.MIGRATIONS にそのバージョン番号で変更用の SQL 文を追記し、このモジュールの
+SCHEMA_VERSION を 1 つ上げる（MIGRATIONS の最大のキーと同じ値）。対応する読み込み・保存処理も更新する。
 適用済みバージョンは DB 内の PRAGMA user_version に記録され、
 起動時に未適用の分だけが順番に実行される（二重適用されない）。
-_CREATE_TABLE_STATEMENTS は初版（バージョン1）の形のまま変更しないこと —
-列の追加・変更は必ず _MIGRATIONS 側で行う（新規 DB にも同じ移行が走るため、
+db_migrations.CREATE_TABLE_STATEMENTS は初版（バージョン1）の形のまま変更しないこと —
+列の追加・変更は必ず MIGRATIONS 側で行う（新規 DB にも同じ移行が走るため、
 両方を書き換えると二重適用でエラーになる）。
 """
 
-import hashlib
 import json
 import logging
-import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -60,213 +64,31 @@ from persona_bot.config.constants import (
     STATS_HOURLY_BUCKETS,
     STATS_OPT_OUT_DEFAULT,
 )
+from persona_bot.core.db_legacy_importers import (
+    free_backup_path,
+    load_legacy_queue_tasks,
+    load_legacy_user_entries,
+    load_profile_json,
+    parse_pending_log,
+    split_profile_by_user,
+)
+# テストと既存の呼び出しが `database._MIGRATIONS` / `database._CREATE_TABLE_STATEMENTS` で参照・差し替えるため、
+# 先頭にアンダースコアを付けた別名で持つ（同じオブジェクトなので、patch.dict の変更は定義側にも届く）。
+from persona_bot.core.db_migrations import (
+    CREATE_TABLE_STATEMENTS as _CREATE_TABLE_STATEMENTS,
+    MIGRATIONS as _MIGRATIONS,
+    apply_migrations,
+)
 from persona_bot.core.guild_settings_fields import GUILD_SETTINGS_FIELDS
 from persona_bot.utils.storage import write_json_file
 
 
 logger = logging.getLogger(__name__)
 
-# 現在のスキーマバージョン。スキーマを変更したら 1 つ上げる。
+# 現在のスキーマバージョン。db_migrations.MIGRATIONS に版を足したら 1 つ上げ、最大のキーと同じ値にする。
+# ★ 管理コンソール（tools/console/backend/local_repo.py）がこの行を ast で読む。`SCHEMA_VERSION = <整数>` の
+#   形のまま、このモジュールに置くこと（他のモジュールへ移したり式にしたりすると画面の版比較が読めなくなる）。
 SCHEMA_VERSION = 15
-
-# バージョン番号 → そのバージョンへ上げるための SQL 文リスト。
-# 例) user_stats に列を追加したくなったら:
-#   SCHEMA_VERSION を現在値から 1 つ上げ、その新しい番号をキーとして
-#   ["ALTER TABLE user_stats ADD COLUMN favorite_emoji TEXT NOT NULL DEFAULT ''"]
-#   を追記する。既存 DB・新規 DB の両方に自動適用される。
-_MIGRATIONS: dict[int, list[str]] = {
-    # バージョン2: プロフィール記憶を profile.json から DB へ移行
-    2: [
-        """CREATE TABLE IF NOT EXISTS profile (
-            key   TEXT PRIMARY KEY,                    -- プロフィールのトップレベルキー
-            value TEXT NOT NULL                        -- 値（JSON文字列）
-        )"""
-    ],
-    # バージョン3: 記憶をユーザー別に分離する。
-    #   - profile: 主キーを (user_id, key) の複合主キーに変更（テーブルを作り直す）。
-    #     旧・全体共有の行は移行後に _migrate_legacy_profile_rows で owner へ割り当てる。
-    #   - pending_log: user_id 列を追加（旧・全体共有の行は owner へ振り直す）。
-    3: [
-        "ALTER TABLE pending_log ADD COLUMN user_id TEXT NOT NULL DEFAULT ''",
-        # profile は主キーを変えるため、旧テーブルを退避 → 新テーブルを作成する。
-        # 退避テーブルの行は _migrate_legacy_profile_rows() が owner へ移して破棄する。
-        "ALTER TABLE profile RENAME TO profile_legacy_v2",
-        """CREATE TABLE profile (
-            user_id TEXT NOT NULL,                     -- Discord ユーザーID（文字列）
-            key     TEXT NOT NULL,                     -- プロフィールのトップレベルキー
-            value   TEXT NOT NULL,                     -- 値（JSON文字列）
-            PRIMARY KEY (user_id, key)
-        )""",
-    ],
-    # バージョン4: サーバー（ギルド）ごとの設定と記念日の投稿記録を永続化する。
-    #   これらは従来インメモリ（GuildSettings）だけに持っていたため再起動で失われていた。
-    #   なお会話リセット地点・自発会話の監視チャンネルは「実行時に自然に再構築される
-    #   一時状態」のため永続化しない（インメモリのまま）。
-    4: [
-        # DEFAULT 句の値は「列を追加した時点の埋め草」でしかない（保存時は常に全列を
-        # 書き込む）。実際の既定値は constants.py の DEFAULT_* が唯一の情報源。
-        """CREATE TABLE IF NOT EXISTS guild_settings (
-            guild_id                  INTEGER PRIMARY KEY,        -- Discord サーバーID（DM は 0）
-            prompt_file               TEXT    NOT NULL DEFAULT '',-- ペルソナのプロンプトファイル
-            model_name                TEXT    NOT NULL DEFAULT '',-- Gemini のモデル名
-            respond_mode              TEXT    NOT NULL DEFAULT '',-- 応答モード（全発言/メンションのみ）
-            grounding_enabled         INTEGER NOT NULL DEFAULT 1, -- Google検索グラウンディング（0/1）
-            auto_topic_enabled        INTEGER NOT NULL DEFAULT 0, -- 自発的な会話の有効/無効（0/1）
-            auto_topic_interval_hours INTEGER NOT NULL DEFAULT 6  -- 自発的な会話の無会話しきい値（時間）
-        )""",
-        """CREATE TABLE IF NOT EXISTS anniversary_posts (
-            guild_id    INTEGER NOT NULL,              -- お祝いを投稿したサーバーID
-            user_id     TEXT    NOT NULL,              -- お祝い対象の Discord ユーザーID
-            label       TEXT    NOT NULL,              -- 記念日の呼び名（例: 誕生日）
-            posted_date TEXT    NOT NULL,              -- 最後に投稿した日付（YYYY-MM-DD）
-            PRIMARY KEY (guild_id, user_id, label)
-        )""",
-    ],
-    # バージョン5: リマインダー（会話から自動登録し、時刻が来たら通知する）を追加。
-    5: [
-        """CREATE TABLE IF NOT EXISTS reminders (
-            reminder_id INTEGER PRIMARY KEY AUTOINCREMENT, -- 登録順を保つ連番
-            user_id     TEXT    NOT NULL,                  -- 依頼した Discord ユーザーID
-            user_name   TEXT    NOT NULL DEFAULT '',       -- 依頼時の表示名（一覧表示用）
-            guild_id    INTEGER NOT NULL DEFAULT 0,        -- 依頼されたサーバーID（DM は 0）
-            channel_id  INTEGER NOT NULL,                  -- 通知を投稿するチャンネルID
-            message     TEXT    NOT NULL,                  -- 通知する本文
-            remind_at   TEXT    NOT NULL,                  -- 通知予定時刻（UTC の ISO 8601）
-            created_at  TEXT    NOT NULL,                  -- 登録時刻（UTC の ISO 8601）
-            status      TEXT    NOT NULL DEFAULT 'pending' -- pending/done/canceled
-        )""",
-        # 見回り（status と remind_at での絞り込み）が主なアクセスパターンのため索引を張る。
-        "CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders (status, remind_at)",
-    ],
-    # バージョン6: リマインダーの繰り返し（毎日/毎週/毎月）に対応する。
-    #   - recurrence        … 繰り返し種別。'none' は従来どおりの単発。
-    #   - recurrence_anchor … 初回の通知予定時刻（UTC の ISO 8601）。毎月の繰り返しで
-    #                         「31日 → 2月は28日 → 3月は31日」と元の日付へ戻すための基準。
-    #                         既存行は空文字のままでよい（recurrence='none' のため使わない）。
-    # DEFAULT 句により既存のリマインダーはすべて 'none' になり、挙動は完全に後方互換。
-    # 索引 idx_reminders_due は変更不要（繰り返し行も pending のまま同じ索引に乗る）。
-    6: [
-        "ALTER TABLE reminders ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'none'",
-        "ALTER TABLE reminders ADD COLUMN recurrence_anchor TEXT NOT NULL DEFAULT ''",
-    ],
-    # バージョン7: ボット返信への 👍/👎 フィードバックを記録する。
-    #   応答品質のチューニングとモデル選定の判断材料にするため、評価そのものに加えて
-    #   「どのモデル・どのペルソナの返信だったか」も一緒に残す。
-    #   同じ人が同じ返信へ何度も投票できないよう (message_id, user_id) を主キーにする
-    #   （押し替えは INSERT OR REPLACE で上書きされる）。
-    7: [
-        """CREATE TABLE IF NOT EXISTS feedback (
-            message_id     INTEGER NOT NULL,              -- 評価対象のボット返信メッセージID
-            user_id        TEXT    NOT NULL,              -- 評価した人の Discord ユーザーID
-            guild_id       INTEGER NOT NULL DEFAULT 0,    -- 返信が投稿されたサーバーID（DM は 0）
-            channel_id     INTEGER NOT NULL DEFAULT 0,    -- 返信が投稿されたチャンネルID
-            target_user_id TEXT    NOT NULL DEFAULT '',   -- その返信の宛先（会話相手）のユーザーID
-            model_name     TEXT    NOT NULL DEFAULT '',   -- 返信の生成に使った Gemini モデル
-            prompt_file    TEXT    NOT NULL DEFAULT '',   -- 返信時のペルソナ（プロンプトファイル）
-            rating         INTEGER NOT NULL,              -- 1 = 👍 / -1 = 👎
-            created_at     TEXT    NOT NULL,              -- 記録時刻（UTC の ISO 8601）
-            PRIMARY KEY (message_id, user_id)
-        )""",
-        # 集計はサーバー単位・新しい順で行うため索引を張る。
-        "CREATE INDEX IF NOT EXISTS idx_feedback_guild ON feedback (guild_id, created_at)",
-    ],
-    # バージョン8: 会話統計の収集を本人が停止できるようにする（opt-out）。
-    #   0 = 収集する（従来どおり）/ 1 = 収集しない。
-    #   既存行はすべて 0 になるため、これまでの利用者の挙動は変わらない。
-    8: [
-        "ALTER TABLE user_stats ADD COLUMN stats_opt_out INTEGER NOT NULL DEFAULT 0",
-    ],
-    # バージョン9: 自律行動（ボットが自分からボイス/ステージへ出て配信する）の有効/無効。
-    #   0 = 無効（既定）/ 1 = 有効。既存行はすべて 0 になるため挙動は後方互換。
-    #   「話したいゲージ」が満タンになるまでの時間は auto_topic_interval_hours を
-    #   共用するため、この機能で増える列はこの1つだけ。
-    #   配信中かどうか・ゲージの現在値は実行時状態なので永続化しない
-    #   （ボイス接続自体が再起動をまたげないため、復元しても意味がない）。
-    9: [
-        "ALTER TABLE guild_settings ADD COLUMN autonomous_enabled INTEGER NOT NULL DEFAULT 0",
-    ],
-    # バージョン10: リマインダーのユーザー別の操作（登録時の上限確認・一覧・件数）用の索引。
-    #   これらは WHERE user_id = ? AND status = 'pending'（一覧は ORDER BY remind_at, reminder_id）
-    #   で引くが、既存の idx_reminders_due は status が先頭のため、全ユーザーの pending 行を
-    #   走査していた。索引の末尾には rowid（= reminder_id）が暗黙に並ぶため、一覧の並び替えも
-    #   索引の順序だけで済む。見回り（reminder_claim_due）は引き続き idx_reminders_due を使う。
-    10: [
-        "CREATE INDEX IF NOT EXISTS idx_reminders_user_status ON reminders (user_id, status, remind_at)",
-    ],
-    # バージョン11: 改名失敗後も旧ログの取り込みを繰り返さないための記録。
-    11: [
-        """CREATE TABLE legacy_imports (
-            source_name  TEXT NOT NULL,
-            content_hash TEXT NOT NULL,
-            PRIMARY KEY (source_name, content_hash)
-        )""",
-    ],
-    # バージョン12: 全サーバーの古い評価を削除する際の一時ソートを避ける索引。
-    #   ORDER BY created_at DESC, message_id DESC と同じ降順で前向きに走査する。
-    #   両列が同じ票は末尾の暗黙のrowidが昇順となり、従来の同順位の順序も保つ。
-    12: [
-        "CREATE INDEX IF NOT EXISTS idx_feedback_created_message ON feedback (created_at DESC, message_id DESC)",
-    ],
-    # バージョン13: 記憶圧縮の巡回が利用者ごとに行う pending_log の取得・削除で、全件走査を避ける索引。
-    #   WHERE user_id = ? ORDER BY id / WHERE user_id = ? AND id <= ? を、並べ替えなしの索引検索にする。
-    13: [
-        "CREATE INDEX IF NOT EXISTS idx_pending_log_user_id ON pending_log (user_id, id)",
-    ],
-    # バージョン14: 記念日巡回のキー別取得で、無関係なプロフィールの全件走査を避ける。
-    #   ユーザー別の取得・更新には従来の (user_id, key) 主キーを引き続き使う。
-    14: [
-        "CREATE INDEX IF NOT EXISTS idx_profile_key_user ON profile (key, user_id)",
-    ],
-    # バージョン15: 自律行動の配信先を管理者が指定する（#266）。
-    #   ステージ・ボイスそれぞれのチャンネルID。0 = 指定なし（従来どおり自動で選ぶ）。
-    #   既存行はすべて 0 になるため挙動は後方互換。
-    15: [
-        "ALTER TABLE guild_settings ADD COLUMN autonomous_stage_channel_id INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE guild_settings ADD COLUMN autonomous_voice_channel_id INTEGER NOT NULL DEFAULT 0",
-    ],
-}
-
-# 初版（バージョン1）のテーブル定義。ここは変更禁止（変更は _MIGRATIONS で）。
-_CREATE_TABLE_STATEMENTS = [
-    """CREATE TABLE IF NOT EXISTS affinity (
-        user_id          TEXT PRIMARY KEY,               -- Discord ユーザーID（文字列）
-        affinity         INTEGER NOT NULL DEFAULT 50,    -- 親密度 0〜100
-        valence          INTEGER NOT NULL DEFAULT 50,    -- 機嫌 0〜100
-        arousal          INTEGER NOT NULL DEFAULT 50,    -- テンション 0〜100
-        last_interaction REAL    NOT NULL DEFAULT 0      -- 最終対話時刻（UNIX秒）
-    )""",
-    """CREATE TABLE IF NOT EXISTS user_stats (
-        user_id        TEXT PRIMARY KEY,                 -- Discord ユーザーID（文字列）
-        user_name      TEXT NOT NULL DEFAULT '',
-        total_count    INTEGER NOT NULL DEFAULT 0,       -- 累計発言回数
-        hourly         TEXT NOT NULL DEFAULT '[]',       -- 時間帯別回数（24要素のJSON配列）
-        first_seen     TEXT NOT NULL DEFAULT '',         -- ISO 8601
-        last_seen      TEXT NOT NULL DEFAULT '',         -- ISO 8601
-        recent_samples TEXT NOT NULL DEFAULT '[]',       -- 直近発言サンプル（JSON配列）
-        analysis       TEXT                              -- LLM解析結果のJSON（未解析はNULL）
-    )""",
-    """CREATE TABLE IF NOT EXISTS queue_tasks (
-        task_id          TEXT PRIMARY KEY,
-        status           TEXT NOT NULL DEFAULT 'pending', -- pending/processing/completed/failed
-        channel_id       INTEGER NOT NULL DEFAULT 0,
-        message_id       INTEGER NOT NULL DEFAULT 0,
-        author_id        INTEGER NOT NULL DEFAULT 0,
-        question         TEXT NOT NULL DEFAULT '',
-        attachment_count INTEGER NOT NULL DEFAULT 0,
-        created_at       TEXT NOT NULL DEFAULT '',        -- ISO 8601
-        updated_at       TEXT NOT NULL DEFAULT '',        -- ISO 8601
-        finished_at      TEXT,                            -- 終了時刻（未終了はNULL）
-        error            TEXT                             -- 失敗理由（成功時はNULL）
-    )""",
-    """CREATE TABLE IF NOT EXISTS pending_log (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,     -- 追記順を保つ連番
-        created_at TEXT NOT NULL,                         -- 記録時刻（表示用文字列）
-        question   TEXT NOT NULL,                         -- ユーザーの発言
-        response   TEXT NOT NULL                          -- ボットの応答
-    )""",
-]
-# 注: pending_log.user_id 列はバージョン3の移行(_MIGRATIONS[3])で追加される。
-# 初版テーブル定義（上）は変更禁止のため、ここには含めない。
 
 # queue_tasks の列名一覧。UPDATE 文へ列名を埋め込む際のホワイトリストに使う。
 _QUEUE_COLUMNS = (
@@ -317,40 +139,27 @@ def _user_stats_row_params(user_id: Any, entry: dict[str, Any]) -> tuple[Any, ..
     )
 
 
-def _load_legacy_json_object(path: Path) -> dict[str, Any]:
-    """旧 JSON ファイルを読み、最上位が object でなければ例外にする。
+def _queue_row_params(task: dict[str, Any]) -> tuple[Any, ...]:
+    """queue_tasks 1行分の保存パラメータ。通常の追加（_insert_queue_task）と旧 queue.json の取り込みで共有する。
 
-    _json_loads_or のように壊れたファイルを {} として扱うと、取り込みが「成功」して
-    .imported.bak へ改名され、データを取り込めなかったことに誰も気づけない。
-    例外にすれば _import_legacy_files が元のファイルを残して警告し、次回起動時に再試行する。
+    列順は task_id, status, channel_id, message_id, author_id, question, attachment_count,
+    created_at, updated_at, finished_at, error。列を足すときはこの関数と2つの INSERT 文を揃える。
+    欠けた値・None は既定値（status は pending、数値は 0、文字列は空）にし、finished_at・error は
+    そのまま（未終了・成功は None）。
     """
-    data = json.loads(path.read_text(encoding="utf-8-sig"))
-    if not isinstance(data, dict):
-        raise ValueError(f"最上位が object ではありません（{type(data).__name__}）")
-    return data
-
-
-def _free_backup_path(path: Path) -> Path:
-    """旧ファイルの退避先を、既存のファイルと衝突しない名前で返す（#379）。
-
-    通常は「<元の名前>.imported.bak」。すでに同名のファイルがあるときは、
-    「<元の名前>.imported.<連番>.bak」の空いている最小の番号にする。
-    Path.replace は既存のファイルを黙って置き換えるため、名前を決めずに改名すると、
-    前回の退避ファイルが消える。特に引き継ぎ先が無いときの pending_log.txt は
-    DB へ取り込まれず、退避ファイルが唯一のコピーになる。
-    空きが見つからなければ FileExistsError にする（呼び出し側が取り込みごと見送り、
-    元のファイルを残して警告する）。
-    """
-    candidates = [path.with_name(path.name + ".imported.bak")]
-    candidates += [
-        path.with_name(f"{path.name}.imported.{number}.bak")
-        for number in range(1, LEGACY_BACKUP_MAX_SUFFIX + 1)
-    ]
-    for candidate in candidates:
-        # 壊れたシンボリックリンクは exists() が偽になるため、is_symlink() も見る
-        if not candidate.exists() and not candidate.is_symlink():
-            return candidate
-    raise FileExistsError(f"退避先の名前が空いていません（{path.name}）")
+    return (
+        str(task.get("task_id") or ""),
+        str(task.get("status") or "pending"),
+        int(task.get("channel_id") or 0),
+        int(task.get("message_id") or 0),
+        int(task.get("author_id") or 0),
+        str(task.get("question") or ""),
+        int(task.get("attachment_count") or 0),
+        str(task.get("created_at") or ""),
+        str(task.get("updated_at") or ""),
+        task.get("finished_at"),
+        task.get("error"),
+    )
 
 
 def _affinity_row_params(user_id: Any, entry: dict[str, Any]) -> tuple[str, Any, Any, Any, Any]:
@@ -441,18 +250,12 @@ class Database:
     # ---- スキーマ移行 -------------------------------------------------------
 
     def _apply_migrations(self) -> list[int]:
-        """呼出元の明示トランザクション内で未適用の移行を実行し、変更した版を返す。"""
-        current = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
-        applied_versions = []
-        for version in range(current + 1, SCHEMA_VERSION + 1):
-            for statement in _MIGRATIONS.get(version, []):
-                self._conn.execute(statement)
-            # user_version はプレースホルダ(?)が使えないため f-string で埋める。
-            # version は range() 由来の int なのでインジェクションの心配はない。
-            self._conn.execute(f"PRAGMA user_version = {version}")
-            if _MIGRATIONS.get(version):
-                applied_versions.append(version)
-        return applied_versions
+        """呼出元の明示トランザクション内で未適用の移行を実行し、変更した版を返す。
+
+        定義と適用の手順は db_migrations にある。ここでは、このモジュールの SCHEMA_VERSION・_MIGRATIONS を
+        渡すだけにしている（テストがこれらを差し替えて、段階的な移行や途中失敗を再現するため）。
+        """
+        return apply_migrations(self._conn, SCHEMA_VERSION, _MIGRATIONS)
 
     def _migrate_legacy_profile_rows(self) -> None:
         """ユーザー別記憶への移行の後始末（冪等）。
@@ -497,6 +300,9 @@ class Database:
 
     # ---- 旧 JSON / テキストファイルの取り込み --------------------------------
 
+    # ファイルの読み取りと解釈は db_legacy_importers が行い、ここ（Database）は DB への書き込み・
+    # ロック・取り込み後の改名・ログだけを担当する。値の変換（*_row_params）は通常の保存と共有する。
+
     def _import_legacy_files(self) -> None:
         importers = [
             ("affinity.json", self._import_affinity_json),
@@ -511,7 +317,7 @@ class Database:
             try:
                 # 退避先は取り込みの前に決める。空きが無ければ取り込まずに元のファイルを残す。
                 # 起動処理は単一のスレッドで動くため、決めてから改名するまでに同名は作られない。
-                backup_path = _free_backup_path(path)
+                backup_path = free_backup_path(path, LEGACY_BACKUP_MAX_SUFFIX)
                 importer(path)
                 path.replace(backup_path)
                 logger.info(f'データベース: {filename} を取り込み、{backup_path.name} に改名しました。')
@@ -520,11 +326,9 @@ class Database:
                 logger.error(f'データベース: {filename} の取り込みに失敗しました: {type(error).__name__}', exc_info=error)
 
     def _import_affinity_json(self, path: Path) -> None:
-        data = _load_legacy_json_object(path)
+        entries = load_legacy_user_entries(path)
         with self._lock, self._conn:
-            for user_id, entry in data.items():
-                if not isinstance(entry, dict):
-                    continue
+            for user_id, entry in entries:
                 # 既に DB にあるユーザーは上書きしない（DB 側を正とする）
                 self._conn.execute(
                     "INSERT OR IGNORE INTO affinity"
@@ -534,11 +338,9 @@ class Database:
                 )
 
     def _import_user_stats_json(self, path: Path) -> None:
-        data = _load_legacy_json_object(path)
+        entries = load_legacy_user_entries(path)
         with self._lock, self._conn:
-            for user_id, entry in data.items():
-                if not isinstance(entry, dict):
-                    continue
+            for user_id, entry in entries:
                 self._conn.execute(
                     "INSERT OR IGNORE INTO user_stats"
                     " (user_id, user_name, total_count, hourly, first_seen, last_seen,"
@@ -548,61 +350,24 @@ class Database:
                 )
 
     def _import_queue_json(self, path: Path) -> None:
-        tasks = _load_legacy_json_object(path).get("tasks", [])
-        if not isinstance(tasks, list):
-            raise ValueError("tasks が配列ではありません")
+        tasks = load_legacy_queue_tasks(path)
         with self._lock, self._conn:
             for task in tasks:
-                if not isinstance(task, dict) or not task.get("task_id"):
-                    continue
                 self._conn.execute(
                     "INSERT OR IGNORE INTO queue_tasks"
                     " (task_id, status, channel_id, message_id, author_id, question,"
                     "  attachment_count, created_at, updated_at, finished_at, error)"
                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        str(task.get("task_id")),
-                        str(task.get("status") or "pending"),
-                        int(task.get("channel_id") or 0),
-                        int(task.get("message_id") or 0),
-                        int(task.get("author_id") or 0),
-                        str(task.get("question") or ""),
-                        int(task.get("attachment_count") or 0),
-                        str(task.get("created_at") or ""),
-                        str(task.get("updated_at") or ""),
-                        task.get("finished_at"),
-                        task.get("error"),
-                    ),
+                    _queue_row_params(task),
                 )
 
     def _import_pending_log_txt(self, path: Path) -> None:
         """旧 pending_log.txt（[時刻] User: … / [時刻] Bot: … 形式）を行単位で復元する。"""
-        # 読み取った同じバイト列からハッシュと会話を作り、別内容の取り違えを防ぐ。
-        source = path.read_bytes()
-        content_hash = hashlib.sha256(source).hexdigest()
-        text = source.decode("utf-8-sig")
-        if not text.strip():
+        # 読み取った同じバイト列からハッシュと会話を作り、別内容の取り違えを防ぐ（解釈は parse_pending_log）。
+        parsed = parse_pending_log(path.read_bytes())
+        if parsed is None:
             return
-        entries: list[dict[str, str]] = []
-        current: dict[str, str] | None = None
-        bot_seen = False
-        for line in text.splitlines():
-            user_match = re.match(r"^\[(.+?)\] User: (.*)$", line)
-            bot_match = re.match(r"^\[(.+?)\] Bot: (.*)$", line)
-            if user_match:
-                if current is not None:
-                    entries.append(current)
-                current = {"created_at": user_match[1], "question": user_match[2], "response": ""}
-                bot_seen = False
-            elif bot_match and current is not None:
-                current["response"] = bot_match[2]
-                bot_seen = True
-            elif current is not None:
-                # 発言が複数行だった場合の続きの行。直前に書いていた側へ連結する。
-                key = "response" if bot_seen else "question"
-                current[key] += "\n" + line
-        if current is not None:
-            entries.append(current)
+        content_hash, entries = parsed.content_hash, parsed.entries
 
         # 旧 pending_log.txt はユーザー別記憶の導入前のもの＝全体共有。owner に紐付ける。
         owner = self._legacy_owner_id
@@ -644,28 +409,15 @@ class Database:
         if not path.exists():
             return
         try:
-            raw_text = path.read_text(encoding="utf-8-sig").strip()
-            if not raw_text or raw_text == "{}":
-                return
-            data = json.loads(raw_text)
-            if not isinstance(data, dict) or not data:
+            data = load_profile_json(path)
+            if data is None:
                 return
 
-            # 全キーがASCII数字のID、全値がdictのときだけユーザー別形式とみなす。
-            # 旧形式では値がすべてdictのこともあるため、名前や全角数字をIDにしない。
-            looks_per_user = all(
-                user_id.isascii() and user_id.isdigit() and isinstance(value, dict)
-                for user_id, value in data.items()
-            )
+            # 形式の判定（ユーザー別か、旧・全体共有か）と振り分けは split_profile_by_user が行う。
             absorbed: dict[str, list[str]] = {}
-            if looks_per_user:
-                for user_id, profile in data.items():
-                    if isinstance(profile, dict) and profile:
-                        self.profile_merge(str(user_id), profile)
-                        absorbed[str(user_id)] = list(profile.keys())
-            elif self._legacy_owner_id:
-                self.profile_merge(self._legacy_owner_id, data)
-                absorbed[self._legacy_owner_id] = list(data.keys())
+            for user_id, profile in split_profile_by_user(data, self._legacy_owner_id).items():
+                self.profile_merge(user_id, profile)
+                absorbed[user_id] = list(profile.keys())
 
             if not absorbed:
                 logger.warning('データベース: profile.json に取り込めるプロフィールがありません。ユーザー別形式と旧形式の引継ぎ先を確認してください。ファイルを保持します。')
@@ -1285,19 +1037,7 @@ class Database:
             " (task_id, status, channel_id, message_id, author_id, question,"
             "  attachment_count, created_at, updated_at, finished_at, error)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                str(task.get("task_id") or ""),
-                str(task.get("status") or "pending"),
-                int(task.get("channel_id") or 0),
-                int(task.get("message_id") or 0),
-                int(task.get("author_id") or 0),
-                str(task.get("question") or ""),
-                int(task.get("attachment_count") or 0),
-                str(task.get("created_at") or ""),
-                str(task.get("updated_at") or ""),
-                task.get("finished_at"),
-                task.get("error"),
-            ),
+            _queue_row_params(task),
         )
 
     def queue_update_task(self, task_id: str, updates: dict[str, Any], updated_at: str) -> None:

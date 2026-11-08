@@ -18,6 +18,7 @@ from persona_bot.views.auto_topic_view import AutoTopicConfirmButton, AutoTopicV
 from persona_bot.views.autonomous_channel_view import AutonomousChannelConfirmButton, AutonomousChannelView
 from persona_bot.views.functions_view import FunctionsView, GroundingToggleButton
 from persona_bot.views.settings_view import ConfirmButton, SettingsView
+from tests.helpers.discord_mocks import make_guild, make_interaction, make_response
 from tests.helpers.member_helpers import make_member
 
 
@@ -37,7 +38,7 @@ class SettingsRejoinTests(unittest.IsolatedAsyncioTestCase):
         elif kind == "settings":
             view, button = SettingsView(settings, 0, "なし"), ConfirmButton
         elif kind == "channels":
-            guild = SimpleNamespace(stage_channels=[], voice_channels=[], me=None)
+            guild = make_guild(stage_channels=[], voice_channels=[], me=None)
             view, button = AutonomousChannelView(settings, guild), AutonomousChannelConfirmButton
         else:
             view = FunctionsView(settings, Mock(), Mock(), Mock(), Mock(), Mock(), Mock(), Mock())
@@ -47,17 +48,15 @@ class SettingsRejoinTests(unittest.IsolatedAsyncioTestCase):
         return view, next(item for item in view.children if isinstance(item, button))
 
     def interaction(self):
-        response = SimpleNamespace(
-            is_done=Mock(return_value=False), send_message=AsyncMock(), edit_message=AsyncMock(),
-        )
+        response = make_response()
 
         async def defer(**kwargs):
             response.is_done.return_value = True
 
-        response.defer = AsyncMock(side_effect=defer)
-        return SimpleNamespace(
-            response=response, edit_original_response=AsyncMock(), extras={},
-            guild=SimpleNamespace(id=1), user=make_member(admin=True),
+        response.defer.side_effect = defer
+        return make_interaction(
+            response=response, extras={}, guild=SimpleNamespace(id=1), user=make_member(admin=True),
+            without=("followup", "original_response"),
         )
 
     async def rejoin(self):

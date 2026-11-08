@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from persona_bot.core.app_state import GuildSettings
@@ -18,18 +19,18 @@ from persona_bot.views.reminder_view import ReminderCancelSelect, ReminderView
 from persona_bot.views.stats_privacy_view import StatsPrivacyView, StatsPrivacyConfirmButton, StatsDataDeleteButton
 from persona_bot.views.stats_view import StatsUserSelect, StatsView
 from persona_bot.views.view_parts import PanelView, swap_panel
+from tests.helpers.discord_mocks import make_interaction, make_response
 
 
 class DatabaseInteractionTests(unittest.IsolatedAsyncioTestCase):
     def interaction(self):
-        response = SimpleNamespace(is_done=Mock(return_value=False), edit_message=AsyncMock(), send_message=AsyncMock())
+        response = make_response()
 
         async def defer(**kwargs):
             response.is_done.return_value = True
 
-        response.defer = AsyncMock(side_effect=defer)
-        return SimpleNamespace(response=response, edit_original_response=AsyncMock(),
-                               original_response=AsyncMock(), user=SimpleNamespace(id=11))
+        response.defer.side_effect = defer
+        return make_interaction(response=response, user_id=11, without=("followup",))
 
     async def test_every_database_callback_defers_before_waiting(self):
         for kind in ("grounding", "auto_topic", "reminder_list", "reminder_cancel", "privacy_save", "privacy_delete"):

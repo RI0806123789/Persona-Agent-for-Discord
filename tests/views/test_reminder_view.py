@@ -3,16 +3,17 @@
 from copy import deepcopy
 from pathlib import Path
 import sys
-from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from persona_bot.config.constants import REMINDER_MAX_PENDING_PER_USER, REMINDER_PANEL_MAX_LENGTH
 from persona_bot.services.reminder_service import ReminderService
 from persona_bot.views import reminder_view
 from persona_bot.views.reminder_view import ReminderCancelSelect, ReminderView, _build_status_text
+from tests.helpers.discord_mocks import make_interaction, make_response
 
 
 def make_records(count: int, *, body: str = "架空の予定") -> list[dict]:
@@ -125,7 +126,7 @@ class ReminderViewTests(unittest.IsolatedAsyncioTestCase):
         # Discord に送られるコンポーネントにも全件残る。
         self.assertEqual(len(view.to_components()[0]["components"][0]["options"]), len(records))
         select._values = [str(records[-1]["reminder_id"])]
-        interaction = SimpleNamespace(response=SimpleNamespace(defer=AsyncMock()), edit_original_response=AsyncMock())
+        interaction = make_interaction(response=make_response("defer"), without=("followup", "original_response"))
         await select.callback(interaction)
         service.cancel.assert_awaited_once_with(records[-1]["reminder_id"], "11")
         self.assertIn("リマインダーを取り消しました。",

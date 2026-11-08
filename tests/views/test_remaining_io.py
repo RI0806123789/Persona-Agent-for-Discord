@@ -17,16 +17,14 @@ from persona_bot.config import personas
 from persona_bot.core.app_state import GuildSettings
 from persona_bot.services import summary_service
 from persona_bot.views import functions_view, settings_view, summary_view
+from tests.helpers.discord_mocks import make_http_response, make_interaction, make_response
 from tests.helpers.thread_probe import make_thread_probe
 from tests.helpers.persona_helpers import install_persona_catalog
 
 
 class ViewIOTests(unittest.IsolatedAsyncioTestCase):
     def interaction(self):
-        return SimpleNamespace(
-            response=SimpleNamespace(defer=AsyncMock(), edit_message=AsyncMock()),
-            edit_original_response=AsyncMock(), followup=SimpleNamespace(send=AsyncMock()),
-        )
+        return make_interaction(response=make_response("defer", "edit_message"), without=("original_response",))
 
     async def test_confirm_checks_path_in_worker_and_preserves_settings_when_missing(self):
         for exists in (True, False):
@@ -107,8 +105,8 @@ class ViewIOTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_public_summary_reports_forbidden_and_partial_send_failure(self):
         errors = (
-            (discord.Forbidden(SimpleNamespace(status=403, reason="禁止"), "架空の権限不足"), "権限"),
-            (discord.HTTPException(SimpleNamespace(status=503, reason="障害"), "架空の障害"), "一部"),
+            (discord.Forbidden(make_http_response(403, "禁止"), "架空の権限不足"), "権限"),
+            (discord.HTTPException(make_http_response(503, "障害"), "架空の障害"), "一部"),
             (None, "投稿しました"),
         )
         for error, notice in errors:

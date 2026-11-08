@@ -125,7 +125,9 @@ def build_history_text(
         # モデルが画像付きと誤解して応答してしまう）。
         if any(attachment_is_image(attachment) for attachment in history_message.attachments):
             clean_content += " [画像添付あり]"
-        if not all(attachment_is_image(attachment) for attachment in history_message.attachments):
+        # 画像以外の添付が1つでもあるときだけ付ける。添付が空なら any() は偽になり、何も付かない
+        # （`not all(...)` と等価だが、空リストの扱いを言語仕様に暗黙に頼らず条件式で読めるようにする）。
+        if any(not attachment_is_image(attachment) for attachment in history_message.attachments):
             clean_content += " [添付ファイルあり]"
         lines.append(f"{role}: {clean_content}")
     return SanitizedHistory("\n".join(lines))

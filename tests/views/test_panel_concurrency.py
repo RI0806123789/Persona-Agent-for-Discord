@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import discord
@@ -22,6 +23,7 @@ from persona_bot.views.stats_privacy_view import StatsPrivacyView, StatsPrivacyC
 from persona_bot.views.stats_view import StatsView, RunStatsButton, StatsItemSelect
 from persona_bot.views.summary_view import SummaryView, RunSummaryButton, PrivateToggleButton
 from persona_bot.views.view_parts import BackButton, PanelView, swap_panel, begin_panel_operation, edit_panel_message
+from tests.helpers.discord_mocks import make_interaction, make_response
 
 
 class PanelConcurrencyTests(unittest.IsolatedAsyncioTestCase):
@@ -53,7 +55,7 @@ class PanelConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         return view
 
     def interaction(self, *, edit=None):
-        response = SimpleNamespace(is_done=Mock(return_value=False), send_message=AsyncMock())
+        response = make_response()
 
         async def defer(**kwargs):
             response.is_done.return_value = True
@@ -64,12 +66,11 @@ class PanelConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 await edit(**kwargs)
             await self.webhook.edit(**kwargs)
 
-        response.defer = AsyncMock(side_effect=defer)
-        response.edit_message = AsyncMock(side_effect=editing)
-        return SimpleNamespace(
+        response.defer.side_effect = defer
+        response.edit_message.side_effect = editing
+        return make_interaction(
             response=response, edit_original_response=AsyncMock(side_effect=editing),
             original_response=AsyncMock(return_value=self.webhook), extras={},
-            followup=SimpleNamespace(send=AsyncMock()),
             user=SimpleNamespace(id=11, display_name="架空の利用者"),
             client=SimpleNamespace(user=SimpleNamespace(name="架空のボット")),
         )
