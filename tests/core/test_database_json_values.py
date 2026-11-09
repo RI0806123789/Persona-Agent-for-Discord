@@ -118,6 +118,22 @@ class NullableJsonValuesTests(unittest.TestCase):
                 self.db.stats_save_all({"replaced-user": {}})
                 self.assertEqual(self.db.stats_load_all()["replaced-user"], expected)
 
+    def test_null_opt_out_falls_back_to_legacy_alias_and_default(self) -> None:
+        # opt_out が None で入っていても、キー欠落と同じく次の候補へ落とす（#411）。
+        from persona_bot.core.database import _affinity_row_params, _user_stats_row_params
+        self.assertEqual(_user_stats_row_params("1", {"opt_out": None, "stats_opt_out": True})[-1], 1)
+        self.assertEqual(_user_stats_row_params("1", {"opt_out": False, "stats_opt_out": True})[-1], 0)
+        for default in (False, True):
+            with self.subTest(default=default), patch("persona_bot.core.database.STATS_OPT_OUT_DEFAULT", default):
+                self.assertEqual(_user_stats_row_params("1", {"opt_out": None})[-1], int(default))
+                self.assertEqual(
+                    _user_stats_row_params("1", {"opt_out": None, "stats_opt_out": None})[-1], int(default),
+                )
+        # 旧JSONの文字列の数値も float に正規化する。
+        self.assertEqual(_affinity_row_params("1", {"last_interaction": "12.5"})[-1], 12.5)
+        self.assertIsInstance(_affinity_row_params("1", {"last_interaction": 3})[-1], float)
+        self.assertEqual(_affinity_row_params("1", {})[-1], 0.0)
+
     def test_legacy_statistics_do_not_overwrite_existing_opt_out(self) -> None:
         self.db.initialize()
         self.db.stats_save_user("11", {"opt_out": True, "total_count": 5})

@@ -126,6 +126,13 @@ def _user_stats_row_params(user_id: Any, entry: dict[str, Any]) -> tuple[Any, ..
     収集停止は通常の opt_out を優先し、旧JSONの stats_opt_out も引き継ぐ。
     """
     analysis = entry.get("analysis")
+    # ★ dict.get の第2引数は「キーが無いとき」にしか効かない。値が None で入っている旧JSON・
+    # 破損行でも収集停止の設定が外れないよう、None は次の候補へ明示的に落とす。
+    opt_out = entry.get("opt_out")
+    if opt_out is None:
+        opt_out = entry.get("stats_opt_out")
+    if opt_out is None:
+        opt_out = STATS_OPT_OUT_DEFAULT
     return (
         str(user_id),
         str(entry.get("user_name") or ""),
@@ -135,7 +142,7 @@ def _user_stats_row_params(user_id: Any, entry: dict[str, Any]) -> tuple[Any, ..
         str(entry.get("last_seen") or ""),
         json.dumps(entry.get("recent_samples") or [], ensure_ascii=False),
         json.dumps(analysis, ensure_ascii=False) if analysis else None,
-        int(bool(entry.get("opt_out", entry.get("stats_opt_out", STATS_OPT_OUT_DEFAULT)))),
+        int(bool(opt_out)),
     )
 
 
@@ -181,7 +188,7 @@ def _affinity_row_params(user_id: Any, entry: dict[str, Any]) -> tuple[str, Any,
         bounded_value("affinity"),
         bounded_value("valence"),
         bounded_value("arousal"),
-        value_or("last_interaction", 0.0),
+        float(value_or("last_interaction", 0.0)),
     )
 
 

@@ -337,11 +337,13 @@ def split_message(text: str, limit: int = DISCORD_MESSAGE_MAX_LENGTH) -> list[st
             chunks.append(text)
             break
 
-        # 制限内で最後の改行を探す
-        split_pos = text.rfind("\n", 0, limit)
+        # 制限内で最後の改行を探す。区切り文字は次のチャンクへ持ち越さず捨てるので、
+        # text[limit]（制限ちょうどの次の文字）が区切りでも text[:limit] で切れる。
+        # 探索範囲を limit + 1 にしないと、その区切りを見落として手前で不要に分割する。
+        split_pos = text.rfind("\n", 0, limit + 1)
         if split_pos <= 0:
             # 改行が見つからない場合はスペースで分割を試みる
-            split_pos = text.rfind(" ", 0, limit)
+            split_pos = text.rfind(" ", 0, limit + 1)
 
         if split_pos <= 0:
             # 区切り文字が見つからない場合は強制カット（切った文字も残す）
