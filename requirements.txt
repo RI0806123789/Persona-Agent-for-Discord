@@ -16,7 +16,7 @@
 # 更新時はCIの全組み合わせで再検証する。推移依存の版は末尾の -c で読む constraints.txt で固定する
 # （ハッシュまで照合するロックではない）。
 discord.py[voice]==2.7.1
-google-genai==2.31.0
+google-genai==2.33.0
 # 読み上げの主エンジン。Microsoft Edge の「音声で読み上げる」機能が使っている
 # ニューラル音声を呼び出す。APIキー・アカウント登録・課金いずれも不要。
 # 日本語話者は ja-JP-NanamiNeural（女性）と ja-JP-KeitaNeural（男性）の2人で、
