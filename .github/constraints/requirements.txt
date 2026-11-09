@@ -1,4 +1,4 @@
 # constraints.txt を作り直すワークフロー（.github/workflows/update-constraints.yml）が使う pip の版。
 # 公開日で版を選ぶ --uploaded-prior-to は pip 26.0.1 から使える。ボットの依存ではない（Issue #285）。
 # 版は公開から2週間以上たったものに固定し、更新は Dependabot（.github/dependabot.yml）が提案する。
-pip==26.2.1
+pip==26.2.2
