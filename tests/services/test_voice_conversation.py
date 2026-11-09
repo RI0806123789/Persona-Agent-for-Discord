@@ -374,6 +374,28 @@ class ResponseTests(ConversationTestBase):
         self.assertEqual(self.voice_client.play.call_count, 2)
         self.assertEqual(self.conversation._latencies, first_latency)
 
+    async def test_chunk_arriving_right_after_a_stall_is_played_by_a_new_source(self):
+        """再生スレッドの終了通知がループで処理される前に届いたチャンクを、消さずに再生する（#412）。"""
+        await self.complete_utterance()
+        await self.respond(complete=False)
+        source = self.voice_client.play.call_args.args[0]
+        while source.read():  # 途絶えが上限に達して、音源が自分で終わる
+            pass
+        self.assertTrue(source.aborted)
+        # after コールバックはまだ処理されていない
+        await self.respond(complete=False)
+        self.assertEqual(self.voice_client.play.call_count, 2)
+        self.assertIsNot(self.voice_client.play.call_args.args[0], source)
+
+    async def test_playback_that_cannot_start_releases_its_state(self):
+        """未接続などで再生を始めずに戻ったとき、再生状態を残さない（#412）。"""
+        await self.complete_utterance()
+        self.voice_client.is_connected.return_value = False
+        await self.respond(complete=False)
+        self.voice_client.play.assert_not_called()
+        self.assertIsNone(self.conversation._playback)
+        self.assertFalse(self.conversation._playback_started)
+
     async def test_failed_playback_does_not_record_latency(self):
         await self.complete_utterance()
         self.voice_client.play.side_effect = discord.ClientException("架空の再生失敗")
@@ -644,6 +666,29 @@ class ResponseTests(ConversationTestBase):
         await self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(24000))))
         self.voice_client.play.assert_called_once()
 
+    async def test_barge_in_before_the_first_reply_chunk_still_waits_for_the_interrupt_notice(self):
+        """返答の最初のチャンクが届く前の割り込みでも、前の人宛ての遅れた返答を通さない（#412）。"""
+        await self.complete_utterance()
+        previous = self.conversation._current
+        self.assertFalse(previous.response_started)
+        self.speak(USER_B, constants.LIVE_BARGE_IN_MS // 20)
+        self.assertEqual(self.conversation._active_user, USER_B)
+        self.assertTrue(previous.discarded)
+        self.assertTrue(self.conversation._awaiting_interrupt_ack)
+        self.assertIs(self.conversation._interrupted, previous)
+        self.advance(constants.LIVE_VAD_SILENCE_MS / 1000 + 0.1)
+        self.conversation.tick()
+        self.voice_client.play.reset_mock()
+        # 前の人宛ての返答が遅れて届いても、新しい発言への返答として流さない
+        await self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(24000))))
+        self.voice_client.play.assert_not_called()
+        # interrupted で待ちが解け、前の人の文字起こしの帰属も閉じる
+        await self.conversation._on_live_message(live_message(interrupted=True))
+        self.assertFalse(self.conversation._awaiting_interrupt_ack)
+        self.assertIsNone(self.conversation._interrupted)
+        await self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(24000))))
+        self.voice_client.play.assert_called_once()
+
     async def test_missing_interrupt_notice_does_not_block_replies_forever(self):
         await self.complete_utterance()
         await self.respond(complete=False)
@@ -856,6 +901,33 @@ class LifecycleTests(ConversationTestBase):
         self.assertIn("終了しました", panel.edit.await_args.kwargs["content"])
         await self.conversation.stop()  # 二度目は何もしない
         self.assertEqual(panel.edit.await_count, 1)
+
+    async def test_stop_waits_for_the_running_panel_update_before_the_final_edit(self):
+        """実行中の「会話中です」の編集が終わってから、終了表示に更新する（#412）。"""
+        order = []
+
+        async def edit(**kwargs):
+            if "view" not in kwargs:
+                order.append("update-start")
+                try:
+                    await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    # 通信の後始末に時間がかかる状況を再現する。待たずに終了表示へ進むと、
+                    # この後始末より先に「終了表示」の編集が走ってしまう。
+                    await asyncio.sleep(0.05)
+                    order.append("update-cancelled")
+                    raise
+            else:
+                order.append("final")
+
+        self.conversation.panel_message = SimpleNamespace(edit=edit)
+        self.conversation.panel_view = Mock()
+        self.conversation._panel_updated_at = -1e9
+        self.conversation._schedule_panel_update()
+        await self.settle()
+        self.assertEqual(order, ["update-start"])
+        await self.conversation.stop()
+        self.assertEqual(order, ["update-start", "update-cancelled", "final"])
 
     async def test_usage_is_logged_without_text(self):
         usage = SimpleNamespace(total_token_count=10)

@@ -382,11 +382,16 @@ class AutoTopicService:
         ほぼ常に「メンバーではない」と判断されてしまうため、取得できなければ
         API へ問い合わせる。記念日は多くても1人年1回のため呼び出し回数は少ない。
         """
-        member = guild.get_member(int(user_id))
+        try:
+            numeric_id = int(user_id)
+        except (TypeError, ValueError):
+            # profile は LLM や手書きで書かれうるため、数値でない ID は静かに対象外にする。
+            return None
+        member = guild.get_member(numeric_id)
         if member is not None:
             return member
         try:
-            return await guild.fetch_member(int(user_id))
+            return await guild.fetch_member(numeric_id)
         except discord.NotFound:
             return None  # このサーバーのメンバーではない（正常なケース）
         except discord.Forbidden:
@@ -396,6 +401,10 @@ class AutoTopicService:
             logger.error("記念日: メンバー取得に失敗しました。", exc_info=error)
             return None
 
+    def _is_user_blocked(self, user_id: int) -> bool:
+        """ブラックリスト登録者か。判定関数が注入されていなければ（テストなど）誰もブロックしない。"""
+        return self._is_blocked is not None and bool(self._is_blocked(user_id))
+
     async def _celebrate_user(self, user_id: str, label: str, today_str: str) -> None:
         """指定ユーザーが所属する各サーバーの監視チャンネルへお祝いメッセージを投稿する。
 
@@ -404,6 +413,14 @@ class AutoTopicService:
         anniversary_posted_dates で防ぐ。
         """
         posted_key = f"{user_id}:{label}"
+        try:
+            numeric_id = int(user_id)
+        except (TypeError, ValueError):
+            return  # 数値でない ID は対象外（毎時の見回りで通るためログは出さない）
+        if self._is_user_blocked(numeric_id):
+            # ブラックリスト登録者には、生成（API 呼び出し）もメンション付きの公開投稿もしない。
+            # 記録は残さない（ブロックが解除されれば、同日中の見回りで祝える）。
+            return
 
         for guild_id, guild_settings in list(self._state.guild_settings.items()):
             if not guild_settings.auto_topic_enabled or guild_settings.autonomous_session is not None:
@@ -473,9 +490,11 @@ class AutoTopicService:
     ) -> bool:
         """お祝いメッセージを生成し、チャンネルへ投稿する。戻り値の意味は _post_topic と同様。"""
         def eligible() -> bool:
+            # 生成の前後・送信の前に何度も呼ばれる。待機中にブロックされた場合も止める。
             return (
                 guild_settings.auto_topic_enabled and guild_settings.autonomous_session is None
                 and channel.id in guild_settings.auto_topic_channels
+                and not self._is_user_blocked(member.id)
             )
 
         return await self._post_auto(

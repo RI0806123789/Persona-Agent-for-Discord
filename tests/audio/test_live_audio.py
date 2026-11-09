@@ -112,6 +112,15 @@ class PlaybackSourceTests(unittest.TestCase):
         self.assertIsInstance(source, discord.AudioSource)
         self.assertFalse(source.is_opus())
 
+    def test_stall_marks_the_source_as_ended_so_later_chunks_need_a_new_source(self):
+        source = LivePlaybackSource(stall_frames=1)
+        source.read()  # 無音で待つ
+        self.assertFalse(source.aborted)
+        self.assertEqual(source.read(), b"")  # 途絶えて打ち切る
+        self.assertTrue(source.aborted)
+        source.feed(bytes(DISCORD_FRAME_BYTES))  # 終了済みの音源には溜めない
+        self.assertEqual(source.buffered_bytes, 0)
+
     def test_frames_then_silence_while_waiting_then_stops_after_stall(self):
         source = LivePlaybackSource(stall_frames=2)
         source.feed(b"\x01" * DISCORD_FRAME_BYTES)

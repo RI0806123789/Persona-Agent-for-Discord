@@ -58,6 +58,31 @@ class PanelNavigationTests(unittest.IsolatedAsyncioTestCase):
         webhook_message.edit.assert_awaited_once_with(content="時間切れです。", view=None)
         interaction.message.edit.assert_not_awaited()
 
+    def make_back_navigation(self):
+        hub, panel = self.make_panel(), self.make_panel()
+        hub.build_preview = Mock(return_value="機能パネル")
+        panel.make_hub = Mock(return_value=hub)
+        button = BackButton(row=0)
+        panel.add_item(button)
+        interaction, _ = self.make_interaction()
+        return hub, panel, button, interaction
+
+    async def test_back_stops_the_generated_parent_when_settings_expire_during_generation(self):
+        """親パネルの生成を待つ間に設定が失効したら、生成済みの View を止める（#412）。"""
+        hub, panel, button, interaction = self.make_back_navigation()
+        # 受付時の確認は通り、生成後の確認だけ失効する。
+        panel.ensure_settings_current = AsyncMock(side_effect=[True, False])
+        await button.callback(interaction)
+        self.assertTrue(hub.is_finished())
+        self.assertFalse(panel.is_finished())  # 遷移しなかったので元のパネルは残る
+
+    async def test_back_stops_the_generated_parent_when_the_screen_update_fails(self):
+        hub, panel, button, interaction = self.make_back_navigation()
+        with patch("persona_bot.views.view_parts.edit_panel_message", AsyncMock(return_value=False)):
+            await button.callback(interaction)
+        self.assertTrue(hub.is_finished())
+        self.assertFalse(panel.is_finished())
+
     async def test_back_without_hub_closes_panel_without_fetch(self):
         panel = self.make_panel()
         button = BackButton(row=0)

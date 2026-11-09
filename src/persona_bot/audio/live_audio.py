@@ -161,6 +161,11 @@ class LivePlaybackSource(discord.AudioSource):
                 return frame
             self._stalled += 1
             if self._stalled > self._stall_frames:
+                # ★ 途絶えて打ち切るときは終了済みの印（aborted）を立てる。立てないと、再生スレッドの
+                # 終了通知がイベントループで処理されるまでの間に届いたチャンクが、終了済みのこの音源へ
+                # feed() されて消える。印があれば、呼び出し側は新しい音源で再生し直せる。
+                self._aborted = True
+                self._buffer.clear()
                 return b""
             return _SILENT_FRAME
 
