@@ -47,6 +47,15 @@ updates:
       # constraints.txt で Python の版ごとに別の版を書き分けている依存。Dependabot は両方の行を同じ版に
       # しかねないので、提案させずに constraints.txt の作り直し（update-constraints.yml）で更新する
       - dependency-name: contourpy
+      # 直接依存が上限を付けていて、その版へ上げると pip の解決が失敗する推移依存。上限を外す版が
+      # 出るまで、衝突する版の範囲だけ提案させない（それ以外の版は従来どおり提案される）。
+      # 外す条件: 下の直接依存を更新して、上限が緩んだことを `pip install --dry-run -r requirements.txt` で確かめたとき
+      - dependency-name: click          # gTTS 2.5.4 が click<8.2
+        versions: [">=8.2"]
+      - dependency-name: pynacl         # discord.py[voice] 2.7.1 が PyNaCl<1.6（CLAUDE.md の GHSA-mrfv-m5wm-5w6w の項も参照）
+        versions: [">=1.6"]
+      - dependency-name: tenacity       # google-genai 2.33.0 が tenacity<9.2.0
+        versions: [">=9.2.0"]
 
   # 管理コンソールのバックエンド・CI の検査ツール（pip-audit の固定版）
   - package-ecosystem: pip
