@@ -100,6 +100,16 @@ class ProgressTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await run, ("canceled", None))
         await asyncio.wait_for(worker_cancelled.wait(), 1)
 
+    async def test_cancel_wins_when_it_lands_in_the_same_turn_as_the_worker_finishing(self) -> None:
+        """中止ボタンと作業の完了が同じ周回で重なっても、中止を無視しない（#412）。"""
+        async def finishing():
+            # 中止が先に押されたのと同じ周回で、作業が報告を返して終わる
+            self.progress._cancel_event.set()
+            return AgentReport("架空の報告", [])
+
+        with patch("persona_bot.views.agent_view.logger"):
+            self.assertEqual(await self.progress.run(finishing()), ("canceled", None))
+
     async def test_total_timeout_stops_the_worker(self) -> None:
         async def slow():
             await asyncio.sleep(3600)

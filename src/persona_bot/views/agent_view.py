@@ -153,6 +153,11 @@ class AgentProgressBase:
 
             # 実行枠の解放前に両方を回収する。追加のキャンセルも回収後に伝える。
             await wait_for_cleanup(collect_children(), label="サブエージェントの終了待ち")
+        if cancel_requested:
+            # ★ 中止の要求を最優先にする。中止ボタンと作業の完了が同じ周回で重なると、
+            # 先に完了を採用して中止を黙って無視してしまう（本人は中止したつもりでいる）。
+            logger.info("サブエージェント: 依頼した本人が中止しました。")
+            return "canceled", None
         if worker_finished and not worker.cancelled():
             error = worker.exception()
             if error is not None:
@@ -160,9 +165,6 @@ class AgentProgressBase:
                 return "failed", None
             report = worker.result()
             return ("done", report) if report is not None else ("failed", None)
-        if cancel_requested:
-            logger.info("サブエージェント: 依頼した本人が中止しました。")
-            return "canceled", None
         logger.warning("サブエージェント: 期限に達したため中止しました。")
         return "failed", None
 

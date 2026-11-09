@@ -365,9 +365,13 @@ class BackButton(ui.Button):
         if isawaitable(hub):
             hub = await hub
         if isinstance(view, PanelView) and not await view.ensure_settings_current(interaction):
+            # 生成済みの戻り先は表示されないまま捨てる。止めないとタイムアウトの
+            # タイマーが残る（swap_panel と同じ扱い）。
+            hub.stop()
             return
         hub.blocked_user_check = getattr(view, "blocked_user_check", None)
         if not await edit_panel_message(interaction, content=hub.build_preview(), view=hub, source=view):
+            hub.stop()
             return
         if view is not None:
             view.stop()

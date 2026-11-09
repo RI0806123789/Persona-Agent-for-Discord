@@ -367,8 +367,12 @@ class VoiceConversation:
         self._reservations.clear()
         await wait_for_cleanup(self._live.close(), label="音声会話の Live の切断")
         await asyncio.gather(*(task for task in self._tasks if task is not current), return_exceptions=True)
-        if self._panel_update_task is not None and self._panel_update_task is not current:
-            self._panel_update_task.cancel()
+        panel_task = self._panel_update_task
+        if panel_task is not None and panel_task is not current:
+            # ★ キャンセルを要求するだけでは、実行中の「会話中です」の編集の通信が残り、
+            # 直後の終了表示の編集と順序が入れ替わりうる。終わるまで待ってから終了表示にする。
+            panel_task.cancel()
+            await asyncio.gather(panel_task, return_exceptions=True)
         self._log_latency()
         await self._finish_panel()
 
@@ -533,8 +537,11 @@ class VoiceConversation:
             logger.info("音声会話: 返答中の割り込みを検出したため、再生を止めます。")
             previous = self._current
             if previous is not None:
-                if previous.response_started and not previous.response_complete:
-                    # 生成中の返答の残りが届いても、新しい発言の返答と取り違えない。
+                if previous.ended_at is not None and not previous.response_complete:
+                    # 生成中の返答の残りが届いても、新しい発言の返答と取り違えない。最初の返答の
+                    # チャンクが届く前（response_started が偽の返答待ち）に割り込まれた場合も同じ。
+                    # ここで印を付けないと、サーバーの interrupted で文字起こしの待ちが解けず、
+                    # 前の人宛ての遅れた返答や turn_complete が新しい発言への返答として通ってしまう。
                     # サーバーが割り込みを知らせないまま終わっても、待ち続けないよう期限を設ける。
                     self._awaiting_interrupt_ack = True
                     self._interrupt_ack_deadline = now + LIVE_PLAYBACK_STALL_SECONDS
@@ -768,7 +775,10 @@ class VoiceConversation:
         if utterance.first_audio_at is None:
             utterance.first_audio_at = self._now()
         utterance.response_started = True
-        if self._playback is None or self._playback_owner is not utterance:
+        if (self._playback is None or self._playback_owner is not utterance
+                or self._playback.aborted):
+            # 再生側が途絶えで打ち切った音源（aborted）にはもう流せない。後続のチャンクは
+            # 新しい音源で再生し直す（同じ発話の再開）。
             self._abort_playback()
             self._playback = LivePlaybackSource(stall_frames=_PLAYBACK_STALL_FRAMES)
             self._playback_owner = utterance
@@ -862,10 +872,12 @@ class VoiceConversation:
             async with self._playback_controller.lock:
                 if (self._stopped or self._playback is not source or source.aborted
                         or owner is None or owner.discarded):
+                    self._release_unplayed(source)
                     return
                 await self._playback_controller.prepare(self.voice_client)
                 if (self._stopped or self._playback is not source or source.aborted
                         or owner.discarded or not self.voice_client.is_connected()):
+                    self._release_unplayed(source)
                     return
                 self._playback_controller.play(self.voice_client, source, after=after_playing)
             if owner.ended_at is not None and owner.playback_started_at is None:
@@ -878,6 +890,17 @@ class VoiceConversation:
             raise
         except Exception as error:
             logger.error("音声会話: 再生を開始できませんでした。", exc_info=error)
+            source.abort()
+            self._on_playback_finished(source)
+
+    def _release_unplayed(self, source: LivePlaybackSource) -> None:
+        """再生を始めずに戻るとき、まだ現在の音源なら再生状態を解放する。
+
+        ★ _start_playback は先に _playback_started を立てるため、未接続などで早期に戻ると
+        _playback と _playback_started が残り、_bot_speaking() が真に張り付く。
+        別の音源に入れ替わっていれば、その音源の状態には触れない。
+        """
+        if self._playback is source:
             source.abort()
             self._on_playback_finished(source)
 

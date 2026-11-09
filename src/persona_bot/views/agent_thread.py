@@ -174,12 +174,18 @@ class AgentThreadProgress(AgentProgressBase):
         webhook: discord.Webhook,
         webhooks: AgentWebhooks,
         avatar_url: str | None,
+        bot_user_id: int | None = None,
     ) -> None:
         super().__init__(message.author.id, lines, plan)
         self._source = message
         self._thread = thread
         self._webhook: discord.Webhook | None = webhook
         self._webhooks = webhooks
+        # ★ Webhook の再取得は長時間の作業の後に起こる。その時点で guild.me がキャッシュから
+        # 外れていると AttributeError になるため、開始時に分かっているボットの ID を保持して使う。
+        if bot_user_id is None:
+            bot_user_id = getattr(getattr(message.guild, "me", None), "id", None)
+        self._bot_user_id = bot_user_id
         self._child_name = webhook_username(self._line("name"))
         self._avatar_url = avatar_url
         self._handoff: discord.Message | None = None
@@ -203,7 +209,8 @@ class AgentThreadProgress(AgentProgressBase):
         if reason is not None:
             logger.warning("サブエージェント: 作業スレッドを使えないため、返信の進捗表示にします。")
             return None
-        webhook = await webhooks.get(message.channel, message.guild.me.id)
+        bot_user_id = message.guild.me.id
+        webhook = await webhooks.get(message.channel, bot_user_id)
         if webhook is None:
             logger.warning("サブエージェント: Webhook を使えないため、返信の進捗表示にします。")
             return None
@@ -218,6 +225,7 @@ class AgentThreadProgress(AgentProgressBase):
             return None
         progress = cls(
             message, lines, plan, thread=thread, webhook=webhook, webhooks=webhooks, avatar_url=avatar_url,
+            bot_user_id=bot_user_id,
         )
         try:
             if not await progress._post_handoff():
@@ -302,7 +310,10 @@ class AgentThreadProgress(AgentProgressBase):
                         return
                     logger.warning("サブエージェント: Webhook が見つからないため、再取得して投稿をやり直します。", exc_info=error)
                     retried = True
-                    self._webhook = await self._webhooks.get(self._source.channel, self._source.guild.me.id)
+                    if self._bot_user_id is None:
+                        logger.warning("サブエージェント: ボット自身の ID が分からないため、Webhook を再取得できません。")
+                        return
+                    self._webhook = await self._webhooks.get(self._source.channel, self._bot_user_id)
                 except discord.DiscordException as error:
                     logger.warning("サブエージェント: 子の投稿を送れませんでした。", exc_info=error)
                     return

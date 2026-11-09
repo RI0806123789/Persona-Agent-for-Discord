@@ -312,6 +312,25 @@ class ThreadProgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("架空の報告の本文", replacement.send.await_args.args[0])
         self.assertEqual(self.thread.send.await_args.args[0], "架空の完了")
 
+    async def test_webhook_refetch_uses_the_bot_id_kept_at_start_even_if_guild_me_is_gone(self) -> None:
+        """長時間の作業の後に guild.me がキャッシュから外れても、再取得で AttributeError にしない（#412）。"""
+        progress = await self.open()
+        self.message.guild.me = None
+        self.webhook.send.side_effect = discord.NotFound(make_http_response(404, "Not Found"), "架空")
+        replacement = own_webhook()
+        self.channel.webhooks.return_value = [replacement]
+        with patch("persona_bot.views.agent_thread.logger"):
+            await progress.update(0, "候補の検索")
+        self.assertIs(self.webhooks._cache[self.channel.id], replacement)
+        replacement.send.assert_awaited_once()
+
+    async def test_webhook_refetch_without_any_bot_id_gives_up_quietly(self) -> None:
+        progress = await self.open()
+        progress._bot_user_id = None
+        self.webhook.send.side_effect = discord.NotFound(make_http_response(404, "Not Found"), "架空")
+        with patch("persona_bot.views.agent_thread.logger"):
+            await progress.update(0, "候補の検索")  # 例外にならず、作業は止まらない
+
     async def test_cached_webhook_deleted_before_start_is_recreated(self) -> None:
         self.webhooks._cache[self.channel.id] = self.webhook
         self.webhook.send.side_effect = discord.NotFound(make_http_response(404, "Not Found"), "架空")

@@ -427,6 +427,37 @@ class AnniversaryChannelTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(view_channel=False) if target is self.member else channel.permissions
         )
 
+    async def test_blocked_user_is_not_celebrated_or_generated_for(self):
+        """ブラックリスト登録者には、生成もメンション付きの公開投稿もしない（#412）。"""
+        self.service._is_blocked = Mock(side_effect=lambda user_id: user_id == 11)
+        await self.celebrate()
+        self.gemini.generate.assert_not_awaited()
+        for channel in self.channels.values():
+            channel.send.assert_not_awaited()
+        self.assert_recorded(False)
+
+    async def test_user_blocked_during_generation_gets_no_post(self):
+        blocked = set()
+        self.service._is_blocked = Mock(side_effect=lambda user_id: user_id in blocked)
+
+        async def generate(*args, **kwargs):
+            blocked.add(11)
+            return "架空のお祝い", None, []
+
+        self.gemini.generate.side_effect = generate
+        await self.celebrate()
+        for channel in self.channels.values():
+            channel.send.assert_not_awaited()
+        self.assert_recorded(False)
+
+    async def test_non_numeric_user_id_is_skipped_quietly(self):
+        for user_id in ("架空の非数値", "", "1.5"):
+            with self.subTest(user_id=user_id):
+                await self.service._celebrate_user(user_id, "誕生日", self.TODAY)
+        self.gemini.generate.assert_not_awaited()
+        guild = self.client.get_guild.return_value
+        self.assertIsNone(await self.service._resolve_member(guild, "架空の非数値"))
+
     async def test_anniversary_skips_channels_the_target_member_cannot_view(self):
         self.hide_from_member(self.channels[10])
         await self.celebrate()
