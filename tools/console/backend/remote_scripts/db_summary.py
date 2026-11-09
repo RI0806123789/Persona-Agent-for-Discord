@@ -8,6 +8,9 @@ from pathlib import Path
 
 
 def collect(db_path, blacklist_path):
+    # Path を渡されても動くよう、最初に文字列へそろえる（"-wal" の連結や JSON 出力で TypeError にしない）。
+    db_path = str(db_path)
+    blacklist_path = str(blacklist_path)
     result = {"path": db_path, "exists": os.path.exists(db_path), "errors": []}
 
     def count_by(con, sql, label):
@@ -80,5 +83,19 @@ def collect(db_path, blacklist_path):
     return result
 
 
+def main(argv=None):
+    # insights.py・db_table.py と同じく、引数を渡して呼べる入口にする。
+    # 標準入力から `python3 - <bot.db> <blacklist.json>` で実行されるため、引数は argv[1:] から取る。
+    args = sys.argv[1:] if argv is None else list(argv)
+    if len(args) < 2:
+        # 引数が足りないときは、生の TypeError ではなく他の結果と同じ形で案内を返す。
+        print(json.dumps({
+            "path": None, "exists": False,
+            "errors": ["引数が足りません。bot.db と blacklist.json のパスを指定してください。"],
+        }))
+        return
+    print(json.dumps(collect(args[0], args[1])))
+
+
 if __name__ == "__main__":
-    print(json.dumps(collect(*sys.argv[1:3])))
+    main()

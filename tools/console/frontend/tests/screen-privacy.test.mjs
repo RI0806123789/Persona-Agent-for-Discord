@@ -109,6 +109,37 @@ test("#292 配信先設定はIDを表示し、伏せ字の切替と旧版・自�
   assert.ok(masked.includes("指定なし（自動）"));
 });
 
+const guildPageSettings = {persona: `架空のペルソナ-${label}`, persona_source: "saved", persona_missing: `欠損-${label}`,
+  persona_builtin: false, model: null, respond_mode: null, grounding: false, auto_topic_enabled: false,
+  auto_topic_interval_hours: 6, autonomous_enabled: false, saved: true};
+const guildPageProps = (guild) => ({connected: true, connecting: false, onConnect: noop, selectedProfile: profile,
+  insights: {discord: {ok: true, error: null, guilds: [{members: 1, online: 1, voice_channel: null,
+    settings: guildPageSettings, ...guild}]}, dm_settings: guildPageSettings},
+  insightsFetchedAt: 1, insightsError: null, now: 1000});
+
+test("#413 サーバー画面のペルソナ名と注記も、描画時に既知の秘密を伏せる", () => {
+  // サーバー・DM のどちらの設定一覧にも出る。解除すると元の文面に戻る。
+  const props = guildPageProps({name: "架空サーバー"});
+  const plain = html(GuildsPage, props, false);
+  const masked = html(GuildsPage, props, true);
+  // 値の行（ペルソナ）と注記（保存値が見つからない旨）の両方に、秘密の語が含まれている
+  assert.ok(plain.includes(`架空のペルソナ-${label}`));
+  assert.ok(plain.includes(`欠損-${label}`));
+  assert.equal(masked.includes(label), false);
+  assert.ok(masked.includes(`架空のペルソナ-${privacy.MASK}`));
+  assert.ok(masked.includes(`欠損-${privacy.MASK}`));
+});
+
+test("#413 空文字・空白だけのサーバー名は代替の表示にする", () => {
+  for (const name of ["", "   ", "　\t"]) {
+    const plain = html(GuildsPage, guildPageProps({name}), false);
+    assert.ok(plain.includes("名前不明のサーバー"), JSON.stringify(name));
+    assert.ok(plain.includes(">不<"), JSON.stringify(name));
+  }
+  // 通常の名前は先頭の1文字をアバターにする。
+  assert.ok(html(GuildsPage, guildPageProps({name: "架空サーバー"}), false).includes(">架<"));
+});
+
 test("#292 サーバー・DMの配信先IDは自由文の伏せ字にも登録する", () => {
   const guildSettings = {autonomous_stage_channel_id: "FICTIONAL_STAGE_CHANNEL",
     autonomous_voice_channel_id: "FICTIONAL_VOICE_CHANNEL"};

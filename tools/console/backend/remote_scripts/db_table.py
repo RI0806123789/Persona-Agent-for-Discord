@@ -175,9 +175,13 @@ def read_table(con, table, offset, limit, result):
 def collect(db_path, table, offset=0, limit=50):
     """1ページ分を読み取り専用で収集し、実行ごとに独立した結果を返す。"""
     try:
+        # bool は int のサブクラスで、True / False が 1 / 0 として通ってしまうため不正値にする。
+        if isinstance(offset, bool) or isinstance(limit, bool):
+            raise ValueError("開始位置と件数は整数で指定します。")
         offset = max(0, int(offset))
         limit = max(1, min(int(limit), MAX_LIMIT))
-    except ValueError:
+    except (TypeError, ValueError, OverflowError):
+        # None・数値でない型・無限大なども、開始位置と件数を一緒に既定値へ戻す。
         offset, limit = 0, 50
     result = {"table": table, "offset": offset, "limit": limit, "columns": [], "rows": [], "total": 0, "users": {}, "errors": []}
     if table not in TABLES:
