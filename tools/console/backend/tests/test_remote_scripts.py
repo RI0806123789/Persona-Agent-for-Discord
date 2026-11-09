@@ -3,6 +3,7 @@
 本物のボット・Discord・ネットワークには一切触れない（Discord API の接続先は使われていないポートへ差し替える）。
 """
 
+import importlib.util
 import io
 import re
 from contextlib import closing
@@ -979,6 +980,63 @@ class DbTableScriptTests(unittest.TestCase):
             missing = self.read("reminders", db_path=db_path)
             self.assertEqual(missing["rows"], [])
             self.assertTrue(any("reminders" in error for error in missing["errors"]))
+
+
+    def test_invalid_paging_values_fall_back_to_defaults_without_raising(self) -> None:
+        """None・bool・数値でない型を渡しても、開始位置と件数を一緒に既定値へ戻す（#413）。"""
+        for offset, limit in ((None, 10), (5, None), (True, 10), (5, False), ("abc", 10), (5, "xyz"),
+                              ([], 10), (5, {}), (float("inf"), 10), (5, float("nan"))):
+            with self.subTest(offset=offset, limit=limit):
+                result = db_table.collect(str(self.db_path), "feedback", offset=offset, limit=limit)
+                self.assertEqual((result["offset"], result["limit"]), (0, 50))
+        # 正しい値と、これまでどおり変換できる値（数値の文字列）はそのまま使う。
+        result = db_table.collect(str(self.db_path), "feedback", offset="2", limit=3)
+        self.assertEqual((result["offset"], result["limit"]), (2, 3))
+        result = db_table.collect(str(self.db_path), "feedback", offset=-4, limit=10**9)
+        self.assertEqual((result["offset"], result["limit"]), (0, db_table.MAX_LIMIT))
+
+
+class DbSummaryEntryPointTests(unittest.TestCase):
+    """db_summary.py を直接 import して使うときの入口（#413）。"""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        spec = importlib.util.spec_from_file_location(
+            "db_summary_under_test", Path(__file__).resolve().parents[1] / "remote_scripts" / "db_summary.py",
+        )
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+    def test_path_objects_are_accepted_and_the_result_is_json_serializable(self) -> None:
+        db_path, _ = make_fake_database(self.root)
+        for exists in (True, False):
+            with self.subTest(exists=exists):
+                target = Path(db_path) if exists else self.root / "missing.db"
+                result = self.module.collect(target, self.root / "blacklist.json")
+                self.assertEqual(result["exists"], exists)
+                self.assertIsInstance(result["path"], str)
+                json.dumps(result)  # Path が残っていると TypeError になる
+        self.assertIn("tables", self.module.collect(Path(db_path), self.root / "blacklist.json"))
+
+    def test_main_runs_with_arguments_and_explains_missing_ones(self) -> None:
+        db_path, _ = make_fake_database(self.root)
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.module.main([str(db_path), str(self.root / "blacklist.json")])
+        self.assertTrue(json.loads(out.getvalue())["exists"])
+        for argv in ([], [str(db_path)]):
+            with self.subTest(argv=argv), patch("sys.stdout", new_callable=io.StringIO) as out:
+                self.module.main(argv)  # 生の TypeError にせず、案内を返す
+                result = json.loads(out.getvalue())
+                self.assertFalse(result["exists"])
+                self.assertTrue(result["errors"])
+
+    def test_script_runs_from_stdin_like_the_backend(self) -> None:
+        db_path, _ = make_fake_database(self.root)
+        completed = run_script(rc.DB_SUMMARY_SCRIPT, [str(db_path), str(self.root / "blacklist.json")])
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertTrue(json.loads(completed.stdout.strip().splitlines()[-1])["exists"])
 
 
 if __name__ == "__main__":

@@ -59,31 +59,35 @@ export function GuildsPage({
         </div>
       )}
 
-      {guilds.map((guild, index) => (
-        <section key={`${guild.name}-${index}`} className="m3-card m3-card-filled guild-card span-6">
-          <header className="guild-head">
-            <span className="guild-avatar" aria-hidden="true">
-              {privacy.enabled ? "•" : Array.from(typeof guild.name === "string" ? guild.name : "不明")[0]}
-            </span>
-            <div className="guild-title">
-              <h2 className="title-large">{privacy.mask(typeof guild.name === "string" ? guild.name : "名前不明のサーバー")}</h2>
-              <div className="chips">
-                <Chip icon="group">{guild.members ?? "—"} 人</Chip>
-                <Chip icon="person">オンライン {guild.online ?? "—"}</Chip>
-                {guild.voice_error ? (
-                  <StatusChip tone="warning" label="ボイス状態は未取得" />
-                ) : guild.voice_channel ? (
-                  <StatusChip tone="good" icon="voice" label={`ボイス: ${privacy.mask(guild.voice_channel)}`} />
-                ) : (
-                  <StatusChip tone="neutral" label="ボイス未接続" />
-                )}
+      {guilds.map((guild, index) => {
+        // 空文字・空白だけの名前は「名前が無い」ものとして扱う（見出しとアバター文字が空欄にならないように）。
+        const name = typeof guild.name === "string" && guild.name.trim() !== "" ? guild.name : null;
+        return (
+          <section key={`${guild.name}-${index}`} className="m3-card m3-card-filled guild-card span-6">
+            <header className="guild-head">
+              <span className="guild-avatar" aria-hidden="true">
+                {privacy.enabled ? "•" : Array.from(name ?? "不明")[0]}
+              </span>
+              <div className="guild-title">
+                <h2 className="title-large">{privacy.mask(name ?? "名前不明のサーバー")}</h2>
+                <div className="chips">
+                  <Chip icon="group">{guild.members ?? "—"} 人</Chip>
+                  <Chip icon="person">オンライン {guild.online ?? "—"}</Chip>
+                  {guild.voice_error ? (
+                    <StatusChip tone="warning" label="ボイス状態は未取得" />
+                  ) : guild.voice_channel ? (
+                    <StatusChip tone="good" icon="voice" label={`ボイス: ${privacy.mask(guild.voice_channel)}`} />
+                  ) : (
+                    <StatusChip tone="neutral" label="ボイス未接続" />
+                  )}
+                </div>
               </div>
-            </div>
-          </header>
-          {guild.voice_error && <InlineError>{guild.voice_error}</InlineError>}
-          <SettingsList settings={guild.settings} />
-        </section>
-      ))}
+            </header>
+            {guild.voice_error && <InlineError>{guild.voice_error}</InlineError>}
+            <SettingsList settings={guild.settings} />
+          </section>
+        );
+      })}
 
       <section className="m3-card m3-card-outlined guild-card span-6">
         <header className="guild-head">
@@ -115,7 +119,8 @@ function SettingsList({ settings }: { settings: GuildSettingsView }) {
   const channel = (id: string | null | undefined) =>
     id === undefined ? "この版には無い機能" : id === null ? "指定なし（自動）" : `ID: ${privacy.mask(id)}`;
   const rows: { icon: IconName; label: string; value: string; muted?: boolean }[] = [
-    { icon: "sparkle", label: "ペルソナ", value: persona.value },
+    // ペルソナ名・注記は保存値やファイル名に由来する自由文なので、描画時に既知の秘密を伏せる。
+    { icon: "sparkle", label: "ペルソナ", value: privacy.redact(persona.value) },
     { icon: "bolt", label: "モデル", value: settings.model ?? "—" },
     { icon: "chat", label: "応答", value: settings.respond_mode ?? "—" },
     { icon: "search", label: "Google 検索", value: settings.grounding ? "ON" : "OFF" },
@@ -156,7 +161,7 @@ function SettingsList({ settings }: { settings: GuildSettingsView }) {
       </ul>
       {persona.notes.map((note) => (
         <span key={note} className="body-small muted">
-          {note}
+          {privacy.redact(note)}
         </span>
       ))}
       {!settings.saved && <span className="body-small muted">保存された設定が無いため、既定値で動いています。</span>}

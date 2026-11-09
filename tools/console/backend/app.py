@@ -246,7 +246,7 @@ async def get_status() -> dict:
 
 
 @app.get("/api/logs")
-async def get_logs(lines: int = 200) -> dict:
+async def get_logs(lines: Annotated[int, Query(ge=1, le=rc.MAX_LOG_LINES)] = 200) -> dict:
     profile = session.require_profile()
     generation = session.generation
     command = rc.journal_command(profile.service, lines=lines, follow=False, use_sudo=profile.journal_sudo)

@@ -423,6 +423,18 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(query=query):
                 self.assertEqual((await request(f"/api/db/tables/feedback?{query}"))[0], 200)
 
+    async def test_logs_reject_out_of_range_lines_without_running_commands(self):
+        """GET /api/logs の lines も範囲外は 422 にし、遠隔のコマンドを送らない（#413）。"""
+        with mock.patch.object(self.session, "run", wraps=self.session.run) as run:
+            for query in ("lines=0", "lines=-5", f"lines={rc.MAX_LOG_LINES + 1}", "lines=999999", "lines=abc"):
+                with self.subTest(query=query):
+                    self.assertEqual((await request(f"/api/logs?{query}"))[0], 422)
+            self.assertEqual(run.await_count, 0)
+        # 境界の値と省略はこれまでどおり読める
+        for query in ("", "?lines=1", f"?lines={rc.MAX_LOG_LINES}"):
+            with self.subTest(query=query):
+                self.assertEqual((await request(f"/api/logs{query}"))[0], 200)
+
     async def test_db_table_rejects_unknown_tables_without_running_commands(self):
         with mock.patch.object(self.session, "run", wraps=self.session.run) as run:
             for path in ("/api/db/tables/sqlite_master", "/api/db/tables/feedback%3B%20id", "/api/db/tables/Feedback"):
