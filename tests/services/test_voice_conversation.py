@@ -912,6 +912,9 @@ class LifecycleTests(ConversationTestBase):
                 try:
                     await asyncio.sleep(3600)
                 except asyncio.CancelledError:
+                    # 通信の後始末に時間がかかる状況を再現する。待たずに終了表示へ進むと、
+                    # この後始末より先に「終了表示」の編集が走ってしまう。
+                    await asyncio.sleep(0.05)
                     order.append("update-cancelled")
                     raise
             else:
