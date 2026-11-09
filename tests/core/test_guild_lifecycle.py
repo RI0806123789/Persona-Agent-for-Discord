@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from persona_bot.core.app_state import BotState
+from persona_bot.core.app_state import BotState, _GuildSettingsLoad
 from persona_bot.core.guild_lifecycle import prepare_guild_join, remove_guild_state
 
 
@@ -114,6 +114,45 @@ class GuildRemoveTests(unittest.IsolatedAsyncioTestCase):
         guard.release.assert_not_called()
         conversation.stop.assert_not_awaited()
         self.assertEqual(state.guild_removals, {})
+
+    async def test_invalidated_load_is_dropped_so_new_load_proceeds_during_stop(self):
+        """退出で無効にした読込を辞書に残さず、待機中の新しい読込要求を失敗させない（#411）。"""
+        db = Mock()
+        db.guild_state_load.return_value = ({}, {})
+        state = BotState()
+        state._db = db
+        entered, release = asyncio.Event(), asyncio.Event()
+        stale = _GuildSettingsLoad()
+        state._guild_loads[1] = stale
+
+        async def stop(*args, **kwargs):
+            entered.set()
+            await release.wait()
+
+        task = asyncio.create_task(remove_guild_state(
+            1, state, SimpleNamespace(stop_session=stop), SimpleNamespace(release=Mock()),
+        ))
+        await entered.wait()
+        self.assertFalse(stale.valid)
+        self.assertNotIn(1, state._guild_loads)
+        settings = await asyncio.wait_for(state.get_guild_async(1), 2)
+        self.assertIs(state.guild_settings[1], settings)
+        release.set()
+        await task
+        # 開始時に未ロードだった退出では、待機中に作られた設定も回収される（孤児にしない）。
+        self.assertNotIn(1, state.guild_settings)
+        self.assertNotIn(1, state._guild_loads)
+
+    async def test_get_guild_async_replaces_an_invalid_leftover_load(self):
+        db = Mock()
+        db.guild_state_load.return_value = ({}, {})
+        state = BotState()
+        state._db = db
+        leftover = _GuildSettingsLoad()
+        leftover.valid = False
+        state._guild_loads[1] = leftover
+        settings = await asyncio.wait_for(state.get_guild_async(1), 2)
+        self.assertIs(state.guild_settings[1], settings)
 
     async def test_only_removed_guild_is_released_after_stop_even_on_failure(self):
         for error in (None, OSError("架空の障害"), asyncio.CancelledError()):

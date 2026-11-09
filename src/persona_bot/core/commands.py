@@ -283,14 +283,16 @@ def register_commands(
                         interaction, voice_channel, already_connected=True, live=live_voice is not None,
                     )
                     return
-                # 切り替えの前に保護を解く。移動を戻している最中の処理が、切る予定の接続を
-                # 元のチャンネルへ動かそうとしないようにする。
-                if live_voice is not None:
-                    await live_voice.stop(guild.id, reason="/join による接続先の切り替え")
-                    if await requester_moved():
-                        return
+                # 切り替えの前に保護を解く（/leave と同じ順序）。移動を戻している最中の処理が、
+                # 切る予定の接続を元のチャンネルへ動かそうとしないようにする。音声会話の停止は
+                # 同意パネルの編集などで待たされるため、保護の解除はその待機より先に行う。
                 if voice_guard is not None:
                     voice_guard.release(guild.id)
+                if live_voice is not None:
+                    await live_voice.stop(guild.id, reason="/join による接続先の切り替え")
+                # ★ 音声会話を止めた後は、実行者が離脱していても途中で戻らず、必ず既存の接続を
+                # 切断する（戻ると、会話だけ止まって切断されない VC 接続が残る）。実行者の
+                # 参加状態は、切断の後にある下の確認で見る。
                 try:
                     await wait_for_cleanup(
                         voice_client.disconnect(force=True), label="参加前のボイス切断",

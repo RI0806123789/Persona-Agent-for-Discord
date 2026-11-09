@@ -29,11 +29,17 @@ async def remove_guild_state(
     settings = state.guild_settings.get(guild_id)
     if settings is not None:
         settings._active = False
-    loading = state._guild_loads.get(guild_id)
+    # ★ 読込中の古い結果は無効にして、辞書からも外す。ローカル変数が強参照を持つ間は
+    # 弱参照の辞書にも残り続け、無効なまま停止の待機中に居座ってしまう（待機中に
+    # 来た新しい読込要求が、無効な読込を掴んで失敗する）。
+    loading = state._guild_loads.pop(guild_id, None)
     if loading is not None:
         loading.valid = False
 
     def is_current() -> bool:
+        # 開始時に未ロード（None）なら、待機中に停止処理自身が get_guild で作った設定も
+        # 回収対象にする（残すと退出済みサーバーの設定が孤児になる）。再参加で作り直された
+        # 設定は、prepare_guild_join が guild_removals の所有印を外すので守られる。
         return (state.guild_removals.get(guild_id) is removal
                 and (settings is None or state.guild_settings.get(guild_id) is settings))
 

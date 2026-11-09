@@ -364,7 +364,9 @@ class BotState:
         if guild_id is None or guild_id in self.guild_settings or self._db is None:
             return self.get_guild(guild_id)
         loading = self._guild_loads.get(guild_id)
-        if loading is None:
+        if loading is None or not loading.valid:
+            # 退出で無効になった読込が残っていても掴まず、新しい読込に差し替える
+            # （古い読込の待機者は valid の確認で中止される）。
             loading = _GuildSettingsLoad()
             self._guild_loads[guild_id] = loading
         async with loading.lock:

@@ -217,6 +217,37 @@ class JoinLiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.live.stop.assert_awaited_once()
         self.channel.connect.assert_awaited_once()
 
+    async def test_switching_releases_the_guard_before_stopping_the_conversation(self):
+        """接続先の切り替えは /leave と同じ順序で、保護解除→会話停止→切断にする（#411）。"""
+        other = Mock(spec=discord.VoiceChannel, id=10)
+        old_client = FakeLiveVoiceClient(None, other)
+        self.guild.voice_client = old_client
+        order = []
+        self.voice_guard.release.side_effect = lambda *args: order.append("release")
+        self.live.stop.side_effect = lambda *args, **kwargs: order.append("stop") or True
+        old_client.disconnect.side_effect = lambda **kwargs: order.append("disconnect")
+        await self.join()
+        self.assertEqual(order[:3], ["release", "stop", "disconnect"])
+        self.channel.connect.assert_awaited_once()
+
+    async def test_requester_leaving_during_stop_still_disconnects_the_old_connection(self):
+        """会話の停止を待つ間に実行者が離脱しても、会話だけ止まった接続を残さない（#411）。"""
+        other = Mock(spec=discord.VoiceChannel, id=10)
+        old_client = FakeLiveVoiceClient(None, other)
+        self.guild.voice_client = old_client
+
+        async def stop(*args, **kwargs):
+            self.interaction.user.voice = SimpleNamespace(channel=None)
+            return True
+
+        self.live.stop.side_effect = stop
+        reply = await self.join()
+        self.voice_guard.release.assert_called_with(1)
+        old_client.disconnect.assert_awaited_once_with(force=True)
+        # 実行者が離脱したので、新しい接続は作らず中止を案内する。
+        self.channel.connect.assert_not_awaited()
+        self.assertIn("接続を中止しました", reply)
+
     async def test_leave_stops_the_conversation_before_disconnecting(self):
         voice_client = FakeLiveVoiceClient(None, self.channel)
         self.guild.voice_client = voice_client

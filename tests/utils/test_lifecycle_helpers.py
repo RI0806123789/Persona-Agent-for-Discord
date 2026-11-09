@@ -53,8 +53,20 @@ class LifecycleHelperTests(unittest.IsolatedAsyncioTestCase):
 
     def test_split_consumes_one_separator_and_preserves_blank_line_and_indent(self):
         self.assertEqual(split_message("1234567\n\n  abcdef", limit=10), ["1234567\n", "  abcdef"])
-        self.assertEqual(split_message("123456789\n\n  abcdef", limit=10), ["123456789", "\n  abcdef"])
+        # text[limit] の改行も区切りとして使う（#411）。2つ目の改行を区切りとして1つだけ消費し、
+        # 1つ目は前のチャンクの末尾に残る（連結し直すと原文に戻る）。
+        self.assertEqual(split_message("123456789\n\n  abcdef", limit=10), ["123456789\n", "  abcdef"])
         self.assertEqual([len(chunk) for chunk in split_message("あ" * 4001)], [2000, 2000, 1])
+
+    def test_split_finds_a_separator_right_after_the_limit(self):
+        # 制限ちょうどの次の文字（text[limit]）が区切りなら、手前の空白で不要に分割しない（#411）。
+        for separator in ("\n", " "):
+            with self.subTest(separator=repr(separator)):
+                head = "あ" * 4 + " " + "い" * 5  # 10文字（途中に空白がある）
+                self.assertEqual(len(head), 10)
+                self.assertEqual(split_message(head + separator + "う" * 6, limit=10), [head, "う" * 6])
+        text = "あ" * 1000 + " " + "い" * 999 + "\n" + "う" * 1500
+        self.assertEqual(split_message(text, limit=2000), ["あ" * 1000 + " " + "い" * 999, "う" * 1500])
 
     def test_split_discards_whitespace_only_chunks_at_boundaries_and_between_text(self):
         for whitespace in ("\n   ", " " * 4001, "\n" * 4001):
@@ -72,7 +84,8 @@ class LifecycleHelperTests(unittest.IsolatedAsyncioTestCase):
     def test_split_preserves_code_block_indentation_and_surrounding_whitespace(self):
         text = " \n```python\n    架空の処理()\n```\n "
         self.assertEqual(split_message(text), [text])
-        self.assertEqual(split_message("あ" * 2000 + text), ["あ" * 2000, text])
+        # text[limit] の空白は区切りとして1つ消費される（コードブロックの字下げと改行は残る）。
+        self.assertEqual(split_message("あ" * 2000 + text), ["あ" * 2000, text[1:]])
 
     def test_symbols_do_not_reach_speech_engines_but_letters_and_digits_survive(self):
         for text in ("！！！", "「……？」", "👋😊", "[V:1,A:0] ……"):
