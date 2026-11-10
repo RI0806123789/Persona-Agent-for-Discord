@@ -189,7 +189,7 @@ class JoinCommandTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(error=type(error).__name__):
                 self.interaction.followup.send.reset_mock()
                 self.channel.connect.side_effect = error
-                with self.assertLogs("persona_bot.core.commands", level="WARNING") as logs:
+                with self.assertLogs("persona_bot.core.voice_commands", level="WARNING") as logs:
                     reply = await self.join()
                 self.assertNotIn("架空の内部設定情報", reply)
                 self.assertNotIn(type(error).__name__, reply)

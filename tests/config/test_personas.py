@@ -189,6 +189,45 @@ class PersonaSettingsTests(PersonaFolderTestCase):
                 self.write_settings(settings)
                 self.assertEqual([p.name for p in self.load().personas], ["a"])
 
+    def test_non_object_sections_warn_with_what_happens_and_without_the_value(self) -> None:
+        """各項目が dict でないときの警告（#414 で共通ヘルパーへまとめた文面を保つ）。"""
+        self.write("a.txt")
+        cases = {
+            "personas": ({"personas": ["秘密の値"]}, "personas.json の personas はオブジェクト", "表示名と声の設定を使わずに続行"),
+            "persona": ({"personas": {"a.txt": "秘密の値"}}, "「<設定値>」はオブジェクト", "既定の表示名と声を使います"),
+            "voice": ({"personas": {"a.txt": {"voice": "秘密の値"}}}, "「<設定値>」の voice はオブジェクト", "既定の声を使います"),
+            "agent": ({"personas": {"a.txt": {"agent": "秘密の値"}}}, "「<設定値>」の agent はオブジェクト", "既定の文面を使います"),
+        }
+        for name, (settings, subject, consequence) in cases.items():
+            with self.subTest(section=name):
+                self.write_settings(settings)
+                with self.assertLogs("persona_bot.config.personas", level="WARNING") as captured:
+                    catalog = self.load()
+                text = "\n".join(LOG_FORMATTER.format(record) for record in captured.records)
+                self.assertIn(subject, text)
+                self.assertIn(consequence, text)
+                self.assertNotIn("秘密の値", text)
+                self.assertEqual(catalog.voice_profile("../prompts/a.txt")["voice"], VOICE_PROFILE_FALLBACK["voice"])
+                self.assertEqual(dict(catalog.agent_lines("../prompts/a.txt")), constants.AGENT_DEFAULT_LINES)
+
+    def test_unsupported_keys_are_warned_once_and_skipped_without_printing_them(self) -> None:
+        self.write("a.txt")
+        self.write_settings({"personas": {"a.txt": {
+            "voice": {"pitch": "+10Hz", "秘密の項目1": "x", "秘密の項目2": "y"},
+            "agent": {"done": "架空の完了", "秘密の項目3": "z", "avatar_url": "https://example.invalid/a.png"},
+        }}})
+        with self.assertLogs("persona_bot.config.personas", level="WARNING") as captured:
+            catalog = self.load()
+        messages = [LOG_FORMATTER.format(record) for record in captured.records]
+        # 未対応の項目が複数あっても、項目ごとに同じ警告を繰り返さず、使える項目を 1 回だけ案内する
+        self.assertEqual(sum("voice に未対応の項目" in message for message in messages), 1)
+        self.assertEqual(sum("agent に未対応の項目" in message for message in messages), 1)
+        self.assertNotIn("秘密の項目", "\n".join(messages))
+        # 使える項目は反映される（avatar_url は文面ではなく、別に点検されて残る）
+        self.assertEqual(catalog.voice_profile("../prompts/a.txt")["pitch"], "+10Hz")
+        self.assertEqual(catalog.agent_lines("../prompts/a.txt")["done"], "架空の完了")
+        self.assertEqual(catalog.agent_avatar_url("../prompts/a.txt"), "https://example.invalid/a.png")
+
 
 class SettingsTemplateTests(PersonaFolderTestCase):
     """公開している personas.json の見本（prompts/00_prompt_format.json）が、コピーしてそのまま使えること。"""
@@ -352,6 +391,19 @@ class PersonaLoadingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(personas.current_persona_catalog(), previous)
         self.assertTrue(threads)
         self.assertNotIn(threading.get_ident(), threads)
+
+    async def test_refresh_installs_the_new_catalog_quietly_while_reload_announces(self) -> None:
+        """パネルを開くたびの再読込は件数を記録しない。起動時の再読込は記録する（#414）。"""
+        install_persona_catalog(self, "../prompts/前回.txt")
+        fresh = personas.PersonaCatalog((personas.Persona("../prompts/新.txt", "新", VOICE_PROFILE_FALLBACK),))
+        with patch.object(personas, "load_persona_catalog", return_value=fresh), \
+                patch("persona_bot.config.personas.logger") as logger:
+            self.assertIs(await personas.refresh_persona_catalog(), fresh)
+            logger.info.assert_not_called()
+            self.assertIs(personas.current_persona_catalog(), fresh)
+            self.assertIs(personas.reload_persona_catalog(), fresh)
+            logger.info.assert_called_once()
+        self.assertIs(personas.current_persona_catalog(), fresh)
 
 
 class SettingsPanelTests(unittest.IsolatedAsyncioTestCase):

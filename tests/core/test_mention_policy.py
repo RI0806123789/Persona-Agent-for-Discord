@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import discord
 from persona_bot.core.bot_client import PersonaClient
-from persona_bot.core.commands import announce_voice_join
+from persona_bot.core.voice_commands import announce_voice_join
 
 
 class MentionPolicyTests(unittest.IsolatedAsyncioTestCase):
@@ -45,7 +45,7 @@ class MentionPolicyTests(unittest.IsolatedAsyncioTestCase):
         for error in (None, RuntimeError("架空の昇格失敗")):
             with self.subTest(error=error):
                 interaction.followup.send.reset_mock()
-                with patch("persona_bot.core.commands.enable_stage_speaker", new=AsyncMock(side_effect=error)):
+                with patch("persona_bot.core.voice_commands.enable_stage_speaker", new=AsyncMock(side_effect=error)):
                     await announce_voice_join(interaction, channel)
                 interaction.followup.send.assert_awaited_once()
                 self.assertIn(channel.name, interaction.followup.send.await_args.args[0])

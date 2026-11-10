@@ -322,7 +322,7 @@ class AutonomousStartRaceTests(unittest.IsolatedAsyncioTestCase):
         self.channel.connect.side_effect = connect
         self.voice.disconnect.side_effect = disconnect
         with patch.object(autonomous_stage, "prepare_stage", AsyncMock(side_effect=prepare)), patch(
-            "persona_bot.core.commands.announce_voice_join", new_callable=AsyncMock,
+            "persona_bot.core.voice_commands.announce_voice_join", new_callable=AsyncMock,
         ) as announce:
             start = spawn(self.start(), label="ステージ準備待機の検証")
             join = None

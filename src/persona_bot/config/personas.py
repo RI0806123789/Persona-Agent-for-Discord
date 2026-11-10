@@ -198,10 +198,7 @@ def load_persona_catalog(prompts_dir: Path | None = None, settings_path: Path | 
     settings = _load_persona_settings(settings_path)
 
     entries = settings.get("personas")
-    if entries is None:
-        entries = {}
-    elif not isinstance(entries, dict):
-        logger.warning('警告: personas.json の personas はオブジェクト（{ }）で書いてください。表示名と声の設定を使わずに続行します。')
+    if entries is None or not _expect_object(entries, " personas ", "表示名と声の設定を使わずに続行します。"):
         entries = {}
 
     # personas.json に書いた順を優先し、書いていないファイルはファイル名の順に続ける
@@ -215,14 +212,20 @@ def load_persona_catalog(prompts_dir: Path | None = None, settings_path: Path | 
     return PersonaCatalog(personas, _resolve_default(settings.get("default"), personas))
 
 
-def reload_persona_catalog() -> PersonaCatalog:
-    """一覧を読み直して差し替える（起動時用。読めなければ前回の一覧を保つ）。"""
+def reload_persona_catalog(*, announce: bool = True) -> PersonaCatalog:
+    """一覧を読み直して差し替える（読めなければ前回の一覧を保つ）。ファイルを読むので別スレッドで呼べる。
+
+    announce が真なら、読み込んだ件数（0件のときは作り方の案内）を INFO で記録する。起動時用。
+    パネルを開くたびの再読込（`refresh_persona_catalog`）では出さない。
+    """
     try:
         catalog = load_persona_catalog()
     except OSError as error:
         logger.warning(f'警告: prompts/ を読めませんでした（{type(error).__name__}）。前回のペルソナ一覧を使います。', exc_info=error)
         return _catalog
     set_persona_catalog(catalog)
+    if not announce:
+        return catalog
     if not catalog.personas:
         logger.info(f'ペルソナ: prompts/ に利用できるペルソナがありません。prompts/{PROMPT_TEMPLATE_FILE_NAME} をコピーして prompts/<名前>.txt を作ると、キャラ設定から選べます（作るまでは組み込みの標準プロンプトで応答します）。表示名と声は prompts/{PERSONA_SETTINGS_TEMPLATE_FILE_NAME} を prompts/personas.json にコピーして決められます。')
     else:
@@ -234,13 +237,7 @@ async def refresh_persona_catalog() -> PersonaCatalog:
     """一覧を別スレッドで読み直して差し替える（キャラ設定パネルを開くとき用）。"""
     from persona_bot.core.background import run_in_thread
 
-    try:
-        catalog = await run_in_thread(load_persona_catalog)
-    except OSError as error:
-        logger.warning(f'警告: prompts/ を読めませんでした（{type(error).__name__}）。前回のペルソナ一覧を使います。', exc_info=error)
-        return _catalog
-    set_persona_catalog(catalog)
-    return catalog
+    return await run_in_thread(reload_persona_catalog, announce=False)
 
 
 def _scan_persona_files(prompts_dir: Path) -> set[str]:
@@ -278,9 +275,31 @@ def _load_persona_settings(settings_path: Path) -> dict[str, Any]:
     return settings
 
 
+def _expect_object(value: Any, subject: str, consequence: str) -> bool:
+    """値が JSON のオブジェクト（dict）なら True。違えば警告して False（呼び出し側が既定へ戻す）。
+
+    subject は警告文の「personas.json の」と「はオブジェクト」の間に入る文字列、consequence は
+    警告の最後に添える「どうなるか」の説明。設定値そのもの（利用者のファイル名など）は載せない。
+    """
+    if isinstance(value, dict):
+        return True
+    logger.warning(f'警告: personas.json の{subject}はオブジェクト（{{ }}）で書いてください。{consequence}')
+    return False
+
+
+def _unsupported_keys(section: str, raw: dict[str, Any], allowed: tuple[str, ...]) -> set[str]:
+    """raw のうち allowed に無い項目名を返す。あれば使える項目を 1 回だけ警告する。
+
+    項目名そのもの（利用者が書いた文字列）はログに出さない。呼び出し側は返された項目を読み飛ばす。
+    """
+    unknown = set(raw) - set(allowed)
+    if unknown:
+        logger.warning("警告: personas.json の %s に未対応の項目があります。使える項目: %s", section, ', '.join(allowed))
+    return unknown
+
+
 def _build_persona(file_name: str, entry: Any) -> Persona:
-    if entry is not None and not isinstance(entry, dict):
-        logger.warning('警告: personas.json の「<設定値>」はオブジェクト（{ }）で書いてください。既定の表示名と声を使います。')
+    if entry is not None and not _expect_object(entry, "「<設定値>」", "既定の表示名と声を使います。"):
         entry = {}
     entry = entry or {}
     name = entry.get("name")
@@ -298,14 +317,11 @@ def _build_persona(file_name: str, entry: Any) -> Persona:
 
 def _build_voice(file_name: str, voice: Any) -> dict[str, Any]:
     profile = dict(VOICE_PROFILE_FALLBACK)
-    if voice is None:
+    if voice is None or not _expect_object(voice, "「<設定値>」の voice ", "既定の声を使います。"):
         return profile
-    if not isinstance(voice, dict):
-        logger.warning('警告: personas.json の「<設定値>」の voice はオブジェクト（{ }）で書いてください。既定の声を使います。')
-        return profile
+    unsupported = _unsupported_keys("voice", voice, _VOICE_KEYS)
     for key, value in voice.items():
-        if key not in _VOICE_KEYS:
-            logger.warning("警告: personas.json の voice に未対応の項目があります。使える項目: %s", ', '.join(_VOICE_KEYS))
+        if key in unsupported:
             continue
         if not isinstance(value, str) or not value:
             logger.warning(f'警告: personas.json の「<設定値>」の voice.{key} は文字列で書いてください。既定値を使います。')
@@ -329,18 +345,15 @@ def _build_agent_lines(file_name: str, agent: Any) -> dict[str, str]:
     差し込みの書き間違い（{stpe} や閉じ忘れの {）は表示のたびに例外になるため、
     読み込み時に確かめて、その項目だけ既定の文面に戻す（ファイルは書き換えない）。
     """
-    if agent is None:
+    if agent is None or not _expect_object(agent, "「<設定値>」の agent ", "既定の文面を使います。"):
         return {}
-    if not isinstance(agent, dict):
-        logger.warning('警告: personas.json の「<設定値>」の agent はオブジェクト（{ }）で書いてください。既定の文面を使います。')
-        return {}
+    unsupported = _unsupported_keys("agent", agent, (*AGENT_LINE_KEYS, _AGENT_AVATAR_KEY))
     lines: dict[str, str] = {}
     for key, value in agent.items():
         if key == _AGENT_AVATAR_KEY:
             # 文面ではないので _build_agent_avatar_url が点検する
             continue
-        if key not in AGENT_LINE_KEYS:
-            logger.warning("警告: personas.json の agent に未対応の項目があります。使える項目: %s", ', '.join((*AGENT_LINE_KEYS, _AGENT_AVATAR_KEY)))
+        if key in unsupported:
             continue
         if not isinstance(value, str) or not value.strip():
             logger.warning(f'警告: personas.json の「<設定値>」の agent.{key} は文字列で書いてください。既定の文面を使います。')

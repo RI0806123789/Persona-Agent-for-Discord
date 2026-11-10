@@ -103,7 +103,7 @@ class AffinityPersistenceTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(database, "AFFINITY_NEUTRAL", 40):
             self.db.affinity_save_all({"explicit-user": {}})
             self.db.affinity_upsert("new-user", {})
-            self.db._import_affinity_json(legacy)
+            self.db._legacy.import_affinity_json(legacy)
         for user_id, entry in self.db.affinity_load_all().items():
             with self.subTest(user_id=user_id):
                 self.assertEqual(entry, {
@@ -121,7 +121,7 @@ class AffinityPersistenceTests(unittest.IsolatedAsyncioTestCase):
                 with patch.object(database, "AFFINITY_NEUTRAL", 40):
                     self.db.affinity_save_all({"explicit-user": entry})
                     self.db.affinity_upsert("new-user", entry)
-                    self.db._import_affinity_json(legacy)
+                    self.db._legacy.import_affinity_json(legacy)
                 for data in self.db.affinity_load_all().values():
                     self.assertEqual(data, {
                         "affinity": expected, "valence": expected, "arousal": expected, "last_interaction": 0.0,
@@ -144,7 +144,7 @@ class AffinityPersistenceTests(unittest.IsolatedAsyncioTestCase):
                 legacy.write_text(json.dumps({"legacy-user": entry}), encoding="utf-8")
                 self.db.affinity_save_all({"explicit-user": entry})
                 self.db.affinity_upsert("new-user", entry)
-                self.db._import_affinity_json(legacy)
+                self.db._legacy.import_affinity_json(legacy)
                 for data in self.db.affinity_load_all().values():
                     self.assertEqual((data["affinity"], data["valence"], data["arousal"]), (expected,) * 3)
 

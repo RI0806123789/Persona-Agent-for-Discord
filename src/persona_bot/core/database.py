@@ -5,9 +5,11 @@
 
 `Database` は窓口（ファサード）で、次の2つの責務を別のモジュールへ分けている。
   - db_migrations.py        … スキーマの定義（初版のテーブル作成・バージョンごとの変更）と、その適用
-  - db_legacy_importers.py  … 旧ファイルの読み取りと解釈（DB・ロック・ログには触れない）
-どちらも `Database` のメソッドを通して使い、外から見たメソッド名・引数・挙動は分離前と同じ。
-DB への書き込み・ロック・取り込み後の改名・ログは、このモジュールが担当する。
+  - db_legacy_importers.py  … 旧ファイルの読み取り・解釈と、旧データの DB への取り込み（#414）
+どちらも `Database` を通して使い、外から見たメソッド名・引数・挙動は分離前と同じ。
+旧データの取り込み（`LegacyDataImporter`）は、このモジュールの接続・ロックを共有し、ログの出力元
+（`persona_bot.core.database`）・退避先の連番の上限（`LEGACY_BACKUP_MAX_SUFFIX`）・取り込みの値の変換
+（`_affinity_row_params` など。通常の保存と共有する）はこのモジュールの定義を使う。
 
   - affinity     … ユーザーごとの親密度・感情（旧 affinity.json）
   - user_stats   … ユーザー別会話統計（旧 user_stats.json）
@@ -64,14 +66,7 @@ from persona_bot.config.constants import (
     STATS_HOURLY_BUCKETS,
     STATS_OPT_OUT_DEFAULT,
 )
-from persona_bot.core.db_legacy_importers import (
-    free_backup_path,
-    load_legacy_queue_tasks,
-    load_legacy_user_entries,
-    load_profile_json,
-    parse_pending_log,
-    split_profile_by_user,
-)
+from persona_bot.core.db_legacy_importers import LegacyDataImporter, LegacyRowParams
 # テストと既存の呼び出しが `database._MIGRATIONS` / `database._CREATE_TABLE_STATEMENTS` で参照・差し替えるため、
 # 先頭にアンダースコアを付けた別名で持つ（同じオブジェクトなので、patch.dict の変更は定義側にも届く）。
 from persona_bot.core.db_migrations import (
@@ -223,6 +218,19 @@ class Database:
         self._conn.row_factory = sqlite3.Row  # 行に列名でアクセスできるようにする
         # WAL モード: ボット稼働中でも sqlite3 CLI 等から安全に読み取れる
         self._conn.execute("PRAGMA journal_mode=WAL")
+        # 旧データの取り込み（#414）。値の変換・ロガー・退避先の連番の上限・オーナーIDは、
+        # このモジュールの定義を呼出しのたびに読む（テストが差し替えるため、ここで固定しない）。
+        self._legacy = LegacyDataImporter(
+            self._conn, self._lock, self._legacy_dir,
+            owner_id=lambda: self._legacy_owner_id,
+            row_params=LegacyRowParams(
+                affinity=_affinity_row_params, user_stats=_user_stats_row_params, queue=_queue_row_params,
+            ),
+            profile_merge=lambda user_id, profile: self.profile_merge(user_id, profile),
+            write_json=lambda path, data: write_json_file(path, data),
+            backup_max_suffix=lambda: LEGACY_BACKUP_MAX_SUFFIX,
+            get_logger=lambda: logger,
+        )
 
     def initialize(self) -> None:
         """テーブル作成 → スキーマ移行 → 旧行の owner 移行 → 旧ファイル取り込み → profile.json 吸収。起動時に1回呼ぶ。"""
@@ -238,9 +246,9 @@ class Database:
         # 途中失敗で取り消された移行を、成功したように記録しない。
         for version in applied_versions:
             logger.info(f'データベース: スキーマをバージョン {version} へ移行しました。')
-        self._migrate_legacy_profile_rows()
-        self._import_legacy_files()
-        self._absorb_profile_json()
+        self._legacy.migrate_profile_rows()
+        self._legacy.import_files()
+        self._legacy.absorb_profile_json()
         with self._lock:
             # 旧テーブルの回収で schema_version が変わった場合も、初期化中に検査を終える。
             self._validate_guild_settings_schema()
@@ -263,179 +271,6 @@ class Database:
         渡すだけにしている（テストがこれらを差し替えて、段階的な移行や途中失敗を再現するため）。
         """
         return apply_migrations(self._conn, SCHEMA_VERSION, _MIGRATIONS)
-
-    def _migrate_legacy_profile_rows(self) -> None:
-        """ユーザー別記憶への移行の後始末（冪等）。
-
-        バージョン3の移行で退避した profile_legacy_v2（旧・全体共有プロフィール）の
-        行を owner の user_id に割り当てて新 profile へ移し、退避テーブルを削除する。
-        あわせて pending_log の user_id 未設定行（旧・全体共有）も owner へ振り直す。
-
-        スキーマ移行本体（_apply_migrations）とは別トランザクションで走るため、
-        途中でクラッシュしても次回起動時にこのメソッドが再実行されて完了する
-        （テーブルの有無・行の user_id で判定するため二重実行されても安全）。
-        owner が空文字の場合は引き継ぎ元を破棄する（旧データを捨てる）。
-        """
-        owner = self._legacy_owner_id
-        with self._lock, self._conn:
-            legacy_exists = self._conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='profile_legacy_v2'"
-            ).fetchone()
-            if legacy_exists is not None:
-                if owner:
-                    # 既に owner に同名キーがあれば旧値で上書きしない（新 DB 側を正とする）
-                    self._conn.execute(
-                        "INSERT OR IGNORE INTO profile (user_id, key, value)"
-                        " SELECT ?, key, value FROM profile_legacy_v2",
-                        (owner,),
-                    )
-                    logger.info('データベース: 旧・全体共有プロフィールを user_id=<ID> へ移行しました。')
-                self._conn.execute("DROP TABLE profile_legacy_v2")
-            if owner:
-                cursor = self._conn.execute(
-                    "UPDATE pending_log SET user_id = ? WHERE user_id = ''", (owner,)
-                )
-                if cursor.rowcount:
-                    logger.info(f'データベース: pending_log の未割当 {cursor.rowcount} 件を user_id=<ID> へ振り直しました。')
-            else:
-                # 引き継ぎ先が無いときは、旧・全体共有の会話ログも破棄する（profile と同じ方針）。
-                # 残すと user_id='' の「誰でもない利用者」として記憶圧縮の対象に数えられ、
-                # 誰も読まない記憶を作るために Gemini を呼び続ける。
-                cursor = self._conn.execute("DELETE FROM pending_log WHERE user_id = ''")
-                if cursor.rowcount:
-                    logger.warning(f'データベース: 引き継ぎ先が無いため、pending_log の未割当 {cursor.rowcount} 件を破棄しました。')
-
-    # ---- 旧 JSON / テキストファイルの取り込み --------------------------------
-
-    # ファイルの読み取りと解釈は db_legacy_importers が行い、ここ（Database）は DB への書き込み・
-    # ロック・取り込み後の改名・ログだけを担当する。値の変換（*_row_params）は通常の保存と共有する。
-
-    def _import_legacy_files(self) -> None:
-        importers = [
-            ("affinity.json", self._import_affinity_json),
-            ("user_stats.json", self._import_user_stats_json),
-            ("queue.json", self._import_queue_json),
-            ("pending_log.txt", self._import_pending_log_txt),
-        ]
-        for filename, importer in importers:
-            path = self._legacy_dir / filename
-            if not path.exists():
-                continue
-            try:
-                # 退避先は取り込みの前に決める。空きが無ければ取り込まずに元のファイルを残す。
-                # 起動処理は単一のスレッドで動くため、決めてから改名するまでに同名は作られない。
-                backup_path = free_backup_path(path, LEGACY_BACKUP_MAX_SUFFIX)
-                importer(path)
-                path.replace(backup_path)
-                logger.info(f'データベース: {filename} を取り込み、{backup_path.name} に改名しました。')
-            except Exception as error:
-                # 取り込み失敗でも起動は続ける（ファイルが残るので次回起動時に再試行される）
-                logger.error(f'データベース: {filename} の取り込みに失敗しました: {type(error).__name__}', exc_info=error)
-
-    def _import_affinity_json(self, path: Path) -> None:
-        entries = load_legacy_user_entries(path)
-        with self._lock, self._conn:
-            for user_id, entry in entries:
-                # 既に DB にあるユーザーは上書きしない（DB 側を正とする）
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO affinity"
-                    " (user_id, affinity, valence, arousal, last_interaction)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    _affinity_row_params(user_id, entry),
-                )
-
-    def _import_user_stats_json(self, path: Path) -> None:
-        entries = load_legacy_user_entries(path)
-        with self._lock, self._conn:
-            for user_id, entry in entries:
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO user_stats"
-                    " (user_id, user_name, total_count, hourly, first_seen, last_seen,"
-                    "  recent_samples, analysis, stats_opt_out)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    _user_stats_row_params(user_id, entry),
-                )
-
-    def _import_queue_json(self, path: Path) -> None:
-        tasks = load_legacy_queue_tasks(path)
-        with self._lock, self._conn:
-            for task in tasks:
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO queue_tasks"
-                    " (task_id, status, channel_id, message_id, author_id, question,"
-                    "  attachment_count, created_at, updated_at, finished_at, error)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    _queue_row_params(task),
-                )
-
-    def _import_pending_log_txt(self, path: Path) -> None:
-        """旧 pending_log.txt（[時刻] User: … / [時刻] Bot: … 形式）を行単位で復元する。"""
-        # 読み取った同じバイト列からハッシュと会話を作り、別内容の取り違えを防ぐ（解釈は parse_pending_log）。
-        parsed = parse_pending_log(path.read_bytes())
-        if parsed is None:
-            return
-        content_hash, entries = parsed.content_hash, parsed.entries
-
-        # 旧 pending_log.txt はユーザー別記憶の導入前のもの＝全体共有。owner に紐付ける。
-        owner = self._legacy_owner_id
-        if not owner:
-            # 引き継ぎ先が無ければ取り込まない（_migrate_legacy_profile_rows と同じく破棄する）。
-            # ファイルは呼び出し元が .imported.bak へ改名して残すため、内容は失われない。
-            if entries:
-                logger.info(f'データベース: 引き継ぎ先が無いため、pending_log.txt の {len(entries)} 件は取り込みません。')
-            return
-        with self._lock, self._conn:
-            imported = self._conn.execute(
-                "SELECT 1 FROM legacy_imports WHERE source_name = ? AND content_hash = ?",
-                (path.name, content_hash),
-            ).fetchone()
-            if imported:
-                return
-            for entry in entries:
-                self._conn.execute(
-                    "INSERT INTO pending_log (user_id, created_at, question, response) VALUES (?, ?, ?, ?)",
-                    (owner, entry["created_at"], entry["question"], entry["response"]),
-                )
-            # INSERTと同じトランザクションで確定する。失敗時は両方とも再試行できる。
-            self._conn.execute(
-                "INSERT INTO legacy_imports (source_name, content_hash) VALUES (?, ?)",
-                (path.name, content_hash),
-            )
-
-    def _absorb_profile_json(self) -> None:
-        """profile.json に書き足された内容を profile テーブルへ吸収する（毎起動時）。
-
-        ユーザー別記憶に対応するため、形式は {ユーザーID: {キー: 値, ...}, ...}。
-        各ユーザーごとにトップレベルキー単位でマージ（同名キーはファイル側が勝つ）し、
-        ファイルを {} に戻す。数字のユーザーIDと dict の組でないもの（旧・全体共有形式の
-        手書き）は owner のプロフィールとして取り込む（後方互換）。
-        JSON として読めない場合はファイルを壊さず残し、警告だけ出してスキップする
-        （手書きミスでデータを失わないため）。
-        """
-        path = self._legacy_dir / "profile.json"
-        if not path.exists():
-            return
-        try:
-            data = load_profile_json(path)
-            if data is None:
-                return
-
-            # 形式の判定（ユーザー別か、旧・全体共有か）と振り分けは split_profile_by_user が行う。
-            absorbed: dict[str, list[str]] = {}
-            for user_id, profile in split_profile_by_user(data, self._legacy_owner_id).items():
-                self.profile_merge(user_id, profile)
-                absorbed[user_id] = list(profile.keys())
-
-            if not absorbed:
-                logger.warning('データベース: profile.json に取り込めるプロフィールがありません。ユーザー別形式と旧形式の引継ぎ先を確認してください。ファイルを保持します。')
-                return
-
-            write_json_file(path, {})
-            logger.info(f'データベース: profile.json から {len(absorbed)} 人分・{sum((len(keys) for keys in absorbed.values()))} 項目を profile テーブルへ追加しました。')
-        except json.JSONDecodeError as error:
-            logger.error(f'データベース: profile.json が JSON として読めないため取り込みをスキップします: {type(error).__name__}', exc_info=error)
-        except Exception as error:
-            logger.error(f'データベース: profile.json の取り込みに失敗しました: {type(error).__name__}', exc_info=error)
 
     # ---- profile（プロフィール記憶） ------------------------------------------
 
@@ -510,7 +345,7 @@ class Database:
         """
         with self._lock:
             rows = self._conn.execute("SELECT * FROM guild_settings").fetchall()
-        return {row["guild_id"]: self._guild_settings_values(row) for row in rows}
+        return self._settings_by_guild(rows)
 
     @staticmethod
     def _guild_settings_values(row: sqlite3.Row) -> dict[str, Any]:
@@ -520,16 +355,30 @@ class Database:
             for name, _, kind, _ in GUILD_SETTINGS_FIELDS
         }
 
+    @classmethod
+    def _settings_by_guild(cls, rows: list[sqlite3.Row]) -> dict[int, dict[str, Any]]:
+        """guild_settings の全行を {guild_id: {列名: 値}} に変換する（全件読込の共通処理）。"""
+        return {row["guild_id"]: cls._guild_settings_values(row) for row in rows}
+
+    @staticmethod
+    def _post_key(row: sqlite3.Row) -> str:
+        """anniversary_posts の1行を GuildSettings.anniversary_posted_dates のキー（"ユーザーID:呼び名"）にする。"""
+        return f"{row['user_id']}:{row['label']}"
+
+    @classmethod
+    def _posts_by_guild(cls, rows: list[sqlite3.Row]) -> dict[int, dict[str, str]]:
+        """anniversary_posts の全行を {guild_id: {"ユーザーID:呼び名": 投稿日}} に変換する（全件読込の共通処理）。"""
+        posted: dict[int, dict[str, str]] = {}
+        for row in rows:
+            posted.setdefault(row["guild_id"], {})[cls._post_key(row)] = row["posted_date"]
+        return posted
+
     def guild_state_load_all(self) -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, str]]]:
         """起動時の設定と投稿記録を同じロック内で読み出す。"""
         with self._lock:
             settings = self._conn.execute("SELECT * FROM guild_settings").fetchall()
             posts = self._conn.execute("SELECT * FROM anniversary_posts").fetchall()
-        values = {row["guild_id"]: self._guild_settings_values(row) for row in settings}
-        posted: dict[int, dict[str, str]] = {}
-        for row in posts:
-            posted.setdefault(row["guild_id"], {})[f"{row['user_id']}:{row['label']}"] = row["posted_date"]
-        return values, posted
+        return self._settings_by_guild(settings), self._posts_by_guild(posts)
 
     def guild_state_load(self, guild_id: int) -> tuple[dict[str, Any], dict[str, str]]:
         """1サーバー分の設定と記念日の投稿記録を、同じロック内で読み出す。
@@ -547,7 +396,7 @@ class Database:
                 (guild_key,),
             ).fetchall()
         values = self._guild_settings_values(row) if row is not None else {}
-        posted = {f"{post['user_id']}:{post['label']}": post["posted_date"] for post in posts}
+        posted = {self._post_key(post): post["posted_date"] for post in posts}
         return values, posted
 
     def guild_settings_save(self, guild_id: int, **values: Any) -> None:
@@ -599,10 +448,7 @@ class Database:
         """
         with self._lock:
             rows = self._conn.execute("SELECT * FROM anniversary_posts").fetchall()
-        result: dict[int, dict[str, str]] = {}
-        for row in rows:
-            result.setdefault(row["guild_id"], {})[f"{row['user_id']}:{row['label']}"] = row["posted_date"]
-        return result
+        return self._posts_by_guild(rows)
 
     def anniversary_post_record(self, guild_id: int, user_id: str, label: str, posted_date: str) -> None:
         """お祝いを投稿したことを記録する（同じサーバー・同じ記念日の行は上書き）。

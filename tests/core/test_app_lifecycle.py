@@ -22,6 +22,36 @@ from persona_bot.core.database import Database
 from persona_bot.config.choices import MODEL_CHOICES
 
 
+class StartBackgroundOnceTests(unittest.TestCase):
+    """on_ready が再接続のたびに発火しても、見回りループを二重起動しない（#414）。"""
+
+    def test_starts_once_and_keeps_the_existing_flag_names(self) -> None:
+        state = BotState()
+        start = Mock()
+        self.assertTrue(state.start_background_once("memory_background_started", start))
+        self.assertTrue(state.memory_background_started)
+        self.assertFalse(state.start_background_once("memory_background_started", start))
+        start.assert_called_once_with()
+        # 別のフラグは独立している
+        other = Mock()
+        self.assertTrue(state.start_background_once("document_worker_started", other))
+        self.assertTrue(state.document_worker_started)
+        self.assertFalse(state.reminder_background_started)
+
+    def test_failed_start_does_not_set_the_flag_so_the_next_ready_retries(self) -> None:
+        state = BotState()
+        with self.assertRaises(RuntimeError):
+            state.start_background_once("autonomous_background_started", Mock(side_effect=RuntimeError("架空の起動失敗")))
+        self.assertFalse(state.autonomous_background_started)
+        self.assertTrue(state.start_background_once("autonomous_background_started", Mock()))
+
+    def test_unknown_flag_name_is_not_silently_ignored(self) -> None:
+        start = Mock()
+        with self.assertRaises(AttributeError):
+            BotState().start_background_once("memory_background_startd", start)
+        start.assert_not_called()
+
+
 class RestoreAttachTests(unittest.IsolatedAsyncioTestCase):
     async def test_settings_created_before_restore_are_persisted(self) -> None:
         directory = tempfile.TemporaryDirectory()
