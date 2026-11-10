@@ -17,12 +17,12 @@ import discord
 from persona_bot.core.app_state import BotState, GuildSettings, ResponseSettings
 from persona_bot.core.chat_admission import ChatAdmission
 from persona_bot.core import message_admission, message_routing, message_response
-from persona_bot.core.agent_request import handle_agent_request
+from persona_bot.core.agent_request import confirm_reopened_work_thread, handle_agent_request
 from persona_bot.core.message_operations import MessageOperations
 from persona_bot.services.agent_plan import AgentPlan
 from persona_bot.services.violation_notice import record_violation_notice
 from persona_bot.utils.discord_helpers import REPLY_ALLOWED_MENTIONS
-from persona_bot.views.agent_thread import AgentWebhooks, start_agent_progress
+from persona_bot.views.agent_thread import AgentWebhooks, AgentWorkThreads, WorkThreadEntry, start_agent_progress
 
 # ★ 外部操作の差し替え口（MessageOperations のフィールドと同名）。ここで使っていなくても消さないこと。
 # 各ステージはこれらを直接 import せず、MessageOperations 経由で呼ぶ。
@@ -80,6 +80,8 @@ class MessageHandler:
         self._chat_admission = ChatAdmission()
         # サブエージェントの作業スレッドへ子が投稿する Webhook（チャンネルごとに使い回す。#267）
         self._agent_webhooks = AgentWebhooks()
+        # 作業スレッドの記録（完了後に閉じたスレッドの再開を見分ける。#408）
+        self._agent_work_threads = AgentWorkThreads()
 
     @staticmethod
     def _operations() -> MessageOperations:
@@ -159,6 +161,11 @@ class MessageHandler:
             self, message, question, memory_category, plan, response_settings,
             image_objects=image_objects, start_progress=start_agent_progress,
         )
+
+    async def _confirm_reopened_work_thread(
+        self, message: discord.Message, question: str, entry: WorkThreadEntry, *, accepts_normally: bool,
+    ) -> None:
+        await confirm_reopened_work_thread(self, message, question, entry, accepts_normally=accepts_normally)
 
     async def handle_chat_message(
         self, message: discord.Message, question: str, memory_category: str = "none", *,
