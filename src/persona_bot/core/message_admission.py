@@ -57,18 +57,22 @@ async def on_message(self: MessageHandler, message: discord.Message) -> None:
     # いちいちメンションを求めるのは配信の体裁に合わないため）。他のテキストチャンネル
     # からの発言はコメントとして認めない（idea.md）ので、判定はチャンネル一致で行う。
     is_autonomous_comment = self.autonomous.is_comment_channel(message.channel.id, guild_id)
+    question = clean_message_content(message, self.client.user)
+    # ボットが完了後に閉じたサブエージェントの作業スレッドへの書き込み（Discord が再開する）には、
+    # 追加の依頼があるかを一度だけ確かめる（#408）。ボット宛てでない発言も対象にし（普段は無視されるため）、
+    # ボット宛てなら確かめた後も通常どおり処理する。記録の更新は同期で済ませる（二重に確かめない）。
+    reopened = self._agent_work_threads.take_reopened(message.channel.id)
+    if reopened is not None:
+        await self._confirm_reopened_work_thread(message, question, reopened, accepts_normally=accepts_normally)
     if not accepts_normally and not is_autonomous_comment:
         # 返信しない発言でも、ボットがいま接続しているボイス/ステージの付属チャットだけは
         # ローカルのNGワード判定にかける（#172）。「返信する条件」と「NG判定の対象」を分け、
         # ボットが居合わせている通話のチャットを見守る。AI判定は呼ばない（宛先でない
         # 発言ごとに Gemini を呼ぶとコストが発散する）。他のチャンネルへは広げない。
         if is_connected_voice_chat(message.guild, message.channel.id):
-            await self._reject_ng_input(
-                message, clean_message_content(message, self.client.user), "NGワードが含まれています。",
-            )
+            await self._reject_ng_input(message, question, "NGワードが含まれています。")
         return
 
-    question = clean_message_content(message, self.client.user)
     if not question and not message.attachments:
         return
 

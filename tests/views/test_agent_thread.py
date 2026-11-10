@@ -16,7 +16,7 @@ from persona_bot.config.constants import (
     AGENT_CHILD_FALLBACK_NAME,
     AGENT_CHILD_NAME_MAX_CHARS,
     AGENT_DEFAULT_LINES,
-    AGENT_THREAD_AUTO_ARCHIVE_MINUTES,
+    AGENT_THREAD_ARCHIVE_FAILURE_REASONS,
     AGENT_THREAD_NAME_MAX_CHARS,
     AGENT_WEBHOOK_NAME,
     DISCORD_MESSAGE_MAX_LENGTH,
@@ -27,7 +27,11 @@ from persona_bot.views import agent_thread
 from persona_bot.views.agent_thread import (
     AgentThreadProgress,
     AgentWebhooks,
+    AgentWorkThreads,
+    WorkThreadEntry,
+    archive_work_thread,
     build_handoff_text,
+    send_reopen_confirmation,
     start_agent_progress,
     thread_name,
     thread_unavailable_reason,
@@ -212,10 +216,11 @@ class ThreadProgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(progress, AgentThreadProgress)
         self.assertTrue(progress.shows_report)
 
-        # 依頼メッセージにスレッドを作り、最短の自動アーカイブにする
+        # 依頼メッセージにスレッドを作る。自動アーカイブの時間は指定しない（完了したらボットが閉じる。#408）
         kwargs = self.message.create_thread.await_args.kwargs
         self.assertIn("架空の調査担当", kwargs["name"])
-        self.assertEqual(kwargs["auto_archive_duration"], AGENT_THREAD_AUTO_ARCHIVE_MINUTES)
+        self.assertNotIn("auto_archive_duration", kwargs)
+        self.assertIs(progress.work_thread, self.thread)
 
         # 親の名義で委託内容を伝え、そのメッセージに中止ボタンを付ける（通知は飛ばさない）
         handoff = self.thread.send.await_args_list[0]
@@ -397,6 +402,8 @@ class ThreadProgressTests(unittest.IsolatedAsyncioTestCase):
         progress = await self.open()
         self.assertIsInstance(progress, AgentProgress)
         self.assertFalse(progress.shows_report)
+        # 返信1通の表示には、閉じる対象の作業スレッドが無い（#408）
+        self.assertIsNone(progress.work_thread)
         # 依頼への返信1通に、中止ボタン付きの進捗を出す
         self.message.reply.assert_awaited_once()
         self.assertIs(self.message.reply.await_args.kwargs["view"], progress._view)
@@ -479,6 +486,123 @@ class ThreadProgressTests(unittest.IsolatedAsyncioTestCase):
         with patch("persona_bot.views.agent_thread.logger"), self.assertRaises(asyncio.CancelledError):
             await start_agent_progress(self.message, LINES, PLAN, webhooks=self.webhooks, avatar_url=None)
         self.assertTrue(self.message.reply.await_args.kwargs["view"].is_finished())
+
+
+class WorkThreadRegistryTests(unittest.TestCase):
+    """作業スレッドの記録（#408）。"""
+
+    def test_reopen_is_reported_once_only_after_the_bot_archived_it(self) -> None:
+        threads = AgentWorkThreads()
+        threads.register(700, LINES, "架空の調査担当")
+        self.assertTrue(threads.is_work_thread(700))
+        self.assertFalse(threads.is_work_thread(701))
+        # ボットが閉じる前（作業中・失敗して残したスレッド）は確かめない
+        self.assertIsNone(threads.take_reopened(700))
+        threads.mark_archived(700)
+        entry = threads.take_reopened(700)
+        self.assertEqual((entry.lines, entry.role), (LINES, "架空の調査担当"))
+        # 再開ごとに1回だけ。もう一度閉じれば、次の再開でまた確かめる
+        self.assertIsNone(threads.take_reopened(700))
+        threads.mark_archived(700)
+        self.assertIsNotNone(threads.take_reopened(700))
+        self.assertTrue(threads.is_work_thread(700))
+
+    def test_unknown_threads_are_ignored(self) -> None:
+        threads = AgentWorkThreads()
+        threads.mark_archived(800)
+        self.assertIsNone(threads.take_reopened(800))
+        self.assertFalse(threads.is_work_thread(800))
+
+    def test_oldest_entries_are_forgotten_over_the_limit(self) -> None:
+        threads = AgentWorkThreads(max_entries=2)
+        for thread_id in (1, 2):
+            threads.register(thread_id, LINES, "架空")
+        # 閉じたスレッドは新しく使ったものとして扱い、先に忘れない
+        threads.mark_archived(1)
+        threads.register(3, LINES, "架空")
+        self.assertTrue(threads.is_work_thread(1))
+        self.assertFalse(threads.is_work_thread(2))
+        self.assertTrue(threads.is_work_thread(3))
+
+
+class ArchiveWorkThreadTests(unittest.IsolatedAsyncioTestCase):
+    """完了した作業スレッドを閉じる（#408）。"""
+
+    async def asyncSetUp(self) -> None:
+        self.parent = SimpleNamespace(send=AsyncMock())
+        self.thread = SimpleNamespace(id=700, edit=AsyncMock(), parent=self.parent, mention="<#700>")
+        self.channel = make_channel()
+        self.source = make_message(author_id=11, channel=self.channel, reply=AsyncMock())
+        self.threads = AgentWorkThreads()
+        self.threads.register(self.thread.id, LINES, PLAN.role)
+
+    async def archive(self) -> bool:
+        with patch("persona_bot.views.agent_thread.logger"):
+            return await archive_work_thread(self.thread, self.source, LINES, PLAN.role, self.threads)
+
+    async def test_archives_without_locking_and_remembers_it(self) -> None:
+        self.assertTrue(await self.archive())
+        self.thread.edit.assert_awaited_once()
+        kwargs = self.thread.edit.await_args.kwargs
+        self.assertIs(kwargs["archived"], True)
+        # 閉じるのはアーカイブだけ（ロックすると利用者が追記できなくなる）
+        self.assertNotIn("locked", kwargs)
+        self.source.reply.assert_not_awaited()
+        self.assertIsNotNone(self.threads.take_reopened(self.thread.id))
+
+    async def test_failure_tells_fixed_reason_in_main_channel_and_keeps_thread(self) -> None:
+        cases = {
+            "forbidden": discord.Forbidden(make_http_response(403, "Forbidden"), "架空の内部の詳細"),
+            "not_found": discord.NotFound(make_http_response(404, "Not Found"), "架空の内部の詳細"),
+            "error": discord.HTTPException(make_http_response(500, "Server Error"), "架空の内部の詳細"),
+        }
+        for key, error in cases.items():
+            with self.subTest(reason=key):
+                self.source.reply.reset_mock()
+                self.thread.edit.side_effect = error
+                self.assertFalse(await self.archive())
+                self.source.reply.assert_awaited_once()
+                notice = self.source.reply.await_args.args[0]
+                self.assertTrue(notice.startswith(LINES["archive_failed"]))
+                self.assertIn(AGENT_THREAD_ARCHIVE_FAILURE_REASONS[key], notice)
+                # 例外の本文は公開チャンネルに出さない
+                self.assertNotIn("架空の内部の詳細", notice)
+                self.assertTrue(no_mentions(self.source.reply.await_args))
+                # 閉じていないので、再開としては扱わない
+                self.assertIsNone(self.threads.take_reopened(self.thread.id))
+
+    async def test_failure_in_reopened_thread_is_told_in_parent_channel(self) -> None:
+        """再開したスレッドの中で受けた追加の依頼なら、スレッドの親（メインのチャンネル）へ伝える。"""
+        self.source = make_message(author_id=11, channel=self.thread, reply=AsyncMock())
+        self.thread.edit.side_effect = discord.Forbidden(make_http_response(403, "Forbidden"), "架空")
+        self.assertFalse(await self.archive())
+        self.parent.send.assert_awaited_once()
+        notice = self.parent.send.await_args.args[0]
+        self.assertIn(AGENT_THREAD_ARCHIVE_FAILURE_REASONS["forbidden"], notice)
+        self.assertIn("<#700>", notice)
+        self.assertTrue(no_mentions(self.parent.send.await_args))
+        self.source.reply.assert_not_awaited()
+        # 親チャンネルを取れなければ、スレッドの中へ伝える
+        self.thread.parent = None
+        self.assertFalse(await self.archive())
+        self.source.reply.assert_awaited_once()
+
+    async def test_failure_notice_that_cannot_be_sent_does_not_raise(self) -> None:
+        self.thread.edit.side_effect = discord.Forbidden(make_http_response(403, "Forbidden"), "架空")
+        self.source.reply.side_effect = discord.HTTPException(make_http_response(500, "Server Error"), "架空")
+        self.assertFalse(await self.archive())
+
+    async def test_reopen_confirmation_uses_the_persona_line(self) -> None:
+        message = make_message(author_id=12, channel=self.thread, reply=AsyncMock())
+        lines = dict(LINES, reopened="{role}の続きはある？")
+        await send_reopen_confirmation(message, WorkThreadEntry(lines, PLAN.role))
+        message.reply.assert_awaited_once()
+        self.assertEqual(message.reply.await_args.args[0], "架空の調査担当の続きはある？")
+        self.assertTrue(no_mentions(message.reply.await_args))
+        # 送れなくても例外にしない
+        message.reply.side_effect = discord.HTTPException(make_http_response(500, "Server Error"), "架空")
+        with patch("persona_bot.views.agent_thread.logger"):
+            await send_reopen_confirmation(message, WorkThreadEntry(lines, PLAN.role))
 
 
 if __name__ == "__main__":
