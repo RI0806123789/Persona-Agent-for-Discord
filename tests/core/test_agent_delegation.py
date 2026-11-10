@@ -332,8 +332,16 @@ class AgentDelegationTests(unittest.IsolatedAsyncioTestCase):
         self.message.channel.webhooks = AsyncMock(return_value=[])
         self.message.channel.create_webhook = AsyncMock(return_value=self.webhook)
         self.handoff = SimpleNamespace(edit=AsyncMock())
-        self.thread = SimpleNamespace(id=700, send=AsyncMock(return_value=self.handoff))
+        self.parent_channel = self.message.channel
+        self.thread = SimpleNamespace(
+            id=700, send=AsyncMock(return_value=self.handoff), edit=AsyncMock(),
+            parent=self.parent_channel, mention="<#700>",
+        )
         self.message.create_thread = AsyncMock(return_value=self.thread)
+        # 人格役の返信と、スレッドを閉じる順番を確かめる（#408）
+        self.events = []
+        self.send.side_effect = lambda *args, **kwargs: self.events.append("persona_reply") or SimpleNamespace(id=500)
+        self.thread.edit.side_effect = lambda **kwargs: self.events.append("archive")
 
     async def test_delegation_is_shown_in_work_thread(self) -> None:
         self.enable_work_thread()
@@ -363,6 +371,129 @@ class AgentDelegationTests(unittest.IsolatedAsyncioTestCase):
         self.message.reply.assert_not_awaited()
         self.handoff.edit.assert_awaited_once_with(view=None)
         self.assertTrue(self.agent.try_acquire("11"))
+
+        # 要約を元のチャンネルへ返した後に、スレッドをアーカイブする（ロックはしない。#408）
+        self.assertEqual(self.events, ["persona_reply", "archive"])
+        self.thread.edit.assert_awaited_once()
+        self.assertIs(self.thread.edit.await_args.kwargs["archived"], True)
+        self.assertNotIn("locked", self.thread.edit.await_args.kwargs)
+
+    async def test_work_thread_stays_open_when_persona_cannot_reply(self) -> None:
+        """人格役が要約を返せなかったら、報告の残るスレッドを閉じない（#408）。"""
+        self.enable_work_thread()
+
+        async def generate(prompt, model_name, *args, **kwargs):
+            self.generations.append(SimpleNamespace(prompt=prompt, model=model_name, grounding=kwargs.get("grounding")))
+            if "依頼主（別のAI）" in prompt:
+                return GenerationResult("架空の子の出力", None, [], model_name)
+            return GenerationResult(None, None, [], None)
+
+        self.gemini.generate_with_metadata.side_effect = generate
+        await self.handler.on_message(self.message)
+        self.send.assert_not_awaited()
+        # 生成できなかった旨の返信はするが、スレッドは閉じない
+        self.assertIn("エラーが発生しました", self.message.reply.await_args.args[0])
+        self.thread.edit.assert_not_awaited()
+
+    async def test_work_thread_stays_open_when_persona_reply_fails_to_send(self) -> None:
+        self.enable_work_thread()
+        self.send.side_effect = discord.HTTPException(Mock(status=500), "架空の送信失敗")
+        with self.assertRaises(discord.HTTPException):
+            await self.handler.on_message(self.message)
+        self.thread.edit.assert_not_awaited()
+        self.assertTrue(self.agent.try_acquire("11"))
+
+    async def test_archive_failure_is_told_in_main_channel(self) -> None:
+        self.enable_work_thread()
+        self.thread.edit.side_effect = discord.Forbidden(Mock(status=403), "架空の内部の詳細")
+        await self.handler.on_message(self.message)
+        # 要約は返したうえで、閉じられなかった理由を元のチャンネルへ定型文で伝え、スレッドは残す
+        self.send.assert_awaited_once()
+        notice = self.message.reply.await_args.args[0]
+        self.assertIn("作業スレッドを閉じられませんでした", notice)
+        self.assertIn("権限", notice)
+        self.assertNotIn("架空の内部の詳細", notice)
+        self.assertTrue(self.agent.try_acquire("11"))
+
+    def thread_message(self, content: str, *, mentioned: bool = False):
+        """閉じた作業スレッドへの書き込み（Discord が再開する）。"""
+        channel = Mock(spec=discord.Thread, id=self.thread.id)
+        channel.parent = self.parent_channel
+        channel.mention = "<#700>"
+
+        @asynccontextmanager
+        async def typing():
+            yield
+
+        channel.typing.side_effect = typing
+        channel.edit = AsyncMock()
+        bot = self.handler.client.user
+        progress_message = SimpleNamespace(edit=AsyncMock())
+        return SimpleNamespace(
+            author=SimpleNamespace(id=12, bot=False, display_name="架空の別の利用者"),
+            guild=self.message.guild, channel=channel,
+            content=f"<@{bot.id}> {content}" if mentioned else content,
+            attachments=[], mentions=[bot] if mentioned else [],
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            reply=AsyncMock(return_value=progress_message),
+        )
+
+    async def test_reopened_work_thread_confirms_additional_requests_once(self) -> None:
+        self.enable_work_thread()
+        await self.handler.on_message(self.message)
+        self.thread.edit.assert_awaited_once()
+        self.state.get_guild(1).current_respond_mode = "mention"
+        self.generations.clear()
+
+        # ボット宛てでない書き込みでも、追加の依頼があるかを一度だけ確かめる（AI は呼ばない）
+        first = self.thread_message("架空の追記です")
+        await self.handler.on_message(first)
+        first.reply.assert_awaited_once()
+        self.assertIn("追加のご依頼はありますか", first.reply.await_args.args[0])
+        self.assertEqual(first.reply.await_args.kwargs["allowed_mentions"].to_dict()["parse"], [])
+        self.assertEqual(self.generations, [])
+
+        second = self.thread_message("架空の追記の続きです")
+        await self.handler.on_message(second)
+        second.reply.assert_not_awaited()
+
+    async def test_reopened_thread_with_explicit_subagent_request_delegates_and_archives_again(self) -> None:
+        self.enable_work_thread()
+        await self.handler.on_message(self.message)
+        self.state.get_guild(1).current_respond_mode = "mention"
+        self.generations.clear()
+
+        follow_up = self.thread_message("サブエージェントを使って、架空の続きも調べて", mentioned=True)
+        await self.handler.on_message(follow_up)
+        # 委任の明記があれば重ねて尋ねず、スレッドの中で返信1通の進捗表示のまま委任する
+        replies = [call.args[0] for call in follow_up.reply.await_args_list]
+        self.assertFalse(any("追加のご依頼はありますか" in text for text in replies))
+        self.assertEqual(len(self.child_calls()), len(PLAN.steps))
+        self.assertIs(self.send.await_args.args[0], follow_up)
+        # 完了したら、再開した作業スレッドを閉じ直す。次の書き込みでまた確かめる
+        follow_up.channel.edit.assert_awaited_once()
+        self.assertIs(follow_up.channel.edit.await_args.kwargs["archived"], True)
+        third = self.thread_message("架空の追記です")
+        await self.handler.on_message(third)
+        self.assertIn("追加のご依頼はありますか", third.reply.await_args.args[0])
+
+    async def test_reopen_confirmation_is_not_sent_for_ng_words_or_unclosed_threads(self) -> None:
+        self.enable_work_thread()
+        self.state.get_guild(1).current_respond_mode = "mention"
+        # 閉じていない（失敗して残した）スレッドへの書き込みは確かめない
+        self.gemini.generate_with_metadata.side_effect = lambda *args, **kwargs: GenerationResult(None, None, [], None)
+        await self.handler.on_message(self.message)
+        self.thread.edit.assert_not_awaited()
+        kept = self.thread_message("架空の追記です")
+        await self.handler.on_message(kept)
+        kept.reply.assert_not_awaited()
+
+        # 閉じたスレッドでも、NG ワードを含む書き込みには返さない
+        self.handler._agent_work_threads.mark_archived(self.thread.id)
+        self.handler.ng_filter.contains_ng_word.return_value = True
+        bad = self.thread_message("架空の不適切な追記")
+        await self.handler.on_message(bad)
+        bad.reply.assert_not_awaited()
 
     async def cancel_work_thread(self, phase, *, broken_cleanup=False, repeat=False) -> None:
         self.enable_work_thread()
@@ -434,6 +565,8 @@ class AgentDelegationTests(unittest.IsolatedAsyncioTestCase):
         self.tts.assert_not_awaited()
         # 失敗した子の報告は出さない（開始と手順1の進捗だけ）
         self.assertEqual(self.webhook.send.await_count, 2)
+        # 失敗したスレッドは閉じずに残す（#408）
+        self.thread.edit.assert_not_awaited()
 
     async def test_unsafe_child_report_is_never_posted_to_work_thread_or_parent_prompt(self):
         self.enable_work_thread()
@@ -446,6 +579,7 @@ class AgentDelegationTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(SOURCE["uri"], call.args[0])
         self.assertIn("うまくいきませんでした", self.thread.send.await_args.args[0])
         self.assertTrue(self.agent.try_acquire("11"))
+        self.thread.edit.assert_not_awaited()
 
     async def test_child_report_and_sources_are_masked_before_moderation_and_publication(self):
         self.enable_work_thread()

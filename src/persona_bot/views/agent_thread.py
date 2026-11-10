@@ -8,6 +8,9 @@
    同じボット・同じトークンのままで、追加のボット登録は要らない。進捗は書き換えずに1通ずつ残す。
 3. 親が終了の定型文をスレッドに残す。完了なら人格役が元のチャンネルへ返信し（`MessageHandler`）、
    失敗・中止なら元のチャンネルにも定型文を返す（人格役の返信が来ないため）。
+4. 完了して人格役が返信できたら、スレッドをアーカイブする（`archive_work_thread`。#408）。
+   失敗・中止・期限切れのスレッドは閉じずに残す。閉じたスレッドへ書き込みがあると Discord が再開するので、
+   そのとき一度だけ追加の依頼を確かめる（`AgentWorkThreads.take_reopened` / `send_reopen_confirmation`）。
 
 子の実体はこれまでどおり独立した文脈で動く Gemini の呼び出しで、スレッドは委託と報告の
 可視化にすぎない（子に会話履歴や長期記憶を読ませない）。スレッドを作れない場面
@@ -18,10 +21,14 @@
 - Webhook はチャンネルごとに1つだけ作って使い回す（`AgentWebhooks`）。依頼のたびに作ると
   チャンネルあたりの上限に達するため。
 - スレッドへの投稿の失敗はログに残すだけで、子の作業も人格役の返信も止めない。
+- 閉じるのはアーカイブだけで、ロックはしない（利用者が書き込めば再開できるようにする）。閉じられなければ、
+  理由を依頼したチャンネルへ伝えてスレッドは残す（例外の本文は載せない）。
 """
 
 from __future__ import annotations
 
+from collections import OrderedDict
+from dataclasses import dataclass
 import logging
 import asyncio
 import re
@@ -32,11 +39,12 @@ import discord
 from persona_bot.config.constants import (
     AGENT_CHILD_FALLBACK_NAME,
     AGENT_CHILD_NAME_MAX_CHARS,
-    AGENT_THREAD_AUTO_ARCHIVE_MINUTES,
+    AGENT_THREAD_ARCHIVE_FAILURE_REASONS,
     AGENT_THREAD_ENABLED,
     AGENT_THREAD_NAME,
     AGENT_THREAD_NAME_MAX_CHARS,
     AGENT_WEBHOOK_NAME,
+    AGENT_WORK_THREADS_MAX,
     DISCORD_MESSAGE_MAX_LENGTH,
 )
 from persona_bot.services.agent_plan import AgentPlan
@@ -159,6 +167,120 @@ def _is_own_webhook(webhook: discord.Webhook, bot_user_id: int) -> bool:
     )
 
 
+@dataclass
+class WorkThreadEntry:
+    """作業スレッド1つ分の記録。lines と role は、そのスレッドで依頼を受けたときの定型文とロール。"""
+
+    lines: Mapping[str, str]
+    role: str
+    # ボットが閉じた後、まだ書き込みで再開されていないか
+    archived: bool = False
+
+
+class AgentWorkThreads:
+    """作業スレッドの記録（インメモリ。#408）。
+
+    - 作業スレッドかどうか: 再開したスレッドの中で受けた追加の依頼も、完了したら閉じ直すため。
+    - ボットが閉じたか: 閉じたスレッドへ書き込みがあると Discord が再開するので、そのとき一度だけ
+      追加の依頼を確かめるため（自動アーカイブや人の操作で閉じたものは対象にしない）。
+
+    再起動で消える（それ以前のスレッドは再開しても確かめない）。`AGENT_WORK_THREADS_MAX` を超えたら
+    古いものから忘れる。
+    """
+
+    def __init__(self, max_entries: int = AGENT_WORK_THREADS_MAX) -> None:
+        self._entries: OrderedDict[int, WorkThreadEntry] = OrderedDict()
+        self._max_entries = max_entries
+
+    def register(self, thread_id: int, lines: Mapping[str, str], role: str) -> None:
+        """依頼のために作ったスレッドを覚える。"""
+        self._entries[thread_id] = WorkThreadEntry(lines, role)
+        self._entries.move_to_end(thread_id)
+        while len(self._entries) > self._max_entries:
+            self._entries.popitem(last=False)
+
+    def is_work_thread(self, thread_id: int) -> bool:
+        return thread_id in self._entries
+
+    def mark_archived(self, thread_id: int) -> None:
+        """ボットが閉じたことを記録する（記録に無いスレッドなら何もしない）。"""
+        entry = self._entries.get(thread_id)
+        if entry is not None:
+            entry.archived = True
+            self._entries.move_to_end(thread_id)
+
+    def take_reopened(self, thread_id: int) -> WorkThreadEntry | None:
+        """ボットが閉じたスレッドへの最初の書き込みなら記録を返し、以後は返さない。
+
+        判定と記録の更新の間に await を挟まない（同時に届いた2件へ二重に確かめないため）。
+        """
+        entry = self._entries.get(thread_id)
+        if entry is None or not entry.archived:
+            return None
+        entry.archived = False
+        return entry
+
+
+def archive_failure_reason(error: BaseException) -> str:
+    """閉じられなかった理由の定型文（例外の本文は公開チャンネルに出さない）。"""
+    if isinstance(error, discord.Forbidden):
+        return AGENT_THREAD_ARCHIVE_FAILURE_REASONS["forbidden"]
+    if isinstance(error, discord.NotFound):
+        return AGENT_THREAD_ARCHIVE_FAILURE_REASONS["not_found"]
+    return AGENT_THREAD_ARCHIVE_FAILURE_REASONS["error"]
+
+
+async def archive_work_thread(
+    thread: discord.Thread,
+    source: discord.Message,
+    lines: Mapping[str, str],
+    role: str,
+    work_threads: AgentWorkThreads,
+) -> bool:
+    """完了した作業スレッドをアーカイブする（ロックはしない。#408）。
+
+    Discord の Threads トピックの記述では、スレッドの作成者（ボット自身）は「スレッドの管理」の権限が
+    無くてもアーカイブできる（実機では未確認）。閉じられなければ、理由を依頼したチャンネルへ伝えて
+    スレッドはそのまま残す。
+
+    Returns:
+        閉じられたら True。
+    """
+    try:
+        await thread.edit(archived=True, reason="サブエージェントの作業が完了したため")
+    except discord.DiscordException as error:
+        logger.warning("サブエージェント: 作業スレッドを閉じられませんでした。", exc_info=error)
+        notice = f"{render_agent_line(lines, 'archive_failed', role=role)}\n理由: {archive_failure_reason(error)}"
+        await _notify_archive_failure(thread, source, notice)
+        return False
+    work_threads.mark_archived(thread.id)
+    logger.info("サブエージェント: 完了した作業スレッドを閉じました。")
+    return True
+
+
+async def _notify_archive_failure(thread: discord.Thread, source: discord.Message, notice: str) -> None:
+    """閉じられなかった旨を、依頼したメインのチャンネルへ伝える（送れなくても例外にしない）。"""
+    try:
+        parent = getattr(thread, "parent", None)
+        if getattr(source.channel, "id", None) == thread.id and parent is not None:
+            # 再開したスレッドの中で受けた追加の依頼は、スレッドの親（メインのチャンネル）へ伝える
+            await parent.send(f"{notice}\n対象: {thread.mention}", allowed_mentions=_NO_MENTIONS)
+        else:
+            await source.reply(notice, allowed_mentions=_NO_MENTIONS)
+    except discord.DiscordException as error:
+        logger.warning("サブエージェント: 作業スレッドを閉じられなかった旨を送れませんでした。", exc_info=error)
+
+
+async def send_reopen_confirmation(message: discord.Message, entry: WorkThreadEntry) -> None:
+    """再開した作業スレッドで、追加の依頼があるかを確かめる（LLM を呼ばない定型文。#408）。"""
+    try:
+        await message.reply(
+            render_agent_line(entry.lines, "reopened", role=entry.role), allowed_mentions=_NO_MENTIONS,
+        )
+    except discord.DiscordException as error:
+        logger.warning("サブエージェント: 再開した作業スレッドへ確認を送れませんでした。", exc_info=error)
+
+
 class AgentThreadProgress(AgentProgressBase):
     """作業スレッドでの進捗表示。open（作成・委託）→ update（手順ごと）→ finish の順に使う。"""
 
@@ -190,6 +312,11 @@ class AgentThreadProgress(AgentProgressBase):
         self._avatar_url = avatar_url
         self._handoff: discord.Message | None = None
 
+    @property
+    def work_thread(self) -> discord.Thread:
+        """この依頼のために作った作業スレッド（完了後に閉じる対象。#408）。"""
+        return self._thread
+
     @classmethod
     async def open(
         cls,
@@ -215,11 +342,8 @@ class AgentThreadProgress(AgentProgressBase):
             logger.warning("サブエージェント: Webhook を使えないため、返信の進捗表示にします。")
             return None
         try:
-            thread = await message.create_thread(
-                name=thread_name(plan.role),
-                auto_archive_duration=AGENT_THREAD_AUTO_ARCHIVE_MINUTES,
-                reason="サブエージェントの作業スレッド",
-            )
+            # 自動アーカイブの時間は指定しない（チャンネルの既定）。完了したらボットが閉じる（#408）。
+            thread = await message.create_thread(name=thread_name(plan.role), reason="サブエージェントの作業スレッド")
         except discord.DiscordException as error:
             logger.warning("サブエージェント: 作業スレッドを作れないため、返信の進捗表示にします。", exc_info=error)
             return None

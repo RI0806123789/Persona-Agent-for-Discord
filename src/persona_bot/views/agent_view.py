@@ -84,6 +84,8 @@ class AgentProgressBase:
 
     # 子の報告そのものを表示するか（作業スレッドだけが表示する）。
     shows_report = False
+    # 依頼のために作った作業スレッド（作業スレッドの表示だけが持つ）。完了後に閉じる対象（#408）。
+    work_thread: discord.Thread | None = None
 
     def __init__(self, requester_id: int, lines: Mapping[str, str], plan: AgentPlan) -> None:
         self._lines = lines
