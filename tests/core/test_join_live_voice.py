@@ -85,7 +85,7 @@ class JoinLiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def join(self) -> str:
-        with patch("persona_bot.core.commands.LiveVoiceClient", FakeLiveVoiceClient):
+        with patch("persona_bot.core.voice_commands.LiveVoiceClient", FakeLiveVoiceClient):
             await self.commands["join"](self.interaction)
         return self.interaction.followup.send.call_args.args[0]
 
@@ -119,7 +119,7 @@ class JoinLiveVoiceTests(unittest.IsolatedAsyncioTestCase):
                 FakeLiveVoiceClient.created.clear()
                 self.live.start.side_effect = error
                 expected_log = not isinstance(error, (LiveUnavailableError, ConsentPanelError))
-                with self.assertLogs("persona_bot.core.commands", level="ERROR") if expected_log else _no_logs():
+                with self.assertLogs("persona_bot.core.voice_commands", level="ERROR") if expected_log else _no_logs():
                     reply = await self.join()
                 self.assertEqual(reply, notice)
                 self.created[0].disconnect.assert_awaited_once_with(force=True)
@@ -152,7 +152,7 @@ class JoinLiveVoiceTests(unittest.IsolatedAsyncioTestCase):
                 self.guild.voice_client = FakeLiveVoiceClient(None, self.channel) if reuse else None
                 self.live.release_reservation.reset_mock()
                 with patch.object(BotState, "get_guild_async", AsyncMock(side_effect=RuntimeError("架空のDB障害"))), \
-                        self.assertLogs("persona_bot.core.commands", level="ERROR"):
+                        self.assertLogs("persona_bot.core.voice_commands", level="ERROR"):
                     self.assertEqual(await self.join(), NOTICE_LIVE_UNAVAILABLE)
                 self.guild.voice_client.disconnect.assert_awaited_once_with(force=True)
                 self.live.release_reservation.assert_called_with(1, reservation=self.live.reserve.return_value)

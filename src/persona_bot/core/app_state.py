@@ -4,7 +4,7 @@ import asyncio
 from weakref import WeakValueDictionary
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from persona_bot.config.choices import (
     AUTO_TOPIC_INTERVAL_CHOICES,
@@ -323,6 +323,23 @@ class BotState:
     _guild_persist_locks: WeakValueDictionary[int, asyncio.Lock] = field(
         default_factory=WeakValueDictionary, repr=False, compare=False,
     )
+
+    def start_background_once(self, started_flag: str, start: Callable[[], Any]) -> bool:
+        """`*_background_started` 系のフラグが未起動のときだけ start() を呼び、フラグを立てる（#414）。
+
+        `on_ready` は再接続のたびに発火するため、見回りループや常駐ワーカーの二重起動を
+        このフラグで防ぐ。start() が例外を出したときはフラグを立てず、次回の `on_ready` で再試行できる。
+
+        Returns:
+            起動したら True。起動済みで何もしなかったら False。
+        Raises:
+            AttributeError: started_flag が BotState に無い名前のとき（綴りの誤りを黙って無視しない）。
+        """
+        if getattr(self, started_flag):
+            return False
+        start()
+        setattr(self, started_flag, True)
+        return True
 
     def _guild_persist_lock(self, guild_id: int) -> asyncio.Lock:
         lock = self._guild_persist_locks.get(guild_id)

@@ -13,8 +13,9 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
-SRC = Path(__file__).resolve().parents[2] / "src"
+SRC =Path(__file__).resolve().parents[2] / "src"
 sys.path.insert(0, str(SRC))
 
 from persona_bot.core import database, db_legacy_importers, db_migrations
@@ -250,9 +251,55 @@ class ProfileJsonTests(unittest.TestCase):
         self.assertEqual(split_profile_by_user(mixed, "999"), {"999": mixed})
 
 
+class LegacyDataImporterTests(unittest.TestCase):
+    """取り込み（LegacyDataImporter）が、Database の差し替え口を呼出しのたびに読むこと（#414）。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+        self.db = database.Database(self.directory / "bot.db")
+        self.addCleanup(self.db.close)
+        with patch("persona_bot.core.database.logger"):
+            self.db.initialize()
+
+    def test_database_owns_one_importer_sharing_its_connection_and_lock(self) -> None:
+        self.assertIsInstance(self.db._legacy, db_legacy_importers.LegacyDataImporter)
+        self.assertIs(self.db._legacy._conn, self.db._conn)
+        self.assertIs(self.db._legacy._lock, self.db._lock)
+
+    def test_owner_logger_and_backup_limit_follow_the_database_at_call_time(self) -> None:
+        (self.directory / "affinity.json").write_text('{"1": {"affinity": 60}}', encoding="utf-8")
+        (self.directory / "affinity.json.imported.bak").write_text("前回", encoding="utf-8")
+        # 退避先の連番の上限が 0 なら空きが無く、取り込まずに元のファイルを残す。上限は database 側の値を読む。
+        with patch("persona_bot.core.database.LEGACY_BACKUP_MAX_SUFFIX", 0), \
+                patch("persona_bot.core.database.logger") as quiet:
+            self.db._legacy.import_files()
+        self.assertTrue((self.directory / "affinity.json").exists())
+        self.assertEqual(self.db.affinity_load_all(), {})
+        # 差し替えたロガーが使われている（警告・エラーはモジュールのロガーではなく database.logger へ出る）
+        quiet.error.assert_called_once()
+        # 上限を戻せば、同じファイルを連番の名前へ退避して取り込める
+        with patch("persona_bot.core.database.logger"):
+            self.db._legacy.import_files()
+        self.assertFalse((self.directory / "affinity.json").exists())
+        self.assertTrue((self.directory / "affinity.json.imported.1.bak").exists())
+        self.assertIn("1", self.db.affinity_load_all())
+
+    def test_profile_json_goes_to_the_owner_set_after_construction(self) -> None:
+        (self.directory / "profile.json").write_text('{"趣味": "架空の読書"}', encoding="utf-8")
+        self.db._legacy_owner_id = "legacy-user"
+        with patch("persona_bot.core.database.logger"):
+            self.db._legacy.absorb_profile_json()
+        self.assertEqual(self.db.profile_load("legacy-user"), {"趣味": "架空の読書"})
+        # 取り込めたので、ファイルは {} に戻る
+        self.assertEqual(json.loads((self.directory / "profile.json").read_text(encoding="utf-8")), {})
+
+
 class ImporterPurityTests(unittest.TestCase):
-    def test_importer_module_does_not_touch_the_database_lock_or_logging(self) -> None:
-        # パーサーは読み取りと解釈だけを行う。DB・ロック・ログは Database が担当する（ログの出元を変えないため）。
+    def test_importer_module_does_not_import_the_database_lock_or_logging(self) -> None:
+        # このモジュールは DB・ロック・ログのライブラリを import しない。取り込み（LegacyDataImporter）が使う
+        # 接続・ロック・ロガー・JSON の書き込みは Database が渡す（ログの出元を persona_bot.core.database のまま保つため。#414）。
         tree = ast.parse(Path(db_legacy_importers.__file__).read_text(encoding="utf-8-sig"))
         imported = set()
         for node in ast.walk(tree):

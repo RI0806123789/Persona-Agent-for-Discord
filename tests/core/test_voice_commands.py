@@ -5,13 +5,47 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
+import discord
+
 from persona_bot.core.background import TaskOwner
-from persona_bot.core.voice_commands import VoiceCommandCoordinator, skip_superseded_voice_operation
+from persona_bot.core.voice_commands import (
+    VoiceCommandCoordinator,
+    join_permission_notice,
+    skip_superseded_voice_operation,
+)
 from tests.helpers.network_guard import block_network
+
+
+class JoinPermissionNoticeTests(unittest.TestCase):
+    """接続を試す前の権限案内（#414。commands.join から移した判定）。"""
+
+    def test_enough_permissions_or_unknown_bot_member_gives_no_notice(self) -> None:
+        channel = Mock(spec=discord.VoiceChannel)
+        channel.name = "架空のボイス"
+        with patch("persona_bot.core.voice_commands.missing_voice_permissions", return_value=[]):
+            self.assertIsNone(join_permission_notice(channel, SimpleNamespace()))
+        # ボットのMemberを取得できないときは判定できないので、案内せず接続を試す
+        with patch("persona_bot.core.voice_commands.missing_voice_permissions") as check:
+            self.assertIsNone(join_permission_notice(channel, None))
+        check.assert_not_called()
+
+    def test_missing_permissions_are_listed_and_stage_adds_the_mute_hint(self) -> None:
+        for channel_type, has_hint in ((discord.VoiceChannel, False), (discord.StageChannel, True)):
+            with self.subTest(channel=channel_type.__name__):
+                channel = Mock(spec=channel_type)
+                channel.name = "架空のチャンネル"
+                with patch(
+                    "persona_bot.core.voice_commands.missing_voice_permissions", return_value=["接続", "発言"],
+                ) as check:
+                    notice = join_permission_notice(channel, SimpleNamespace())
+                self.assertEqual(check.call_args.kwargs, {"stage_moderation": has_hint})
+                self.assertIn("架空のチャンネル", notice)
+                self.assertIn("「接続」・「発言」", notice)
+                self.assertEqual("「メンバーをミュート」が必要です" in notice, has_hint)
 
 
 class VoiceCommandCoordinatorTests(unittest.IsolatedAsyncioTestCase):

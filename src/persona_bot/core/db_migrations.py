@@ -39,12 +39,12 @@ MIGRATIONS: dict[int, list[str]] = {
     ],
     # バージョン3: 記憶をユーザー別に分離する。
     #   - profile: 主キーを (user_id, key) の複合主キーに変更（テーブルを作り直す）。
-    #     旧・全体共有の行は移行後に Database._migrate_legacy_profile_rows で owner へ割り当てる。
+    #     旧・全体共有の行は移行後に LegacyDataImporter.migrate_profile_rows で owner へ割り当てる。
     #   - pending_log: user_id 列を追加（旧・全体共有の行は owner へ振り直す）。
     3: [
         "ALTER TABLE pending_log ADD COLUMN user_id TEXT NOT NULL DEFAULT ''",
         # profile は主キーを変えるため、旧テーブルを退避 → 新テーブルを作成する。
-        # 退避テーブルの行は Database._migrate_legacy_profile_rows() が owner へ移して破棄する。
+        # 退避テーブルの行は LegacyDataImporter.migrate_profile_rows() が owner へ移して破棄する。
         "ALTER TABLE profile RENAME TO profile_legacy_v2",
         """CREATE TABLE profile (
             user_id TEXT NOT NULL,                     -- Discord ユーザーID（文字列）

@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from persona_bot.utils.logging_setup import configure_logging
 
@@ -137,59 +138,59 @@ register_commands(
 # どれも「間隔を指定 / 接続完了を待つ / 本体を try-except で包んでログを出す」の
 # 3点セットなので、background.make_guarded_loop にまとめて作らせる
 # （生成するだけで開始はしないため、start() は下の on_ready で行う）。
-memory_maintenance_loop = make_guarded_loop(
-    memory.flush_if_needed,
-    label="バックグラウンド記憶処理エラー",
-    client=client,
-    owner=client.background_tasks,
-    minutes=MEMORY_MAINTENANCE_MINUTES,
+# 共通の引数（client・owner）と、on_ready で起動するための登録は _periodic_loop が引き受ける（#414）。
+_periodic_loops: list[tuple[str, Any]] = []
+
+
+def _periodic_loop(started_flag: str, coro_factory, *, label: str, minutes=None, seconds=None):
+    """見回りループを生成し、on_ready で起動できるよう起動フラグ名とともに登録する。
+
+    started_flag は BotState の `*_background_started`。on_ready は再接続のたびに発火するため、
+    このフラグで二重起動を防ぐ（BotState.start_background_once）。
+    """
+    loop = make_guarded_loop(
+        coro_factory, label=label, client=client, owner=client.background_tasks,
+        minutes=minutes, seconds=seconds,
+    )
+    _periodic_loops.append((started_flag, loop))
+    return loop
+
+
+memory_maintenance_loop = _periodic_loop(
+    "memory_background_started", memory.flush_if_needed,
+    label="バックグラウンド記憶処理エラー", minutes=MEMORY_MAINTENANCE_MINUTES,
 )
 
-auto_topic_loop = make_guarded_loop(
-    auto_topic.run_pending_checks,
-    label="自発的な会話の見回りエラー",
-    client=client,
-    owner=client.background_tasks,
-    minutes=AUTO_TOPIC_CHECK_MINUTES,
+auto_topic_loop = _periodic_loop(
+    "auto_topic_background_started", auto_topic.run_pending_checks,
+    label="自発的な会話の見回りエラー", minutes=AUTO_TOPIC_CHECK_MINUTES,
 )
 
-anniversary_loop = make_guarded_loop(
-    auto_topic.run_anniversary_checks,
-    label="記念日チェックエラー",
-    client=client,
-    owner=client.background_tasks,
-    minutes=ANNIVERSARY_CHECK_MINUTES,
+anniversary_loop = _periodic_loop(
+    "anniversary_background_started", auto_topic.run_anniversary_checks,
+    label="記念日チェックエラー", minutes=ANNIVERSARY_CHECK_MINUTES,
 )
 
 # 自律行動（ボイス/ステージでの配信）の見回り。配信の開始判定だけでなく、
 # 独り言の投下・無応答での退出まで面倒を見るため、他の見回りより短い間隔で回す
 # （生成そのものは裏のタスクへ逃がすので、このループ自体はすぐ返る）。
-autonomous_loop = make_guarded_loop(
-    autonomous.run_pending_checks,
-    label="自律行動の見回りエラー",
-    client=client,
-    owner=client.background_tasks,
-    minutes=AUTONOMOUS_CHECK_MINUTES,
+autonomous_loop = _periodic_loop(
+    "autonomous_background_started", autonomous.run_pending_checks,
+    label="自律行動の見回りエラー", minutes=AUTONOMOUS_CHECK_MINUTES,
 )
 
 # リマインダーは分単位の指定に応えるため、記念日（時間単位）よりずっと短い間隔で見回る。
-reminder_loop = make_guarded_loop(
-    reminders.run_due_checks,
-    label="リマインダー確認エラー",
-    client=client,
-    owner=client.background_tasks,
-    seconds=REMINDER_CHECK_SECONDS,
+reminder_loop = _periodic_loop(
+    "reminder_background_started", reminders.run_due_checks,
+    label="リマインダー確認エラー", seconds=REMINDER_CHECK_SECONDS,
 )
 
 # フィードバック記録の間引き。以前は評価が押されるたびに実行していたが、
 # DB のロックを握って主経路の返信まで遅らせていたためここへ移した。
 # tasks.loop は start() 直後に1回目を実行するので、起動時の間引きも兼ねる。
-feedback_prune_loop = make_guarded_loop(
-    feedback.prune_stored,
-    label="フィードバック記録の整理エラー",
-    client=client,
-    owner=client.background_tasks,
-    minutes=FEEDBACK_PRUNE_MINUTES,
+feedback_prune_loop = _periodic_loop(
+    "feedback_prune_background_started", feedback.prune_stored,
+    label="フィードバック記録の整理エラー", minutes=FEEDBACK_PRUNE_MINUTES,
 )
 
 
@@ -202,35 +203,12 @@ async def on_ready() -> None:
     async with memory.io_lock:
         await run_in_thread(memory.ensure_storage)
 
-    if not state.memory_background_started:
-        memory_maintenance_loop.start()
-        state.memory_background_started = True
-
-    if not state.document_worker_started:
-        # 文書ワーカーはボットの生存期間ずっと走り続ける常駐コルーチン。
-        # 参照を保持しないと GC で静かに止まり、添付ファイルが永久に処理されなくなる。
-        documents.start_worker()
-        state.document_worker_started = True
-
-    if not state.auto_topic_background_started:
-        auto_topic_loop.start()
-        state.auto_topic_background_started = True
-
-    if not state.anniversary_background_started:
-        anniversary_loop.start()
-        state.anniversary_background_started = True
-
-    if not state.autonomous_background_started:
-        autonomous_loop.start()
-        state.autonomous_background_started = True
-
-    if not state.reminder_background_started:
-        reminder_loop.start()
-        state.reminder_background_started = True
-
-    if not state.feedback_prune_background_started:
-        feedback_prune_loop.start()
-        state.feedback_prune_background_started = True
+    # 見回りループと常駐ワーカーは、起動済みなら何もしない（再接続での二重起動を防ぐ）。
+    for started_flag, loop in _periodic_loops:
+        state.start_background_once(started_flag, loop.start)
+    # 文書ワーカーはボットの生存期間ずっと走り続ける常駐コルーチン。
+    # 参照を保持しないと GC で静かに止まり、添付ファイルが永久に処理されなくなる。
+    state.start_background_once("document_worker_started", documents.start_worker)
 
     if not state.commands_synced:
         await tree.sync()

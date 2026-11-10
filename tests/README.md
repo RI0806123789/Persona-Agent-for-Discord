@@ -147,6 +147,19 @@ Discord・Geminiはモック、SSHはループバックの模擬サーバー、D
 | #290 | `audio/test_voice.py`・`audio/test_voice_session.py` | URL直後の日本語を保持し、edge-ttsのハング時に個別期限からgTTSへ退避してPCM合成を完了する。外部キャンセルでは退避せず、失効した配信の待機分で満杯でも新しい配信と通常返信を受け付ける |
 | #291 | `services/test_reminder_service.py`・`services/test_affinity_service.py`・`services/test_memory_service.py` | 時差あり・なしの極端日時の登録見送り、本文引用の保持と末尾タグの採用、生成待機中の記念日追加・訂正・削除の保持を確認する。未変更ラベルへのモデルの訂正、他ユーザーの記憶、既存の保存ロールバックとキャンセル回収も維持する |
 
+## Issue #414の確認
+
+動作を変えない構造整理のため、既存のテストを新しい配置へ追従させたうえで、分けた境界ごとの契約を追加した。
+
+| 領域 | テスト | 確認内容 |
+| --- | --- | --- |
+| `/join`・`/leave` の分離 | `core/test_join_command.py`・`core/test_join_live_voice.py`・`core/test_mention_policy.py`・`services/test_autonomous_start_races.py`・`core/test_voice_commands.py` | ボイス接続のログの出元・差し替え先（`LiveVoiceClient`・`enable_stage_speaker`・`announce_voice_join`）は `persona_bot.core.voice_commands`。権限案内（`join_permission_notice`）は権限が足りる・ボットのMemberが取れない場合は案内せず、不足は一覧し、ステージでは「メンバーをミュート」を添える。コマンド登録側の失敗通知・所有者の終了待機・ブラックリスト判定は `core/test_command_*.py` が従来どおり確認する |
+| 旧データ取り込みの分離 | `core/test_db_modules.py`・`core/test_database.py`・`core/test_profile_absorption.py`・`services/test_affinity_service.py` | `LegacyDataImporter` が `Database` の接続とロックを共有し、ロガー・退避先の連番の上限・オーナーIDを呼出しのたびに読む。モジュールが sqlite3・threading・logging・persona_bot を import しない契約は維持する |
+| 定期ループの起動 | `core/test_app_lifecycle.py`・`integration/test_package_layout.py` | `BotState.start_background_once` は 1 回だけ起動し、失敗ではフラグを立てず、知らないフラグ名は `AttributeError`。実際の `bot.py` の起動（3 コマンドの登録）も従来どおり通る |
+| ペルソナ設定の検証 | `config/test_personas.py` | 4 種類の「オブジェクトでない」警告が結果の説明を含み値を出さない。未対応の項目は複数あっても警告 1 回で読み飛ばし、項目名を出さない。パネルを開くたびの再読込は件数を記録せず、起動時の再読込は記録する |
+
+実際の Discord・Gemini・本番サーバーでの動作は未確認。
+
 Windows・Python 3.13.3と`requirements.txt`の固定依存12件が一致する環境で、全1208件が成功（失敗・エラー・スキップなし）。`pip check`、201 Pythonファイルの構文とPython 3.11文法、メッセージ分割、`git diff --check`も成功した。独立レビューと変更17ファイルのプライバシーチェックを実施した。
 
 外部通信はモック、DBとJSONは一時ディレクトリと架空データを使う。Linux・Python 3.11での実行、実Discordでの参加・退出・外部移動とステージ枠、実TTSの通信・音声再生は未確認。
