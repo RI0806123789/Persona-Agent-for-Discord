@@ -5,7 +5,9 @@
 - Gemini Live が返す音声は 24kHz / モノラル / 16bit、Discord へ送るのは 48kHz / ステレオ。
   `Upsampler` が変換する。
 - `LivePlaybackSource` は、届いた順に音声を流す `discord.AudioSource`。1ターン分の応答を
-  受け取りながら再生し、割り込み・違反の検出で残りを即座に捨てられる。
+  受け取りながら再生する。違反の検出・会話の終了では残りを即座に捨て（`abort()`）、
+  割り込みでは強めのフェードアウトで絞ってから止める（`fade_out()`。#409）。
+  送り出した音声は、エコー除去の参照信号（`echo_canceller.EchoReference`）にも書く。
 
 **依存は numpy だけ**（読み上げの EQ と同じ方針。`scipy` / `librosa` / `pydub` を使わない）。
 どちらの変換も 20ms ごとの小さな断片を続けて処理するため、断片の境目で音が途切れないよう
@@ -14,12 +16,15 @@
 
 from __future__ import annotations
 
+import logging
 import threading
+from typing import Any
 
 import discord
 import numpy as np
 
 from persona_bot.config.constants import (
+    LIVE_BARGE_IN_FADE_EXPONENT,
     LIVE_DOWNSAMPLE_CUTOFF_HZ,
     LIVE_DOWNSAMPLE_TAPS,
     LIVE_INPUT_SAMPLE_RATE,
@@ -30,8 +35,11 @@ from persona_bot.config.constants import (
     TTS_SAMPLE_RATE,
 )
 
+logger = logging.getLogger(__name__)
+
 # Discord の 1 フレーム（20ms・48kHz・ステレオ・16bit）のバイト数。
 DISCORD_FRAME_BYTES = TTS_SAMPLE_RATE // 50 * TTS_CHANNELS * 2
+_FRAME_SAMPLES = TTS_SAMPLE_RATE // 50
 _SILENT_FRAME = bytes(DISCORD_FRAME_BYTES)
 
 
@@ -120,16 +128,23 @@ class LivePlaybackSource(discord.AudioSource):
       `LIVE_PLAYBACK_STALL_SECONDS` 相当の間なにも届かなければ打ち切る（応答が途絶えたとき、
       再生スレッドを残し続けないため）。
     - `finish()` の後は残りを流し切ってから b"" を返し、再生を終える。
-    - `abort()` の後は次の `read()` で b"" を返す（割り込み・違反の検出で残りを捨てる）。
+    - `abort()` の後は次の `read()` で b"" を返す（違反の検出・会話の終了で残りを即座に捨てる）。
+    - `fade_out(frames)` の後は、frames 分だけ音量を絞りながら流してから b"" を返す
+      （割り込みで止めるとき。残りの音声は捨てる）。
+    - reference を渡すと、送り出したフレームをエコー除去の参照信号へ書く（再生スレッドで呼ぶ）。
     """
 
-    def __init__(self, *, stall_frames: int) -> None:
+    def __init__(self, *, stall_frames: int, reference: Any = None) -> None:
         self._buffer = bytearray()
         self._lock = threading.Lock()
         self._finished = False
         self._aborted = False
         self._stall_frames = stall_frames
         self._stalled = 0
+        self._reference = reference
+        # フェードアウトのフレーム数（0 ならフェードしていない）と、絞り終えたフレーム数。
+        self._fade_total = 0
+        self._fade_done = 0
         self.frames_played = 0
 
     # discord.AudioSource の契約 -------------------------------------------------
@@ -142,9 +157,21 @@ class LivePlaybackSource(discord.AudioSource):
             self._buffer.clear()
 
     def read(self) -> bytes:
+        frame = self._next_frame()
+        if frame and self._reference is not None:
+            try:
+                self._reference.record(frame)
+            except Exception:
+                # 参照信号の記録に失敗しても再生は止めない（エコー除去が効かなくなるだけ）。
+                logger.debug("音声会話: エコー除去の参照信号を記録できませんでした。", exc_info=True)
+        return frame
+
+    def _next_frame(self) -> bytes:
         with self._lock:
             if self._aborted:
                 return b""
+            if self._fade_total:
+                return self._next_fading_frame()
             if len(self._buffer) >= DISCORD_FRAME_BYTES:
                 frame = bytes(self._buffer[:DISCORD_FRAME_BYTES])
                 del self._buffer[:DISCORD_FRAME_BYTES]
@@ -169,6 +196,25 @@ class LivePlaybackSource(discord.AudioSource):
                 return b""
             return _SILENT_FRAME
 
+    def _next_fading_frame(self) -> bytes:
+        """フェードアウト中の次のフレーム（ロックの中で呼ぶ）。絞り終えたら b""。"""
+        if self._fade_done >= self._fade_total:
+            self._aborted = True
+            self._buffer.clear()
+            return b""
+        chunk = bytes(self._buffer[:DISCORD_FRAME_BYTES])
+        del self._buffer[:DISCORD_FRAME_BYTES]
+        chunk += bytes(DISCORD_FRAME_BYTES - len(chunk))
+        # 1.0 → 0 へ、指数で早めに絞る（強めのフェードアウト。#409 の決定事項）。
+        total = self._fade_total * _FRAME_SAMPLES
+        positions = np.arange(self._fade_done * _FRAME_SAMPLES, (self._fade_done + 1) * _FRAME_SAMPLES)
+        gain = (1.0 - positions / total) ** LIVE_BARGE_IN_FADE_EXPONENT
+        self._fade_done += 1
+        self.frames_played += 1
+        samples = np.frombuffer(chunk, dtype=np.int16).reshape(-1, TTS_CHANNELS).astype(np.float32)
+        faded = np.rint(samples * gain[:, None]).astype(np.int16)
+        return faded.tobytes()
+
     # イベントループ側の操作 -----------------------------------------------------
 
     def feed(self, pcm: bytes) -> None:
@@ -184,6 +230,25 @@ class LivePlaybackSource(discord.AudioSource):
         with self._lock:
             self._aborted = True
             self._buffer.clear()
+
+    def fade_out(self, frames: int) -> None:
+        """frames 分（20ms 単位）だけ音量を絞りながら流してから止める。残りの音声は捨てる。"""
+        with self._lock:
+            if self._aborted or self._fade_total:
+                return
+            if frames <= 0:
+                self._aborted = True
+                self._buffer.clear()
+                return
+            del self._buffer[frames * DISCORD_FRAME_BYTES:]
+            self._fade_total = frames
+            self._fade_done = 0
+            # 以後に届いた音声は受け取らない。
+            self._finished = True
+
+    @property
+    def fading(self) -> bool:
+        return bool(self._fade_total)
 
     @property
     def buffered_bytes(self) -> int:

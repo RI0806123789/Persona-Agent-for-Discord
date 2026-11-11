@@ -118,6 +118,12 @@ class LiveInstructionTests(unittest.TestCase):
         self.assertNotIn("検索", text)
         self.assertIn("検索", build_live_system_instruction("架空のペルソナ", grounding=True))
 
+    def test_mistaken_interruption_is_answered_with_a_confirmation(self):
+        """誤って割り込んだとき（言いよどみ・相槌だけ）は、続けてよいか確認させる（#409 の決定事項）。"""
+        text = build_live_system_instruction("架空のペルソナ", grounding=False)
+        self.assertIn("遮られた", text)
+        self.assertIn("続きをしてよいか短く確認", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,8 +10,16 @@
   同時に1人分の音声だけを送る（複数人の音声を混ぜない）。話し始め・話し終わりはローカルの
   VAD（音量としきい値）で判定し、`activity_start` / `activity_end` で Live へ伝える。
   ほかの人が話している間の「話したい」は発話希望として短時間だけ覚える（音声は溜めない）。
-- **割り込み**: ボットが話している最中に参加者が話し始めたら（`LIVE_BARGE_IN_MS` 以上）、
-  ボットの再生を止めて未再生の音声を捨て、新しい発言へ切り替える。受信は止めない。
+- **割り込み（#409）**: ペルソナの声が出ている間も受信は止めない。受信した音声からは、再生した
+  音声を参照信号にしてエコー（ペルソナ自身の声の回り込み）を取り除き（`audio/echo_canceller.py`）、
+  除去後の音声で話し始めを判定する。声が出ている間の話し始めはすぐには Live へ送らず手元に留め、
+  `LIVE_BARGE_IN_HOLD_SECONDS` 話し続けたら送る（短い相槌・言いよどみでは返答を止めない）。
+  送った後、入力の文字起こしがフィラー・相槌を除いて複数の語になったら割り込みと確定し、
+  ペルソナの声を強めにフェードアウトさせる（`voice_barge_in.py`）。確定するまでは届いている返答を
+  流し続ける。文字起こしがペルソナ自身の直近の発話とほとんど同じなら、回り込みとみなしてその発言への
+  返答を再生しない（音声ループの防止）。誤って割り込んだときは Live に確認させる（システム指示）。
+  返答の生成を待っている間（まだ声が出ていない間）の話し始めは、従来どおり `LIVE_BARGE_IN_MS` で
+  すぐに割り込む。会話の終了・違反の検出・一時停止では、フェードアウトせずに即座に止める。
 - **モデレーション（並行検査＋短時間バッファ）**: 入力・出力の文字起こしをローカルの
   NG ワードで即座に、AI モデレーションで生成と並行して検査する。違反を見つけたら再生を
   止めて残りを捨てる（検出前に再生された部分は取り消せないことは仕様上許容する）。
@@ -27,20 +35,26 @@ from __future__ import annotations
 
 import logging
 import asyncio
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field
-from statistics import quantiles
+from statistics import median, quantiles
 from time import monotonic
 from typing import Any, Callable
 
 import discord
 
+from persona_bot.audio.echo_canceller import EchoReference
 from persona_bot.audio.live_audio import DISCORD_FRAME_BYTES, LivePlaybackSource, Upsampler, frame_rms
 from persona_bot.audio.playback import get_playback_controller
 from persona_bot.audio.voice_receive import LiveVoiceClient, VoiceReceiver
 from persona_bot.config.constants import (
+    LIVE_AEC_ENABLED,
+    LIVE_BARGE_IN_FADE_MS,
+    LIVE_BARGE_IN_GAP_MS,
+    LIVE_BARGE_IN_HOLD_SECONDS,
     LIVE_BARGE_IN_MS,
     LIVE_CONSENT_PANEL_UPDATE_SECONDS,
+    LIVE_ECHO_GUARD_SECONDS,
     LIVE_INPUT_CHUNK_MS,
     LIVE_INPUT_QUEUE_MAX_CHUNKS,
     LIVE_INPUT_SAMPLE_RATE,
@@ -67,6 +81,9 @@ from persona_bot.services.violation_notice import record_violation_notice
 from persona_bot.services.content_moderator import VERDICT_SAFE, VERDICT_UNSAFE
 from persona_bot.services.live_session import CLOSED_QUOTA, LiveOptions, LiveSession, LiveUnavailableError
 from persona_bot.services.prompting import build_live_system_instruction
+from persona_bot.services.voice_barge_in import (
+    INTERRUPTION_SPEECH, RecentSpeech, classify_interruption, is_echo_text,
+)
 from persona_bot.utils.discord_helpers import can_bot_send_messages
 
 
@@ -79,6 +96,11 @@ _INPUT_CHUNK_BYTES = _INPUT_BYTES_PER_MS * LIVE_INPUT_CHUNK_MS
 _OUTPUT_BUFFER_BYTES = DISCORD_FRAME_BYTES * max(1, LIVE_OUTPUT_BUFFER_MS // 20)
 _PLAYBACK_STALL_FRAMES = int(LIVE_PLAYBACK_STALL_SECONDS * 50)
 _PREROLL_FRAMES = max(1, LIVE_VAD_PREROLL_MS // 20)
+# 割り込みを確定したときに絞り切るまでのフレーム数（20ms 単位）。
+_FADE_FRAMES = max(1, LIVE_BARGE_IN_FADE_MS // 20)
+# 割り込みの候補として手元に留める音声の上限（保持の長さ＋プリロール。20ms 単位）。
+# ★ 送るときは一度に送信待ちへ積むため、LIVE_INPUT_QUEUE_MAX_CHUNKS の範囲に収める（超えた分は捨てられる）。
+_HOLD_MAX_FRAMES = int(LIVE_BARGE_IN_HOLD_SECONDS * 50) + _PREROLL_FRAMES
 
 _NO_MENTIONS = discord.AllowedMentions.none()
 
@@ -127,6 +149,21 @@ class _Participant:
     preroll: deque[bytes] = field(default_factory=lambda: deque(maxlen=_PREROLL_FRAMES))
     voiced_ms: float = 0.0
     last_voiced_at: float = float("-inf")
+    # ペルソナの声が出ている間に話し始めた、割り込みの候補の音声（まだ Live へ送っていない。メモリ上だけ）。
+    held: list[bytes] | None = None
+    held_started_at: float = 0.0
+    held_last_voiced_at: float = float("-inf")
+
+    def take_pending_audio(self) -> list[bytes]:
+        """話し始めに Live へ送る音声（留めていた候補か、プリロール）を取り出す。"""
+        frames = self.held if self.held is not None else list(self.preroll)
+        self.drop_pending_audio()
+        return frames
+
+    def drop_pending_audio(self) -> None:
+        self.held = None
+        self.preroll.clear()
+        self.voiced_ms = 0.0
 
 
 @dataclass
@@ -159,6 +196,15 @@ class _Utterance:
     transcript_closed: bool = False
     # 帰属を確定できない文字起こしを捨てた。足りない文字起こしは記憶に使わない。
     transcript_incomplete: bool = False
+    # ペルソナの声が出ている間に話し始めた発言の割り込みの状態（None: 割り込みではない、
+    # "pending": 文字起こしで確かめている、"confirmed": 割り込みと確定した）。
+    barge_in: str | None = None
+    # この発言が割り込んだ返答（確定したらフェードアウトさせる）。
+    interrupts: _Utterance | None = None
+    # ペルソナの声が出ている間・止まった直後に話し始めた（自分の声の回り込みを疑う）。
+    echo_suspect: bool = False
+    # サーバー側で生成を打ち切られた返答（最後まで話していないので記憶に使わない）。
+    cut_off: bool = False
 
 
 @dataclass
@@ -169,14 +215,30 @@ class _SpeakerState:
     reservations: deque[tuple[int, float]] = field(default_factory=deque)
     active_user: int | None = None
     speaking: bool = False
+    # 診断用の件数（割り込みの候補にした回数・相槌として捨てた回数）。
+    holds_started: int = 0
+    holds_dropped: int = 0
 
-    def receive(self, user_id: int, pcm: bytes, now: float, *, bot_speaking: Callable[[], bool]) -> tuple[str, _Participant]:
+    def receive(
+        self, user_id: int, pcm: bytes, now: float, *, voiced: bool,
+        bot_speaking: Callable[[], bool], bot_audible: Callable[[], bool],
+    ) -> tuple[str, _Participant]:
+        """1フレームを判定して、行うことを返す。
+
+        - "send": 発話中の人の続き。"begin": 話し始め。"barge_in": ペルソナの声が出ている間の割り込みの候補を
+          Live へ送る。"hold": 割り込みの候補として手元に留めている。"wait": まだ何もしない。
+        """
         participant = self.participants.setdefault(user_id, _Participant())
-        voiced = frame_rms(pcm) >= LIVE_VAD_ENERGY_THRESHOLD
         if self.speaking and self.active_user == user_id:
             if voiced:
                 participant.last_voiced_at = now
             return "send", participant
+        if participant.held is not None:
+            if now - participant.held_last_voiced_at < LIVE_BARGE_IN_GAP_MS / 1000:
+                return self._continue_hold(user_id, participant, pcm, now, voiced=voiced, audible=bot_audible())
+            # 声が途切れた。相槌・言いよどみとみなして捨て（Live へは送らない）、このフレームから数え直す。
+            self.holds_dropped += 1
+            participant.drop_pending_audio()
         participant.preroll.append(pcm)
         if now - participant.last_voiced_at > LIVE_VAD_START_GAP_MS / 1000:
             participant.voiced_ms = 0.0
@@ -184,13 +246,51 @@ class _SpeakerState:
             return "wait", participant
         participant.voiced_ms += len(pcm) / _INPUT_BYTES_PER_MS
         participant.last_voiced_at = now
-        threshold = LIVE_BARGE_IN_MS if bot_speaking() else LIVE_VAD_START_MS
+        audible = bot_audible()
+        threshold = LIVE_VAD_START_MS if audible or not bot_speaking() else LIVE_BARGE_IN_MS
         if participant.voiced_ms < threshold:
             return "wait", participant
+        if audible:
+            # ペルソナの声が出ている。すぐには送らず、話し続けるか手元に留めて確かめる。
+            self.holds_started += 1
+            participant.held = list(participant.preroll)
+            participant.held_started_at = now - participant.voiced_ms / 1000
+            participant.held_last_voiced_at = now
+            participant.preroll.clear()
+            return "hold", participant
         if self.speaking or not self.floor_available(user_id, now):
             self.request_floor(user_id, now)
             return "wait", participant
         return "begin", participant
+
+    def _continue_hold(
+        self, user_id: int, participant: _Participant, pcm: bytes, now: float, *, voiced: bool, audible: bool,
+    ) -> tuple[str, _Participant]:
+        held = participant.held
+        if held is not None and len(held) < _HOLD_MAX_FRAMES:
+            held.append(pcm)
+        if voiced:
+            participant.held_last_voiced_at = now
+            participant.last_voiced_at = now
+        if not audible:
+            # ペルソナの声が止まった。割り込みではなく、ふつうの話し始めとして送る。
+            if self.speaking or not self.floor_available(user_id, now):
+                self.request_floor(user_id, now)
+                return "hold", participant
+            return "begin", participant
+        if now - participant.held_started_at < LIVE_BARGE_IN_HOLD_SECONDS:
+            return "hold", participant
+        if self.speaking or not self.floor_available(user_id, now):
+            self.request_floor(user_id, now)
+            return "hold", participant
+        return "barge_in", participant
+
+    def expire_holds(self, now: float) -> None:
+        """声が途切れたまま（パケットが来ない）の割り込みの候補を捨てる（見回りから呼ぶ）。"""
+        for participant in self.participants.values():
+            if participant.held is not None and now - participant.held_last_voiced_at >= LIVE_BARGE_IN_GAP_MS / 1000:
+                self.holds_dropped += 1
+                participant.drop_pending_audio()
 
     def request_floor(self, user_id: int, now: float) -> None:
         self._expire_reservations(now)
@@ -304,6 +404,15 @@ class VoiceConversation:
         self._playback: LivePlaybackSource | None = None
         self._playback_owner: _Utterance | None = None
         self._playback_started = False
+        # 割り込みでフェードアウトさせている音源（絞り切るまで再生スレッドが流す）。
+        self._fading: LivePlaybackSource | None = None
+        # ペルソナの声が最後に止まった時刻（止まった直後の話し始めは回り込みを疑う）。
+        self._last_audible_at = float("-inf")
+        # エコー除去の参照信号（再生した音声。メモリ上の数秒分だけ）と、回り込みの照合に使う直近の発話。
+        self._echo_reference = EchoReference() if LIVE_AEC_ENABLED else None
+        self._recent_output = RecentSpeech()
+        # 診断用の件数（終了時にログへ出す。本文や話者は含めない）。
+        self._barge_in_stats: Counter[str] = Counter()
         self._playback_controller = get_playback_controller(voice_client)
         self._upsampler = Upsampler()
         self._send_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
@@ -338,7 +447,9 @@ class VoiceConversation:
     async def start(self) -> None:
         """Live へ接続し、受信と見回りを始める。接続できなければ LiveUnavailableError。"""
         await self._live.start()
-        self._receiver = self._service.receiver_factory(self.voice_client, self._on_audio)
+        self._receiver = self._service.receiver_factory(
+            self.voice_client, self._on_audio, echo_reference=self._echo_reference,
+        )
         self._receiver.start()
         self._tasks.append(spawn(self._run_sender(), label="音声会話の送信"))
         self._tasks.append(spawn(self._run_ticks(), label="音声会話の見回り"))
@@ -355,6 +466,7 @@ class VoiceConversation:
         for task in self._tasks:
             if task is not current:
                 task.cancel()
+        self._log_echo_stats()
         try:
             if self._receiver is not None:
                 self._receiver.stop()
@@ -365,6 +477,7 @@ class VoiceConversation:
         self._clear_send_queue()
         self._participants.clear()
         self._reservations.clear()
+        self._recent_output.clear()
         await wait_for_cleanup(self._live.close(), label="音声会話の Live の切断")
         await asyncio.gather(*(task for task in self._tasks if task is not current), return_exceptions=True)
         panel_task = self._panel_update_task
@@ -374,7 +487,40 @@ class VoiceConversation:
             panel_task.cancel()
             await asyncio.gather(panel_task, return_exceptions=True)
         self._log_latency()
+        self._log_barge_in_stats()
         await self._finish_panel()
+
+    def _log_barge_in_stats(self) -> None:
+        """割り込みの判定の件数（しきい値の実験用。#409）。本文・話者は出さない。"""
+        state = self._speaker_state
+        stats = self._barge_in_stats
+        if not state.holds_started and not stats:
+            return
+        logger.info(
+            "音声会話: 返答中の割り込み 候補 %d 回 / 相槌として見送り %d 回 / Live へ送信 %d 回 / "
+            "確定 %d 回 / 未確定のまま返答 %d 回 / 回り込みとして返答を破棄 %d 回",
+            state.holds_started, state.holds_dropped, stats["sent"], stats["confirmed"],
+            stats["unconfirmed"], stats["echo"],
+        )
+
+    def _log_echo_stats(self) -> None:
+        """エコー除去の推定遅延・除去量（しきい値の実験用。#409）。受信を止める前に読む。"""
+        receiver = self._receiver
+        if receiver is None or not hasattr(receiver, "echo_stats"):
+            return
+        try:
+            stats = list(receiver.echo_stats())
+            delays = [float(item.delay_ms) for item in stats if item.delay_ms is not None]
+            erles = [float(item.erle_db) for item in stats if item.erle_db is not None]
+        except Exception:
+            logger.debug("音声会話: エコー除去の診断値を読めませんでした。", exc_info=True)
+            return
+        if not delays:
+            return
+        logger.info(
+            "音声会話: エコー除去 回り込みの遅延を推定できた話者 %d 人（遅延の中央値 %.0f ミリ秒・除去量の中央値 %s）",
+            len(delays), median(delays), f"{median(erles):.1f}dB" if erles else "未計測",
+        )
 
     def _log_latency(self) -> None:
         if not self._latencies:
@@ -491,8 +637,7 @@ class VoiceConversation:
         self._clear_send_queue()
         self._reservations.clear()
         for participant in self._participants.values():
-            participant.preroll.clear()
-            participant.voiced_ms = 0.0
+            participant.drop_pending_audio()
 
     @property
     def is_open(self) -> bool:
@@ -506,18 +651,36 @@ class VoiceConversation:
     # 受信した音声（イベントループ上で呼ばれる）
     # ==================================================================
 
-    def _on_audio(self, user_id: int, pcm: bytes) -> None:
+    def _on_audio(self, user_id: int, pcm: bytes, level: float | None = None) -> None:
+        """受信した 1 フレーム（16kHz・モノラル）。level はエコー除去が判定した発話の強さ。
+
+        エコー除去なし（level が None）なら、フレームの実効値で判定する。
+        """
         if self._stopped or not self._gate_open or not self._live.connected:
             return
         if user_id not in self.consent.voice or self._service.is_blocked(user_id):
             # 未同意・ブラックリスト登録者の声は Live へ送らずに捨てる。
             return
         now = self._now()
-        action, participant = self._speaker_state.receive(user_id, pcm, now, bot_speaking=self._bot_speaking)
+        voiced = (frame_rms(pcm) if level is None else level) >= LIVE_VAD_ENERGY_THRESHOLD
+        action, participant = self._speaker_state.receive(
+            user_id, pcm, now, voiced=voiced, bot_speaking=self._bot_speaking, bot_audible=self._bot_audible,
+        )
         if action == "send":
             self._queue_audio(pcm)
         elif action == "begin":
             self._begin_activity(user_id, participant, now)
+        elif action == "barge_in":
+            self._begin_activity(user_id, participant, now, barge_in=True)
+
+    def _bot_audible(self) -> bool:
+        """ペルソナの声がいま出ているか（再生を始めた音源がある）。割り込みは手元で確かめてから送る。"""
+        source = self._playback
+        return source is not None and not source.aborted and self._playback_started
+
+    def _recently_audible(self, now: float) -> bool:
+        """ペルソナの声が出ているか、止まってすぐか（回り込みがまだ届きうる）。"""
+        return self._bot_audible() or now - self._last_audible_at <= LIVE_ECHO_GUARD_SECONDS
 
     def _bot_speaking(self) -> bool:
         """ボットが返答中か（生成中・再生中）。話し始めのしきい値を割り込み用に上げる。"""
@@ -532,10 +695,23 @@ class VoiceConversation:
         # 待つのをやめる（いつまでも話し始めのしきい値を割り込み用のままにしない）。
         return self._now() - current.ended_at < LIVE_PLAYBACK_STALL_SECONDS
 
-    def _begin_activity(self, user_id: int, participant: _Participant, now: float) -> None:
-        if self._bot_speaking():
+    def _begin_activity(self, user_id: int, participant: _Participant, now: float, *, barge_in: bool = False) -> None:
+        previous = self._current
+        echo_suspect = self._recently_audible(now)
+        if barge_in:
+            # ペルソナの声が出ている間に話し続けている。Live へ送って文字起こしで割り込みかを確かめる。
+            # 確定するまでは、届いている返答を流し続ける（相槌・回り込みなら止めない）。
+            logger.info("音声会話: 返答中に話し続けている人の声を送り、割り込みかを確かめます。")
+            self._barge_in_stats["sent"] += 1
+            if previous is not None and previous.ended_at is not None and not previous.response_complete:
+                # サーバーはこの発話の開始で生成を打ち切る（START_OF_ACTIVITY_INTERRUPTS）。打ち切りの通知
+                # （interrupted）までに届いた残りは、前の返答の音源へ流す（新しい発言の返答と取り違えない）。
+                self._awaiting_interrupt_ack = True
+                self._interrupt_ack_deadline = now + LIVE_PLAYBACK_STALL_SECONDS
+                self._interrupted = previous
+                previous.cut_off = True
+        elif self._bot_speaking():
             logger.info("音声会話: 返答中の割り込みを検出したため、再生を止めます。")
-            previous = self._current
             if previous is not None:
                 if previous.ended_at is not None and not previous.response_complete:
                     # 生成中の返答の残りが届いても、新しい発言の返答と取り違えない。最初の返答の
@@ -549,16 +725,17 @@ class VoiceConversation:
                 self._discard_response(previous, "割り込み")
             self._abort_playback()
         self._turn_seq += 1
-        self._current = _Utterance(self._turn_seq, user_id, now)
+        self._current = _Utterance(self._turn_seq, user_id, now, echo_suspect=echo_suspect)
+        if barge_in:
+            self._current.barge_in = "pending"
+            self._current.interrupts = previous
         self._assign_transcript_owner(self._current, now)
         self._active_user = user_id
         self._speaking = True
         self._remove_reservation(user_id)
         self._enqueue("start")
-        for frame in participant.preroll:
+        for frame in participant.take_pending_audio():
             self._queue_audio(frame)
-        participant.preroll.clear()
-        participant.voiced_ms = 0.0
 
     # --- 入力の文字起こしの帰属（発話権とは別に管理する） ---------------------------
 
@@ -678,6 +855,7 @@ class VoiceConversation:
                 )
             return
         self._update_gate()
+        self._speaker_state.expire_holds(self._now())
         if (self._transcript_blocked is not None
                 and self._now() - self._transcript_blocked_since >= LIVE_PLAYBACK_STALL_SECONDS):
             # 前の人の文字起こしが閉じる合図が来ないまま時間が過ぎた。以後の断片は次の人の分とみなす
@@ -709,9 +887,14 @@ class VoiceConversation:
             self._on_input_transcript(transcription.text or "", bool(getattr(transcription, "finished", None)))
         if getattr(content, "interrupted", None):
             self._awaiting_interrupt_ack = False
-            self._abort_playback()
+            previous = self._interrupted
+            if previous is not None and not previous.discarded and self._playback_owner is previous:
+                # 割り込みを確かめている間。届いている分は流し切る（確定したらフェードアウトさせる）。
+                self._finish_held_previous(previous)
+            else:
+                self._abort_playback()
             # 割り込まれた発言は、生成が始まった時点で入力を処理し終えている。
-            self._close_transcript(self._interrupted)
+            self._close_transcript(previous)
             self._interrupted = None
         model_turn = getattr(content, "model_turn", None)
         if model_turn is not None:
@@ -730,10 +913,30 @@ class VoiceConversation:
         if getattr(content, "turn_complete", None):
             self._on_turn_complete()
 
+    def _held_previous(self) -> _Utterance | None:
+        """割り込みを確かめている間、再生を続けている前の返答（打ち切りの通知までに届いた残りもここへ流す）。"""
+        previous = self._interrupted
+        if (previous is None or not self._awaiting_interrupt_ack or previous.discarded
+                or self._playback_owner is not previous or self._now() >= self._interrupt_ack_deadline):
+            return None
+        return previous
+
+    def _finish_held_previous(self, previous: _Utterance) -> None:
+        """割り込まれた前の返答の生成が終わった。届いた分を流し切り、出力の AI 判定に掛ける。"""
+        if self._playback is not None and self._playback_owner is previous:
+            self._playback.finish()
+        if previous.response_started and not previous.response_complete:
+            previous.response_complete = True
+            # 打ち切られた返答は記憶に使わない（cut_off）が、流している分の安全性は確かめる。
+            spawn(self._judge_output(previous), label="音声会話の出力判定（割り込まれた返答）")
+
     def _accepting_response(self) -> _Utterance | None:
         """いま届いた応答を受け取る発言。受け取らない（捨てる）なら None。"""
         if self._awaiting_interrupt_ack and self._now() >= self._interrupt_ack_deadline:
             self._awaiting_interrupt_ack = False
+            previous = self._interrupted
+            if previous is not None and not previous.discarded and self._playback_owner is previous:
+                self._finish_held_previous(previous)
         if self._awaiting_interrupt_ack or self._speaking or not self._gate_open:
             return None
         current = self._current
@@ -761,26 +964,70 @@ class VoiceConversation:
             utterance.input_updated_at = self._now()
             if self._service.ng_filter.contains_ng_word(utterance.input_text):
                 self._reject_input(utterance, "入力の NG ワード")
-            elif (utterance.input_task is not None and utterance.input_task.done()
-                    and not utterance.violation_recorded and not self._stopped):
-                # 入力の AI 判定が済んだ後に続きが届いた。増えた分も判定し直す。
-                utterance.input_task = spawn(self._judge_input(utterance), label="音声会話の入力の再判定")
+            else:
+                self._check_barge_in(utterance)
+                if (utterance.input_task is not None and utterance.input_task.done()
+                        and not utterance.violation_recorded and not self._stopped):
+                    # 入力の AI 判定が済んだ後に続きが届いた。増えた分も判定し直す。
+                    utterance.input_task = spawn(self._judge_input(utterance), label="音声会話の入力の再判定")
         if finished:
             self._close_transcript(utterance)
 
+    def _check_barge_in(self, utterance: _Utterance) -> None:
+        """返答中に話し始めた人の文字起こしが、割り込みとして確定できる中身になったか確かめる。
+
+        フィラー・相槌だけの間や、ペルソナ自身の発話の回り込みでは確定しない（返答を流し続ける）。
+        """
+        if utterance.barge_in != "pending" or utterance.discarded:
+            return
+        verdict = classify_interruption(utterance.input_text, self._recent_output.text(self._now()))
+        if verdict != INTERRUPTION_SPEECH:
+            return
+        utterance.barge_in = "confirmed"
+        self._barge_in_stats["confirmed"] += 1
+        previous = utterance.interrupts
+        if previous is not None and not previous.discarded:
+            logger.info("音声会話: 割り込みを確定したため、返答をフェードアウトします。")
+            self._discard_response(previous, "割り込み", fade=True)
+
+    def _is_echo_reply(self, utterance: _Utterance) -> bool:
+        """この発言への返答を再生しないか（発言がペルソナ自身の声の回り込みだった）。"""
+        if not utterance.echo_suspect or utterance.barge_in == "confirmed":
+            return False
+        return is_echo_text(utterance.input_text, self._recent_output.text(self._now()))
+
     async def _on_model_audio(self, data: bytes) -> None:
+        previous = self._held_previous()
+        if previous is not None:
+            # 割り込みを確かめている間に届いた、前の返答の残り（打ち切りの通知の前に生成された分）。
+            if self._playback is not None and not self._playback.aborted:
+                self._playback.feed(self._upsampler.process(data))
+            return
         utterance = self._accepting_response()
         if utterance is None:
             return
         if utterance.first_audio_at is None:
+            if self._is_echo_reply(utterance):
+                # ★ 自分の声を参加者の発言として受け取った（エコー除去で取り切れなかった回り込み）。
+                # その返答を流すと、また回り込んで返答し続ける音声ループになるため再生しない。
+                self._barge_in_stats["echo"] += 1
+                self._discard_response(utterance, "自分の声の回り込みへの返答")
+                return
+            if utterance.barge_in == "pending":
+                # 割り込みと確定しないまま返答が来た（言いよどみ・相槌だった）。前の返答は差し替える。
+                self._barge_in_stats["unconfirmed"] += 1
             utterance.first_audio_at = self._now()
         utterance.response_started = True
         if (self._playback is None or self._playback_owner is not utterance
                 or self._playback.aborted):
             # 再生側が途絶えで打ち切った音源（aborted）にはもう流せない。後続のチャンクは
-            # 新しい音源で再生し直す（同じ発話の再開）。
-            self._abort_playback()
-            self._playback = LivePlaybackSource(stall_frames=_PLAYBACK_STALL_FRAMES)
+            # 新しい音源で再生し直す（同じ発話の再開）。まだ流れている前の返答（割り込みを確かめる間に
+            # 流していた分）は、強めに絞ってから替える。
+            if self._playback is not None and self._playback_owner is not utterance and not self._playback.aborted:
+                self._fade_out_playback()
+            else:
+                self._abort_playback()
+            self._playback = LivePlaybackSource(stall_frames=_PLAYBACK_STALL_FRAMES, reference=self._echo_reference)
             self._playback_owner = utterance
             self._playback_started = False
             self._upsampler = Upsampler()
@@ -789,6 +1036,16 @@ class VoiceConversation:
             await self._start_playback()
 
     def _on_output_transcript(self, text: str) -> None:
+        # 回り込みの照合用に、ボット自身の発話は受け取るかどうかに関わらず覚える（メモリ上だけ）。
+        self._recent_output.add(self._now(), text)
+        previous = self._held_previous()
+        if previous is not None:
+            # 割り込みを確かめている間も流している前の返答。NG ワードの検査は続ける。
+            previous.output_text = (previous.output_text + text)[:LIVE_TRANSCRIPT_MAX_CHARS]
+            if self._service.ng_filter.contains_ng_word(previous.output_text):
+                previous.output_ng = True
+                self._discard_response(previous, "出力の NG ワード")
+            return
         utterance = self._accepting_response()
         if utterance is None:
             return
@@ -811,7 +1068,10 @@ class VoiceConversation:
         if self._awaiting_interrupt_ack:
             # 割り込まれた古い返答の終わり。新しい発言の返答はこの後に届く。
             self._awaiting_interrupt_ack = False
-            self._close_transcript(self._interrupted)
+            previous = self._interrupted
+            if previous is not None and not previous.discarded and self._playback_owner is previous:
+                self._finish_held_previous(previous)
+            self._close_transcript(previous)
             self._interrupted = None
             return
         utterance = self._current
@@ -830,6 +1090,8 @@ class VoiceConversation:
             self._end_activity(discard=True)
         if self._current is not None:
             self._discard_response(self._current, "Live の再接続")
+        # 割り込みを確かめる間に流していた前の返答も止める（打ち切りの通知はもう届かない）。
+        self._abort_playback()
         # 古い接続の文字起こしはもう届かない。
         self._reset_transcripts()
         self._awaiting_interrupt_ack = False
@@ -906,12 +1168,21 @@ class VoiceConversation:
 
     def _on_playback_finished(self, source: LivePlaybackSource) -> None:
         self._playback_controller.release(source)
+        if self._fading is source:
+            self._fading = None
         if self._playback is source:
+            if self._playback_started:
+                self._last_audible_at = self._now()
             self._playback = None
             self._playback_owner = None
             self._playback_started = False
 
     def _abort_playback(self) -> None:
+        """再生を即座に止める（会話の終了・違反の検出・一時停止など）。フェードアウト中の音源も止める。"""
+        fading, self._fading = self._fading, None
+        if fading is not None:
+            fading.abort()
+            self._stop_player(fading)
         source = self._playback
         if source is None:
             return
@@ -920,19 +1191,46 @@ class VoiceConversation:
         self._playback_owner = None
         started, self._playback_started = self._playback_started, False
         if started:
-            try:
-                self._playback_controller.stop(self.voice_client, source=source)
-            except Exception:
-                logger.debug("音声会話: 再生の停止に失敗しました。", exc_info=True)
+            self._last_audible_at = self._now()
+            self._stop_player(source)
 
-    def _discard_response(self, utterance: _Utterance, reason: str) -> None:
+    def _fade_out_playback(self) -> None:
+        """再生中の返答を強めにフェードアウトさせてから止める（割り込みを確定したとき。#409）。
+
+        絞り切るまで（LIVE_BARGE_IN_FADE_MS）は再生スレッドが流し、終わると after から後片付けされる。
+        その間に会話が終わったら `_abort_playback` が即座に止める。
+        """
+        source = self._playback
+        if source is None:
+            return
+        self._playback = None
+        self._playback_owner = None
+        started, self._playback_started = self._playback_started, False
+        if started and not source.aborted:
+            self._last_audible_at = self._now()
+            self._fading = source
+            source.fade_out(_FADE_FRAMES)
+        else:
+            source.abort()
+
+    def _stop_player(self, source: LivePlaybackSource) -> None:
+        try:
+            self._playback_controller.stop(self.voice_client, source=source)
+        except Exception:
+            logger.debug("音声会話: 再生の停止に失敗しました。", exc_info=True)
+
+    def _discard_response(self, utterance: _Utterance, reason: str, *, fade: bool = False) -> None:
+        """返答を捨てる。fade が真なら（割り込み）強めにフェードアウトさせ、偽なら即座に止める。"""
         if not utterance.discarded:
             logger.info("音声会話: 返答を破棄しました（%s）。", reason)
         utterance.discarded = True
         if utterance.input_task is not None and utterance.input_task is not asyncio.current_task():
             utterance.input_task.cancel()
         if self._playback_owner is utterance:
-            self._abort_playback()
+            if fade:
+                self._fade_out_playback()
+            else:
+                self._abort_playback()
 
     # ==================================================================
     # モデレーション・記憶・親密度
@@ -999,12 +1297,12 @@ class VoiceConversation:
     async def _remember(self, utterance: _Utterance) -> None:
         if (
             utterance.discarded or utterance.output_ng or utterance.violation_recorded
-            or utterance.transcript_incomplete
+            or utterance.transcript_incomplete or utterance.cut_off
             or utterance.input_verdict != VERDICT_SAFE or utterance.output_verdict != VERDICT_SAFE
             or utterance.judged_input != utterance.input_text
         ):
-            # 判定不能・違反・割り込み・文字起こしが欠けた・判定していない本文を含む発言は、
-            # 記憶・親密度の更新に使わない。
+            # 判定不能・違反・割り込み（打ち切られた返答を含む）・文字起こしが欠けた・判定していない本文を
+            # 含む発言は、記憶・親密度の更新に使わない。
             return
         user_id = utterance.user_id
         if user_id not in self.consent.voice or self._service.is_blocked(user_id):
@@ -1095,7 +1393,7 @@ class VoiceConversationService:
         usage: Any,
         voice_guard: Any = None,
         live_connect: Callable[..., Any] | None = None,
-        receiver_factory: Callable[[LiveVoiceClient, Callable[[int, bytes], None]], Any] | None = None,
+        receiver_factory: Callable[..., Any] | None = None,
     ) -> None:
         self._client = client
         self.genai_client = genai_client
@@ -1107,7 +1405,12 @@ class VoiceConversationService:
         self.usage = usage
         self.voice_guard = voice_guard
         self.live_connect = live_connect
-        self.receiver_factory = receiver_factory or (lambda voice_client, sink: VoiceReceiver(voice_client, sink))
+        # 受信の生成口: (voice_client, sink, echo_reference=参照信号または None) -> 受信（start/stop を持つ）。
+        self.receiver_factory = receiver_factory or (
+            lambda voice_client, sink, echo_reference=None: VoiceReceiver(
+                voice_client, sink, echo_reference=echo_reference,
+            )
+        )
         self._sessions: dict[int, VoiceConversation] = {}
         self._reserved: dict[int, object] = {}
 
