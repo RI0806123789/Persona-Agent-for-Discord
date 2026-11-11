@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 import discord
 from discord.voice_state import VoiceConnectionState
 from persona_bot.audio import voice_receive
+from persona_bot.audio.echo_canceller import EchoReference
 from persona_bot.audio.voice_receive import (
     OPUS_SILENCE_FRAME, LiveVoiceClient, VoiceReceiver, decrypt_transport, is_newer_sequence,
     parse_rtp_packet,
@@ -154,7 +155,7 @@ class ReceiverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(receiver._decode_packet(encrypt_packet(b"opus")))
         self.assertEqual(receiver._dropped, 0)
 
-    def make_receiver(self, *, dave_session=None, dave_version=0):
+    def make_receiver(self, *, dave_session=None, dave_version=0, echo_reference=None):
         self.connection = SimpleNamespace(
             mode="aead_xchacha20_poly1305_rtpsize", secret_key=list(KEY),
             dave_session=dave_session, dave_protocol_version=dave_version,
@@ -170,11 +171,39 @@ class ReceiverTests(unittest.IsolatedAsyncioTestCase):
             self.decoders.append(decoder)
             return decoder
 
-        self.received: list[tuple[int, bytes]] = []
+        self.received: list[tuple] = []
         receiver = VoiceReceiver(
-            voice_client, lambda user_id, pcm: self.received.append((user_id, pcm)), decoder_factory=factory,
+            voice_client, lambda *args: self.received.append(args), decoder_factory=factory,
+            echo_reference=echo_reference,
         )
         return receiver
+
+    async def test_echo_canceller_passes_cleaned_audio_and_speech_level(self):
+        """参照信号を渡すと、エコー除去の結果（除去後の音声と発話の強さ）を一緒に渡す（#409）。"""
+        reference = EchoReference(clock=lambda: 10.0)
+        receiver = self.make_receiver(echo_reference=reference)
+        receiver.start()
+        receiver._on_packet(encrypt_packet(b"opus"))
+        await asyncio.sleep(0)
+        self.assertEqual(len(self.received), 1)
+        user_id, pcm, level = self.received[0]
+        self.assertEqual(user_id, USER_ID)
+        self.assertEqual(len(pcm), 320 * 2)
+        # ペルソナの声（参照信号）が無い間は、受け取った音声のまま・音量のとおり
+        self.assertGreater(level, 0)
+        self.assertEqual(receiver.echo_stats()[0].delay_ms, None)
+        receiver.stop()
+        self.assertEqual(receiver.echo_stats(), [])
+
+    async def test_echo_canceller_failure_falls_back_to_the_received_audio(self):
+        receiver = self.make_receiver(echo_reference=EchoReference(clock=lambda: 10.0))
+        receiver.start()
+        with unittest.mock.patch.object(voice_receive.EchoCanceller, "process", side_effect=RuntimeError("架空の失敗")):
+            receiver._on_packet(encrypt_packet(b"opus"))
+        await asyncio.sleep(0)
+        self.assertEqual(len(self.received), 1)
+        self.assertEqual(len(self.received[0]), 2)  # 取り除かずに渡す（発話の強さは付けない）
+        self.assertEqual(receiver.dropped_packets, 0)
 
     async def test_decrypted_frame_is_delivered_as_16khz_mono(self):
         receiver = self.make_receiver()

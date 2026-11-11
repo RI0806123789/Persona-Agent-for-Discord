@@ -3,6 +3,7 @@
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import Mock, call
 
 import numpy as np
 
@@ -147,6 +148,53 @@ class PlaybackSourceTests(unittest.TestCase):
         self.assertEqual(source.read(), b"")
         self.assertEqual(source.buffered_bytes, 0)
         self.assertTrue(source.aborted)
+
+    def test_fade_out_ramps_the_volume_down_then_ends_and_drops_the_rest(self):
+        """割り込みでは、強めに絞りながら止め、未再生の残りは捨てる（#409）。"""
+        source = LivePlaybackSource(stall_frames=10)
+        frame = np.full(DISCORD_FRAME_BYTES // 2, 10000, dtype=np.int16).tobytes()
+        source.feed(frame * 20)
+        source.read()
+        source.fade_out(4)
+        self.assertTrue(source.fading)
+        source.feed(frame)  # フェード中に届いた続きは受け取らない
+        peaks = []
+        while chunk := source.read():
+            peaks.append(int(np.max(np.abs(np.frombuffer(chunk, dtype=np.int16)))))
+        self.assertEqual(len(peaks), 4)
+        self.assertEqual(peaks, sorted(peaks, reverse=True))
+        self.assertGreater(peaks[0], 8000)
+        self.assertLess(peaks[-1], 1000)
+        self.assertTrue(source.aborted)
+        self.assertEqual(source.read(), b"")
+
+    def test_fade_out_after_abort_or_twice_does_nothing(self):
+        source = LivePlaybackSource(stall_frames=10)
+        source.abort()
+        source.fade_out(4)
+        self.assertFalse(source.fading)
+        fading = LivePlaybackSource(stall_frames=10)
+        fading.feed(bytes(DISCORD_FRAME_BYTES * 3))
+        fading.fade_out(1)
+        fading.fade_out(5)  # 2回目は伸ばさない
+        self.assertTrue(fading.read())
+        self.assertEqual(fading.read(), b"")
+
+    def test_played_frames_are_written_to_the_echo_reference(self):
+        reference = Mock()
+        source = LivePlaybackSource(stall_frames=2, reference=reference)
+        source.feed(b"\x01" * DISCORD_FRAME_BYTES)
+        played = source.read()
+        silence = source.read()  # 生成待ちの無音も、実際に送り出した音として書く
+        self.assertEqual(reference.record.call_args_list, [call(played), call(silence)])
+        # 参照信号へ書けなくても再生は止めない
+        reference.record.side_effect = RuntimeError("架空の失敗")
+        source.feed(b"\x02" * DISCORD_FRAME_BYTES)
+        self.assertEqual(source.read(), b"\x02" * DISCORD_FRAME_BYTES)
+        source.abort()
+        reference.record.reset_mock()
+        self.assertEqual(source.read(), b"")
+        reference.record.assert_not_called()
 
 
 if __name__ == "__main__":

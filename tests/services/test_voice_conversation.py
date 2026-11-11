@@ -135,6 +135,15 @@ class ConversationTestBase(unittest.IsolatedAsyncioTestCase):
     def start_frames(self) -> int:
         return constants.LIVE_VAD_START_MS // 20
 
+    def barge_in_frames(self) -> int:
+        """ペルソナの声が出ている間に、手元の保持を越えて Live へ送られるまで話し続けるフレーム数。"""
+        return int(constants.LIVE_BARGE_IN_HOLD_SECONDS / 0.02) + 2
+
+    async def transcript(self, text: str = "", *, finished: bool = False) -> None:
+        await self.conversation._on_live_message(
+            live_message(input_transcription=SimpleNamespace(text=text, finished=finished)),
+        )
+
     async def complete_utterance(self, user_id=USER_A, transcript="架空の質問") -> None:
         """発言して話し終わり、入力の文字起こしが確定した状態にする。"""
         self.speak(user_id, self.start_frames())
@@ -643,28 +652,180 @@ class ResponseTests(ConversationTestBase):
         self.service.blacklist.record_violation.assert_not_awaited()
         self.service.memory.append_pending_log.assert_not_awaited()
 
-    async def test_barge_in_stops_playback_and_drops_stale_audio_until_interrupted(self):
+    async def start_reply_and_barge_in(self):
+        """A の返答の再生中に、B が保持を越えて話し続ける（Live へ送られる）。"""
+        await self.complete_utterance()
+        await self.respond(complete=False)
+        source = self.voice_client.play.call_args.args[0]
+        previous = self.conversation._current
+        self.drain()
+        self.speak(USER_B, self.barge_in_frames())
+        self.assertEqual(self.conversation._active_user, USER_B)
+        return source, previous
+
+    async def test_short_backchannel_during_reply_is_not_sent_and_does_not_stop_it(self):
+        """ペルソナの声が出ている間の相槌は Live へ送らず、返答も止めない（#409）。"""
         await self.complete_utterance()
         await self.respond(complete=False)
         source = self.voice_client.play.call_args.args[0]
         self.drain()
-        # 相槌程度の短い声では止めない
-        self.speak(USER_B, constants.LIVE_VAD_START_MS // 20)
+        self.speak(USER_B, self.start_frames() + 10)  # 0.6秒ほどの「うんうん」
+        self.assertIsNone(self.conversation._active_user)
+        self.assertEqual(self.drain(), [])
+        self.advance(1.0)  # 途切れたので相槌として捨てる
+        self.conversation.tick()
+        self.assertIsNone(self.conversation._participants[USER_B].held)
         self.assertFalse(source.aborted)
-        self.advance(1.0)
-        self.speak(USER_B, constants.LIVE_BARGE_IN_MS // 20)
-        self.assertTrue(source.aborted)
-        self.assertEqual(self.drain()[0], "start")
-        self.assertEqual(self.conversation._active_user, USER_B)
-        # 割り込まれた古い返答の残りは、新しい発言の返答として流さない
+        self.assertFalse(source.fading)
+        self.assertEqual(self.conversation._speaker_state.holds_dropped, 1)
+
+    async def test_long_speech_is_sent_with_its_start_and_reply_keeps_playing_until_confirmed(self):
+        source, previous = await self.start_reply_and_barge_in()
+        kinds = self.drain()
+        self.assertEqual(kinds[0], "start")
+        # 保持していた話し始め（プリロールを含む約2秒分）もまとめて送る
+        self.assertGreaterEqual(kinds.count("audio"), int(constants.LIVE_BARGE_IN_HOLD_SECONDS * 1000) // constants.LIVE_INPUT_CHUNK_MS)
+        self.assertFalse(source.aborted)
+        self.assertFalse(source.fading)
+        self.assertTrue(self.conversation._awaiting_interrupt_ack)
+        self.assertTrue(previous.cut_off)
+        # 打ち切りの通知までに届いた前の返答の残りは、新しい発言の返答にせず同じ音源へ流す
+        before = source.buffered_bytes
+        await self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(2400))))
+        self.assertGreater(source.buffered_bytes, before)
+        self.assertEqual(self.voice_client.play.call_count, 1)
+        # 打ち切りの通知を受けても、届いている分は流し切る
+        await self.conversation._on_live_message(live_message(interrupted=True))
+        self.assertTrue(source.finished)
+        self.assertFalse(source.aborted)
+
+    async def test_filler_does_not_confirm_but_words_fade_the_reply_out(self):
+        source, previous = await self.start_reply_and_barge_in()
+        await self.conversation._on_live_message(live_message(interrupted=True))
+        await self.transcript("えーと、")
+        self.assertFalse(source.fading)
+        self.assertFalse(previous.discarded)
+        await self.transcript("ちょっと待って")
+        self.assertTrue(source.fading)
+        self.assertTrue(previous.discarded)
+        self.assertEqual(self.conversation._current.barge_in, "confirmed")
+        # 即座には止めず、強めに絞ってから止める（未再生の残りは捨てる）
+        self.voice_client.stop.assert_not_called()
+        frames = []
+        while chunk := source.read():
+            frames.append(chunk)
+        self.assertEqual(len(frames), constants.LIVE_BARGE_IN_FADE_MS // 20)
+        # 新しい発言の返答はふつうに再生する
+        self.advance(constants.LIVE_VAD_SILENCE_MS / 1000 + 0.1)
+        self.conversation.tick()
+        self.voice_client.play.reset_mock()
+        await self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(24000))))
+        self.voice_client.play.assert_called_once()
+
+    async def test_unconfirmed_barge_in_reply_replaces_the_old_one_with_a_fade(self):
+        """言いよどみだけで割り込みにならなかったら、その発言への返答（確認）で前の返答を差し替える。"""
+        source, _ = await self.start_reply_and_barge_in()
+        await self.conversation._on_live_message(live_message(interrupted=True))
+        await self.transcript("あのー、えーっと")
+        self.advance(constants.LIVE_VAD_SILENCE_MS / 1000 + 0.1)
+        self.conversation.tick()
+        self.assertFalse(source.fading)
+        self.voice_client.play.reset_mock()
+        await self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(24000))))
+        self.assertTrue(source.fading)
+        self.voice_client.play.assert_called_once()
+        self.assertEqual(self.conversation._barge_in_stats["unconfirmed"], 1)
+
+    async def test_reply_to_the_bots_own_voice_coming_back_is_not_played(self):
+        """回り込んだ自分の声への返答は再生しない（音声ループの防止。#409）。"""
+        await self.complete_utterance()
+        await self.respond(complete=False, text="明日は晴れて気持ちのいい一日になりそうですね")
+        self.speak(USER_B, self.barge_in_frames())
+        await self.conversation._on_live_message(live_message(interrupted=True))
+        await self.transcript("明日は晴れて気持ちのいい一日")
+        # 自分の声なので割り込みとは確定しない
+        self.assertEqual(self.conversation._current.barge_in, "pending")
+        self.advance(constants.LIVE_VAD_SILENCE_MS / 1000 + 0.1)
+        self.conversation.tick()
+        echo_turn = self.conversation._current
+        self.voice_client.play.reset_mock()
+        await self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(24000))))
+        self.voice_client.play.assert_not_called()
+        self.assertTrue(echo_turn.discarded)
+        self.assertEqual(self.conversation._barge_in_stats["echo"], 1)
+
+    async def test_speech_right_after_the_reply_ends_is_also_checked_for_echo(self):
+        await self.complete_utterance()
+        await self.respond(text="明日は晴れて気持ちのいい一日になりそうですね")
+        source = self.voice_client.play.call_args.args[0]
+        while source.read():
+            pass
+        self.voice_client.play.call_args.kwargs["after"](None)
+        await self.settle()
+        # 声が止まった直後（回り込みがまだ届きうる）に話し始めた発言
+        self.speak(USER_B, self.start_frames())
+        self.assertTrue(self.conversation._current.echo_suspect)
+        await self.transcript("明日は晴れて気持ちのいい一日")
         self.advance(constants.LIVE_VAD_SILENCE_MS / 1000 + 0.1)
         self.conversation.tick()
         self.voice_client.play.reset_mock()
         await self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(24000))))
         self.voice_client.play.assert_not_called()
+        # しばらくたってからの発言は疑わない
+        self.advance(constants.LIVE_ECHO_GUARD_SECONDS + 1)
+        self.speak(USER_A, self.start_frames())
+        self.assertFalse(self.conversation._current.echo_suspect)
+
+    async def test_echo_level_from_the_canceller_does_not_start_a_turn(self):
+        """エコー除去が回り込みと判定したフレーム（発話の強さ 0）では話し始めない。"""
+        for _ in range(self.barge_in_frames()):
+            self.conversation._on_audio(USER_B, VOICED, 0.0)
+            self.advance(0.02)
+        self.assertIsNone(self.conversation._active_user)
+        self.speak(USER_B, self.start_frames())
+        self.assertEqual(self.conversation._active_user, USER_B)
+
+    async def test_stop_cuts_a_fading_reply_immediately(self):
+        source, _ = await self.start_reply_and_barge_in()
         await self.conversation._on_live_message(live_message(interrupted=True))
-        await self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(24000))))
-        self.voice_client.play.assert_called_once()
+        await self.transcript("ちょっと待って")
+        self.assertTrue(source.fading)
+        self.conversation._pause()
+        self.assertTrue(source.aborted)
+        self.assertEqual(source.read(), b"")
+
+    async def test_stop_logs_barge_in_counts_without_text_or_ids(self):
+        """しきい値の実験用に件数だけを出す。文字起こしの本文・話者の ID は出さない（#409）。"""
+        await self.start_reply_and_barge_in()
+        await self.conversation._on_live_message(live_message(interrupted=True))
+        await self.transcript("ちょっと待って")
+        with self.assertLogs(voice_conversation.logger, level="INFO") as logs:
+            await self.conversation.stop()
+        joined = "\n".join(logs.output)
+        self.assertIn("候補 1 回", joined)
+        self.assertIn("確定 1 回", joined)
+        self.assertNotIn("ちょっと待って", joined)
+        self.assertNotIn(str(USER_B), joined)
+
+    async def test_stop_logs_echo_canceller_estimates(self):
+        receiver = Mock()
+        receiver.echo_stats.return_value = [
+            SimpleNamespace(delay_ms=240.0, erle_db=18.0), SimpleNamespace(delay_ms=None, erle_db=None),
+        ]
+        self.conversation._receiver = receiver
+        with self.assertLogs(voice_conversation.logger, level="INFO") as logs:
+            await self.conversation.stop()
+        joined = "\n".join(logs.output)
+        self.assertIn("遅延を推定できた話者 1 人", joined)
+        self.assertIn("240", joined)
+        receiver.stop.assert_called_once()
+
+    async def test_barge_in_while_waiting_for_the_reply_still_cuts_in_right_away(self):
+        """まだ声が出ていない（生成待ちの）間は、従来どおり LIVE_BARGE_IN_MS ですぐに割り込む。"""
+        await self.complete_utterance()
+        self.speak(USER_B, constants.LIVE_BARGE_IN_MS // 20)
+        self.assertEqual(self.conversation._active_user, USER_B)
+        self.assertIsNone(self.conversation._current.barge_in)
 
     async def test_barge_in_before_the_first_reply_chunk_still_waits_for_the_interrupt_notice(self):
         """返答の最初のチャンクが届く前の割り込みでも、前の人宛ての遅れた返答を通さない（#412）。"""
@@ -692,7 +853,7 @@ class ResponseTests(ConversationTestBase):
     async def test_missing_interrupt_notice_does_not_block_replies_forever(self):
         await self.complete_utterance()
         await self.respond(complete=False)
-        self.speak(USER_B, constants.LIVE_BARGE_IN_MS // 20)
+        self.speak(USER_B, self.barge_in_frames())
         self.assertTrue(self.conversation._awaiting_interrupt_ack)
         self.advance(constants.LIVE_VAD_SILENCE_MS / 1000 + 0.1)
         self.conversation.tick()
@@ -792,13 +953,8 @@ class TranscriptOwnershipTests(ConversationTestBase):
         await self.complete_utterance(USER_A, "架空の質問")
         await self.respond(complete=False)
         self.conversation.toggle_memory(USER_B)
-        self.speak(USER_B, constants.LIVE_BARGE_IN_MS // 20)
+        self.speak(USER_B, self.barge_in_frames())
         self.assertEqual(self.conversation._active_user, USER_B)
-
-    async def transcript(self, text: str = "", *, finished: bool = False) -> None:
-        await self.conversation._on_live_message(
-            live_message(input_transcription=SimpleNamespace(text=text, finished=finished)),
-        )
 
     async def test_late_fragment_after_barge_in_is_not_given_to_the_next_speaker(self):
         await self.barge_in()
@@ -835,7 +991,7 @@ class TranscriptOwnershipTests(ConversationTestBase):
     async def test_completed_reply_closes_the_transcript_before_the_next_speaker(self):
         await self.complete_utterance(USER_A, "架空の質問")
         await self.respond()  # 返答の終わり（turn_complete）で A の文字起こしは閉じる
-        self.speak(USER_B, constants.LIVE_BARGE_IN_MS // 20)
+        self.speak(USER_B, self.barge_in_frames())
         self.assertIsNone(self.conversation._transcript_blocked)
         await self.transcript("架空のBの発言")
         self.assertEqual(self.conversation._current.input_text, "架空のBの発言")
@@ -864,7 +1020,7 @@ class TranscriptOwnershipTests(ConversationTestBase):
         self.conversation.grant_voice(USER_C)
         self.advance(constants.LIVE_VAD_SILENCE_MS / 1000 + 0.1)
         self.conversation.tick()
-        self.speak(USER_C, constants.LIVE_BARGE_IN_MS // 20)
+        self.speak(USER_C, self.barge_in_frames())
         self.assertTrue(middle.transcript_incomplete)
         await self.transcript(finished=True)
         await self.transcript("架空のCの発言")

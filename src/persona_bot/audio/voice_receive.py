@@ -11,6 +11,8 @@ discord.py 本体は音声の受信に対応していないため、Gemini Live 
    Discord は 2026-03-02 から全ボイスチャンネルで DAVE を必須化している。
 4. Opus のデコード ……… discord.py 同梱の `discord.opus.Decoder`（48kHz・ステレオ）。
 5. 話者の識別 …………… 音声 WebSocket の SPEAKING（op 5）が知らせる「SSRC → user_id」の対応。
+6. エコー除去（#409）…… 参照信号（`EchoReference`）を渡されたら、話者ごとの `EchoCanceller` で
+   ペルソナの声の回り込みを取り除き、発話の強さ（回り込みと判定したら 0）を一緒に渡す。
 
 ★ discord.py の内部属性（`_connection`・`secret_key`・`dave_session`）と音声 WebSocket の
 フックに依存する。discord.py の版を上げるときは `tests/audio/test_voice_receive.py` を
@@ -32,6 +34,7 @@ from typing import Any, Callable
 import discord
 from discord.voice_state import VoiceConnectionState
 
+from persona_bot.audio.echo_canceller import EchoCanceller, EchoReference, EchoStats
 from persona_bot.audio.live_audio import Downsampler
 
 try:
@@ -63,8 +66,9 @@ _OP_RESUMED = 9
 # 16bit の通番の比較で「古い」とみなす幅（ラップアラウンドを考慮する）。
 _SEQUENCE_HALF_RANGE = 0x8000
 
-# 1人分の音声を受け取るコールバック（user_id, 16kHz モノラル PCM）。イベントループ上で呼ばれる。
-AudioSink = Callable[[int, bytes], None]
+# 1人分の音声を受け取るコールバック。イベントループ上で呼ばれる。
+# エコー除去なしなら (user_id, 16kHz モノラル PCM)、ありなら (user_id, 除去後の PCM, 発話の強さ)。
+AudioSink = Callable[..., None]
 
 
 @dataclass(frozen=True)
@@ -139,11 +143,12 @@ def is_newer_sequence(sequence: int, last: int | None) -> bool:
 class _UserDecoder:
     """1人分の Opus デコーダと、16kHz モノラルへの変換の状態。"""
 
-    def __init__(self, decoder: Any, stream: tuple[int, object]) -> None:
+    def __init__(self, decoder: Any, stream: tuple[int, object], reference: EchoReference | None = None) -> None:
         self.decoder = decoder
         self.stream = stream
         self.downsampler = Downsampler()
         self.last_sequence: int | None = None
+        self.canceller = EchoCanceller(reference) if reference is not None else None
 
 
 class LiveVoiceClient(discord.VoiceClient):
@@ -215,11 +220,13 @@ class VoiceReceiver:
         *,
         loop: asyncio.AbstractEventLoop | None = None,
         decoder_factory: Callable[[], Any] | None = None,
+        echo_reference: EchoReference | None = None,
     ) -> None:
         self._voice_client = voice_client
         self._sink = sink
         self._loop = loop or asyncio.get_running_loop()
         self._decoder_factory = decoder_factory or discord.opus.Decoder
+        self._echo_reference = echo_reference
         self._decoders: dict[int, _UserDecoder] = {}
         self._box: Any = None
         self._box_key: bytes | None = None
@@ -231,6 +238,10 @@ class VoiceReceiver:
     def dropped_packets(self) -> int:
         """復号・デコードできずに捨てたパケット数（診断用）。"""
         return self._dropped
+
+    def echo_stats(self) -> list[EchoStats]:
+        """話者ごとのエコー除去の診断値（話者は含めない）。stop() の前に読むこと。"""
+        return [state.canceller.stats() for state in list(self._decoders.values()) if state.canceller is not None]
 
     def start(self) -> None:
         if self._running:
@@ -252,8 +263,10 @@ class VoiceReceiver:
     def _on_packet(self, data: bytes) -> None:
         if not self._running:
             return
+        # エコー除去の時間合わせに使う到着時刻（参照信号と同じ時計）。届いた直後に読む。
+        arrival = self._echo_reference.now_index() if self._echo_reference is not None else 0
         try:
-            result = self._decode_packet(data)
+            result = self._decode_packet(data, arrival=arrival)
         except Exception:
             # 1パケットの失敗で読み取りスレッドのログを埋めない（件数だけ数える）。
             self._dropped += 1
@@ -261,18 +274,22 @@ class VoiceReceiver:
             return
         if result is None:
             return
-        user_id, pcm = result
+        user_id, pcm, level = result
         try:
-            self._loop.call_soon_threadsafe(self._deliver, user_id, pcm)
+            self._loop.call_soon_threadsafe(self._deliver, user_id, pcm, level)
         except RuntimeError:
             # イベントループが閉じた後（終了処理中）に届いたパケット。
             return
 
-    def _deliver(self, user_id: int, pcm: bytes) -> None:
-        if self._running:
+    def _deliver(self, user_id: int, pcm: bytes, level: float | None = None) -> None:
+        if not self._running:
+            return
+        if level is None:
             self._sink(user_id, pcm)
+        else:
+            self._sink(user_id, pcm, level)
 
-    def _decode_packet(self, data: bytes) -> tuple[int, bytes] | None:
+    def _decode_packet(self, data: bytes, *, arrival: int = 0) -> tuple[int, bytes, float | None] | None:
         packet = parse_rtp_packet(data)
         if packet is None:
             return None
@@ -309,13 +326,25 @@ class VoiceReceiver:
             self._dropped += 1
             return None
         if state is None:
-            state = self._decoders[packet.ssrc] = _UserDecoder(self._decoder_factory(), stream)
+            state = self._decoders[packet.ssrc] = _UserDecoder(
+                self._decoder_factory(), stream, self._echo_reference,
+            )
         state.last_sequence = packet.sequence
         if opus == OPUS_SILENCE_FRAME:
             return None
         pcm = state.decoder.decode(opus, fec=False)
         converted = state.downsampler.process(pcm)
-        return (user_id, converted) if converted else None
+        if not converted:
+            return None
+        if state.canceller is None:
+            return (user_id, converted, None)
+        try:
+            echo = state.canceller.process(converted, rtp_timestamp=packet.timestamp, arrival=arrival)
+        except Exception:
+            # エコー除去の失敗で受信を止めない（取り除かずに渡し、割り込みの判定は文字起こしに任せる）。
+            logger.debug("音声受信: エコー除去に失敗したため、そのまま渡しました。", exc_info=True)
+            return (user_id, converted, None)
+        return (user_id, echo.pcm, echo.level)
 
     def _transport_box(self, connection: Any) -> Any:
         raw_key = getattr(connection, "secret_key", None)
