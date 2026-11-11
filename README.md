@@ -8,9 +8,6 @@ Google Gemini を使い、ペルソナ（キャラクター）になりきって
 
 開発への参加・バグ報告・機能提案は [貢献ガイド](CONTRIBUTING.md) を、参加時のルールは [行動規範](CODE_OF_CONDUCT.md) を参照してください。脆弱性は [セキュリティポリシー](SECURITY.md) の窓口へ報告してください。
 
-## 🎬 紹介動画
-
-https://github.com/user-attachments/assets/85e1418a-08eb-43b1-b075-ebeab134ac9f
 
 > **⚠️ フィクションに関する免責事項**
 >
