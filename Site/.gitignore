@@ -1,0 +1,3 @@
+# 依存とビルド結果（npm ci / npm run build で作り直せる）
+node_modules/
+dist/

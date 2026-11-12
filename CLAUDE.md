@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 概要
 
-Google Gemini をバックエンドに持つ Discord ボット。ペルソナベースのテキストチャット、`/join` したボイスチャンネルでの Gemini Live による音声会話（参加者の声を受信して Live へ流し、返ってきた音声を再生する。全員の同意・話者の順番・割り込み・並行モデレーション。追加の依存なし）、自律行動の配信での TTS 読み上げ（FFmpeg 不要・edge-tts でペルソナごとに声が変わる）、画像/文書のマルチモーダル入力、長期記憶、ユーザーごとの親密度/感情トラッキング、コンテンツモデレーション、三審制ブラックリスト、チャンネル会話の議事録要約、ユーザー別会話統計ダッシュボード、無会話チャンネルへの自発的な話題提供、自律行動（ボットが自分からボイス/ステージチャンネルへ出て独り言を続け、コメントに配信者のように応答する。配信先は管理者が指定できる）、ボイス接続先の保護（手動で別のチャンネルへ移されたら元へ戻るか退出する）、記念日の自動お祝い、リマインダー、会話で明記された調べ物のサブエージェントへの委任、返信への 👍👎 リアクションによるフィードバック収集、オンボーディング導線（サーバー参加時の案内と使い方パネル）を備える。ボットのソースはすべて `src/` にある（開発者用ダッシュボードは別に `tools/console/`。後述）。ユーザー向け文字列・ログ出力・コードコメントはすべて日本語。新規に追加するものも日本語で統一すること。
+Google Gemini をバックエンドに持つ Discord ボット。ペルソナベースのテキストチャット、`/join` したボイスチャンネルでの Gemini Live による音声会話（参加者の声を受信して Live へ流し、返ってきた音声を再生する。全員の同意・話者の順番・割り込み・並行モデレーション。追加の依存なし）、自律行動の配信での TTS 読み上げ（FFmpeg 不要・edge-tts でペルソナごとに声が変わる）、画像/文書のマルチモーダル入力、長期記憶、ユーザーごとの親密度/感情トラッキング、コンテンツモデレーション、三審制ブラックリスト、チャンネル会話の議事録要約、ユーザー別会話統計ダッシュボード、無会話チャンネルへの自発的な話題提供、自律行動（ボットが自分からボイス/ステージチャンネルへ出て独り言を続け、コメントに配信者のように応答する。配信先は管理者が指定できる）、ボイス接続先の保護（手動で別のチャンネルへ移されたら元へ戻るか退出する）、記念日の自動お祝い、リマインダー、会話で明記された調べ物のサブエージェントへの委任、返信への 👍👎 リアクションによるフィードバック収集、オンボーディング導線（サーバー参加時の案内と使い方パネル）を備える。ボットのソースはすべて `src/` にある（開発者用ダッシュボードは別に `tools/console/`、紹介用ホームページは `Site/`。後述）。ユーザー向け文字列・ログ出力・コードコメントはすべて日本語。新規に追加するものも日本語で統一すること。
 
 ## 作業の進め方
 
@@ -57,7 +57,7 @@ Google Gemini をバックエンドに持つ Discord ボット。ペルソナベ
 
 ### 依存の更新提案と脆弱性検査（#285）
 
-- **`.github/dependabot.yml`** が、pip（ルート・`tools/console/backend`・`.github/audit`・`.github/constraints`）、npm（`tools/console/frontend`）、
+- **`.github/dependabot.yml`** が、pip（ルート・`tools/console/backend`・`.github/audit`・`.github/constraints`）、npm（`tools/console/frontend`・`Site`）、
   github-actions の更新を毎週月曜 9:00（日本時間）に PR で提案する（ルートの推移依存＝`constraints.txt` の分は1つの PR にまとめる）。`cooldown` の `default-days: 14` で公開から2週間未満の版を
   提案させない（依存を公開から2週間以上たった版に固定する方針と同じ）。**cooldown を外したり14日未満にしたりしないこと。**
   cooldown はバージョン更新だけに効き、Dependabot security updates（リポジトリ設定。現在は無効）には効かない
@@ -65,7 +65,7 @@ Google Gemini をバックエンドに持つ Discord ボット。ペルソナベ
   ★ ルールセット「Protect Rule」が全ブランチで強制 push を禁じ PR を必須にしているため、Dependabot は作成済みの PR ブランチを
   rebase できない（初回の作成は通る）。main と衝突したら、閉じて次の提案を待つか利用者に相談する
 - **`.github/workflows/dependency-audit.yml`** が、`pip-audit -r` でボットと管理コンソールのバックエンドの requirements を
-  （Windows／Linux・Python 3.11／3.13 で推移依存まで解決して）、`npm audit --omit=dev` で画面の `package-lock.json` を照合する。
+  （Windows／Linux・Python 3.11／3.13 で推移依存まで解決して）、`npm audit --omit=dev` で画面（`tools/console/frontend`）と紹介サイト（`Site`）の `package-lock.json` を照合する。
   依存の定義ファイルを変えた push・PR と、毎週月曜 9:00（日本時間）に走る。権限は `contents: read` だけでシークレットを使わない
   （フォークの PR でも動く。`pull_request_target` に変えないこと）。実行の条件の `paths` は依存の定義ファイルと揃えておく
   （ファイルを移したら `paths` と `tests/deploy/test_dependency_audit_config.py` も直す）
@@ -176,6 +176,19 @@ python bot.py     # 成功時に "ログイン成功: <bot>" と表示される
 - **`WatchdogSec` は未導入**（依頼どおり、ハング型のフリーズが実際に観測されてから検討する）。`Restart=always` が拾えるのはプロセスが落ちるケースだけで、「生きているのに応答しない」状態は拾えない。導入にはアプリ側の `sd_notify(WATCHDOG=1)` 定期送信が必須で、送信が滞ると健全なプロセスまで殺す。
 - **ユニットファイルは LF 改行必須**（`.gitattributes` で固定済み）。CRLF だと `ExecStart=` のパス末尾に `\r` が混入して起動に失敗し、原因が非常に分かりにくい。
 - ログは journald（`journalctl -u bot -f`）。loggingの標準出力ハンドラは毎回flushする。ほかの標準出力も即時反映させる `PYTHONUNBUFFERED=1` と、日本語・絵文字の文字コードを揃える `PYTHONIOENCODING=utf-8` はユニット側に維持している。
+
+## 紹介サイト (`Site/`)
+
+一般の利用者向けの紹介用ホームページ（#410）。React + TypeScript + Vite の 1 ページの静的サイトで、GitHub Pages で公開する。ボットとは依存もビルドも分けており、**ボットのコード（`src/`）と `requirements.txt` をサイトのために変えないこと**。セットアップ・構成・公開の手順は `Site/README.md` にある。
+
+- **文言は `Site/src/content.ts` が唯一の置き場所。** 機能を足したり既定値を変えたりしたら、README・ヘルプ（`help_view.py`）と合わせてここも直す（本文が実装と食い違わないことが最優先）。「制作背景」「目的」（`STORY`・`PURPOSE`）は仮の文で、制作者が書き直す前提。エージェントが制作者の経緯を創作して書き足さないこと。
+- **載せないもの（Issue #410 の決定）:** ボットの招待 URL、紹介動画、アクセスの計測、外部から読み込むスクリプト・フォント・画像。動作イメージは実際の画面ではなく疑似的な Discord 画面（`components/DiscordDemo.tsx`）で見せ、登場人物と会話は架空にする。特定のキャラの口調・声・プロンプトを載せない（キャラ別のファイルを公開しない方針のため）。`tests/content.test.mjs` が、ID・メールアドレス・キー・招待 URL・リポジトリ外へのリンクに見える値と、`index.html` の外部読み込みを検出する。
+- **依存は管理コンソール（`tools/console/frontend`）と同じ版だけ**（React・Vite・TypeScript・Noto Sans JP）。UI ライブラリや CSS フレームワークを足す前に相談する。`package.json` は `.npmrc` の `save-exact` で完全一致に固定し、Dependabot（npm の `directories`）と `dependency-audit.yml`（`npm-audit` の `matrix.directory`）の対象にしている。フォルダを移したら両方と `tests/deploy/test_dependency_audit_config.py` を直す。
+- **`content.ts` と `demoTimeline.ts` に値の import を足さないこと**（型だけの import はよい）。Node.js の標準テストが、型注釈を読み飛ばしてこの 2 つをそのまま読み込む。再生順の計算（`buildTimeline` / `frameAt`）は表示に依存させず、`DiscordDemo.tsx` は経過時間を進めるだけにする。
+- **配色は `styles.css` の先頭のトークンから使う**（ライト／ダークを `data-theme` で切り替える。部品に直接の色を書くと片方で読めなくなる）。疑似 Discord 画面だけは `--dc-*` でどちらの配色でも暗い画面のまま見せる。最初の描画より前に `index.html` のスクリプトが配色を決める（外すと読み込み時に別の配色が一瞬見える）。`html` の `font-size: max(100%, 16px)` は、ブラウザの既定の文字サイズを小さくしている環境で本文が読めなくなるのを防ぐ（実際に既定 10px の環境で起きた）。
+- **動き:** 跳ねない滑らかな動きにする（利用者の好み）。出現は `Reveal`（animation の `backwards`。transition にすると、同じ要素の hover の transition と衝突する）。`prefers-reduced-motion` では疑似 Discord 画面も全部の発言を最初から出し、自動で場面を進めない。自動で流れる表示には「止める」ボタンを残す。
+- **公開は `.github/workflows/site.yml`。** PR と push ではテストとビルドだけを行い、公開（`deploy`）は `main` かつリポジトリの変数 `SITE_DEPLOY_ENABLED == 'true'` のときだけ動く。**この条件を外さないこと**（マージしただけで公開されないための歯止め。公開は利用者が決める）。`pages: write`・`id-token: write` は `deploy` ジョブにだけ与える。`vite.config.ts` の `base` は相対パス（`./`）で、リポジトリ名が変わってもビルドし直さずに動く（ルーターを足すなら見直す）。
+- **確認:** `Site` で `npm test`・`npm run build`（`tsc --noEmit && vite build`）。表示の確認は `npm run preview`（127.0.0.1:4174）。
 
 ## 開発者用ダッシュボード (`tools/console/`)
 

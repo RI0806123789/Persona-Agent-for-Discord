@@ -35,6 +35,7 @@ EXPECTED_UPDATE_TARGETS = {
     ("pip", "/.github/audit"): ("requirements.txt",),
     ("pip", "/.github/constraints"): ("requirements.txt",),
     ("npm", "/tools/console/frontend"): ("package.json", "package-lock.json"),
+    ("npm", "/Site"): ("package.json", "package-lock.json"),
     ("github-actions", "/"): (".github/workflows",),
 }
 
@@ -45,6 +46,8 @@ EXPECTED_AUDIT_PATHS = {
     "tools/console/backend/requirements.txt",
     "tools/console/frontend/package.json",
     "tools/console/frontend/package-lock.json",
+    "Site/package.json",
+    "Site/package-lock.json",
     ".github/audit/requirements.txt",
     ".github/workflows/dependency-audit.yml",
 }
@@ -166,7 +169,9 @@ class AuditWorkflowTests(unittest.TestCase):
         # 推移依存が変わる OS と Python の版を、回帰テストと同じ組み合わせで照合する
         self.assertIn("os: [ubuntu-latest, windows-latest]", self.text)
         self.assertIn("python: ['3.11', '3.13']", self.text)
-        self.assertIn("working-directory: tools/console/frontend", self.text)
+        # 画面（管理コンソール）と紹介サイトの両方の package-lock.json を、同じ手順で照合する
+        self.assertIn("directory: [tools/console/frontend, Site]", self.text)
+        self.assertIn("working-directory: ${{ matrix.directory }}", self.text)
         # 概要の見出しではなく、実行するコマンドそのものを確かめる
         commands = re.findall(r"^\s*if (npm audit\b[^>]*)>", self.text, re.MULTILINE)
         self.assertEqual([command.strip() for command in commands], ["npm audit --omit=dev"])

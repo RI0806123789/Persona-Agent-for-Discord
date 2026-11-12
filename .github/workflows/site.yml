@@ -1,0 +1,78 @@
+name: 紹介サイト
+
+# 紹介用ホームページ（Site/。Issue #410）のテスト・ビルドと、GitHub Pages への公開。
+# - Site/ を変えた PR と push では、テストと本番ビルドだけを確かめる（公開はしない）。
+# - main への push と手動実行では、下の条件を満たすときだけ公開する。
+#
+# ★ 公開は、リポジトリの変数 SITE_DEPLOY_ENABLED が 'true' のときだけ行う。
+#   マージしただけでページが公開されないようにするための歯止め（公開は利用者が決める）。
+#   公開の手順（Pages の設定と変数の登録）は Site/README.md に書いてある。
+on:
+  push:
+    branches: [main, 'feat/**', 'fix/**']
+    paths:
+      - Site/**
+      - .github/workflows/site.yml
+  pull_request:
+    paths:
+      - Site/**
+      - .github/workflows/site.yml
+  workflow_dispatch:
+
+# 既定は読み取りだけ。公開に要る権限は deploy ジョブにだけ与える。
+permissions:
+  contents: read
+
+# 公開が重ならないよう、同じブランチの実行は 1 つずつにする（進行中の公開は打ち切らない）
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Site / テストとビルド
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: Site
+    steps:
+      - name: ソースを取得
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Node.jsを準備
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: Site/package-lock.json
+      - name: 固定済み依存を準備
+        run: npm ci
+      - name: 外部通信不要の回帰テスト
+        run: npm test
+      - name: TypeScript検証と本番ビルド
+        run: npm run build
+      - name: 公開する内容を保存
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.SITE_DEPLOY_ENABLED == 'true'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: Site/dist
+
+  deploy:
+    name: Site / GitHub Pages へ公開
+    # main の内容だけを公開する。PR・作業ブランチ・変数が未設定のときは動かさない
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.SITE_DEPLOY_ENABLED == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: GitHub Pagesへ公開
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
