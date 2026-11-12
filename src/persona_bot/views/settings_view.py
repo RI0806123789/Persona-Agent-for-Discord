@@ -266,31 +266,62 @@ class OpenAutonomousChannelButton(ui.Button):
             return
         async def make_settings(back_interaction: discord.Interaction) -> SettingsView:
             await back_interaction.response.defer(ephemeral=True)
-            await refresh_persona_catalog()
-            # 開き直すときも、全体の違反件数は最新の所有者だけに表示する。
-            blacklist_status = "非公開（ボット所有者のみ）"
-            if is_bot_owner(back_interaction) and await is_current_bot_owner(back_interaction):
-                if view.blacklist_provider is not None:
-                    blocked_users = view.blacklist_provider()
-                    blacklist_status = f"{len(blocked_users)}人" if blocked_users else "なし"
-            settings = SettingsView(
-                view.guild_settings,
-                view.ng_count_provider() if view.ng_count_provider is not None else view.ng_count,
-                blacklist_status,
-                make_hub=view.make_hub, is_admin=await is_current_administrator(back_interaction),
+            # 確定前の選択値は引き継ぐ（戻る操作では未確定の配信先を保存しない）。
+            return await build_settings_view(
+                back_interaction, view.guild_settings,
                 ng_count_provider=view.ng_count_provider, blacklist_provider=view.blacklist_provider,
+                make_hub=view.make_hub, fallback_ng_count=view.ng_count, previous=view,
             )
-            settings.temp_persona = view.temp_persona
-            settings.temp_model = view.temp_model
-            settings.temp_respond_mode = view.temp_respond_mode
-            settings.refresh_items()
-            return settings
 
         channel_view = AutonomousChannelView(
             view.guild_settings, guild, make_hub=view.make_hub, make_settings=make_settings,
         )
         # 同じ（エフェメラルな）メッセージを配信先パネルに差し替える
         await swap_panel(interaction, view, channel_view, channel_view.build_preview())
+
+
+BLACKLIST_PRIVATE_STATUS = "非公開（ボット所有者のみ）"
+
+
+async def build_settings_view(
+    interaction: discord.Interaction,
+    guild_settings: GuildSettings,
+    *,
+    ng_count_provider: Callable[[], int] | None,
+    blacklist_provider: Callable[[], list] | None,
+    make_hub: HubFactory | None,
+    fallback_ng_count: int = 0,
+    previous: "SettingsView | None" = None,
+) -> "SettingsView":
+    """キャラ設定パネルを開く・開き直すときの共通の組み立て（#415）。
+
+    ハブからの 1 回目と、配信先パネルから戻るときの両方で、次を同じ手順にそろえる:
+      ・prompts/ のペルソナ一覧を読み直す（再起動なしで選べるように）
+      ・全体の違反件数は、最新のボット所有者だけに見せる（サーバー管理者にも開示しない）
+      ・管理者専用の 🎙️ 配信先 を出すかは、キャッシュの写しではなく最新の Member で決める
+    応答の保留（defer）は呼び出し側で済ませてから呼ぶこと。previous を渡すと、確定前の選択値を引き継ぐ。
+    """
+    await refresh_persona_catalog()
+    blacklist_status = BLACKLIST_PRIVATE_STATUS
+    if is_bot_owner(interaction) and await is_current_bot_owner(interaction):
+        if blacklist_provider is not None:
+            blocked_users = blacklist_provider()
+            blacklist_status = f"{len(blocked_users)}人" if blocked_users else "なし"
+    settings = SettingsView(
+        guild_settings,
+        ng_count_provider() if ng_count_provider is not None else fallback_ng_count,
+        blacklist_status,
+        make_hub=make_hub,
+        is_admin=await is_current_administrator(interaction),
+        ng_count_provider=ng_count_provider,
+        blacklist_provider=blacklist_provider,
+    )
+    if previous is not None:
+        settings.temp_persona = previous.temp_persona
+        settings.temp_model = previous.temp_model
+        settings.temp_respond_mode = previous.temp_respond_mode
+        settings.refresh_items()
+    return settings
 
 
 class SettingsView(PanelView):

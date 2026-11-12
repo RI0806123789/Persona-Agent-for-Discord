@@ -14,7 +14,7 @@ from persona_bot.views.help_view import HelpView, resolve_bot_name
 from persona_bot.services.ng_word_service import NgWordFilter
 from persona_bot.services.reminder_service import ReminderService, ReminderStorageError
 from persona_bot.views.reminder_view import ReminderView
-from persona_bot.views.settings_view import SettingsView
+from persona_bot.views.settings_view import SettingsView, build_settings_view
 from persona_bot.views.stats_privacy_view import StatsPrivacyView
 from persona_bot.services.stats_service import StatsService
 from persona_bot.views.stats_view import StatsView
@@ -23,7 +23,7 @@ from persona_bot.views.unblock_view import UnblockView
 from persona_bot.utils.usage_graph import UsageTracker
 from persona_bot.views.view_parts import (
     authorize_administrator_operation, authorize_panel_operation, begin_panel_operation, edit_panel_message,
-    PanelView, send_graph_ephemeral, swap_panel,
+    PANEL_BUSY_NOTICE, PanelView, send_graph_ephemeral, swap_panel,
 )
 
 
@@ -45,21 +45,13 @@ class OpenSettingsButton(ui.Button):
         # prompts/ に足したペルソナを再起動なしで選べるよう、開くたびに一覧を読み直す。
         # ファイルを読むので先に応答を保留する。
         await interaction.response.defer(ephemeral=True)
-        await refresh_persona_catalog()
-        # 全体の違反情報は、サーバー管理者にも件数を開示しない。
-        blacklist_status = "非公開（ボット所有者のみ）"
-        if is_bot_owner(interaction) and await is_current_bot_owner(interaction):
-            blocked_users = hub.blacklist.get_all_blocked_users()
-            blacklist_status = f"{len(blocked_users)}人" if blocked_users else "なし"
-        settings_view = SettingsView(
-            hub.guild_settings,
-            ng_count=hub.ng_filter.word_count,
+        # ペルソナ一覧の読み直し・違反件数の開示範囲・管理者判定は、配信先パネルから戻る経路と
+        # 同じ組み立て（build_settings_view）にそろえる。管理者判定は応答の保留後なので最新の Member で行う。
+        settings_view = await build_settings_view(
+            interaction, hub.guild_settings,
             ng_count_provider=lambda: hub.ng_filter.word_count,
-            blacklist_status=blacklist_status,
             blacklist_provider=hub.blacklist.get_all_blocked_users,
             make_hub=hub.clone,
-            # 押した時点の権限で、管理者専用の 🎙️ 配信先 を出すかを決める
-            is_admin=is_administrator(interaction.user),
         )
         # 同じ（エフェメラルな）メッセージをキャラ設定パネルに差し替える
         await swap_panel(interaction, hub, settings_view, settings_view.build_preview())
@@ -100,20 +92,27 @@ class GraphButton(ui.Button):
             await interaction.response.send_message("まだ利用データがありません。", ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        buffer = None
-        try:
-            buffer = await hub.usage.build_graph_buffer()
-        except Exception as error:
-            logger.error("グラフ生成中にエラーが発生しました。", exc_info=error)
-            await interaction.followup.send("エラー: グラフの生成に失敗しました。", ephemeral=True)
+        # 結果は別の followup で送るためパネルの操作世代では連打を止められない。実行中は断る（#415）。
+        if not hub.try_begin_aggregation("graph"):
+            await interaction.response.send_message(PANEL_BUSY_NOTICE, ephemeral=True)
             return
-        # ハブは残したまま、グラフを新しいエフェメラルメッセージとして送る。
-        await send_graph_ephemeral(
-            interaction, buffer, "usage_graph.png", "📊 これまでの利用結果のグラフです。",
-            followup=True, error_log="グラフ送信中に予期せぬエラー",
-            error_notice="エラー: グラフの送信に失敗しました。",
-        )
+        try:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            buffer = None
+            try:
+                buffer = await hub.usage.build_graph_buffer()
+            except Exception as error:
+                logger.error("グラフ生成中にエラーが発生しました。", exc_info=error)
+                await interaction.followup.send("エラー: グラフの生成に失敗しました。", ephemeral=True)
+                return
+            # ハブは残したまま、グラフを新しいエフェメラルメッセージとして送る。
+            await send_graph_ephemeral(
+                interaction, buffer, "usage_graph.png", "📊 これまでの利用結果のグラフです。",
+                followup=True, error_log="グラフ送信中に予期せぬエラー",
+                error_notice="エラー: グラフの送信に失敗しました。",
+            )
+        finally:
+            hub.end_aggregation("graph")
 
 
 class GroundingToggleButton(ui.Button):
@@ -154,19 +153,26 @@ class NgReloadButton(ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         hub: "FunctionsView" = self.view  # type: ignore[assignment]
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            await run_in_thread(hub.ng_filter.reload)
-        except (OSError, UnicodeError):
-            await interaction.followup.send(
-                "⚠️ NGワードリストの再読み込みに失敗しました。従来の設定を保持しています。"
-                "ファイルの読み取り権限と文字コードを確認してください。", ephemeral=True,
-            )
+        # 連打で同じ再読込と同じ結果の通知を重ねない（#415）。
+        if not hub.try_begin_aggregation("ng_reload"):
+            await interaction.response.send_message(PANEL_BUSY_NOTICE, ephemeral=True)
             return
-        # ハブは残したまま、結果を新しいエフェメラルメッセージとして送る
-        await interaction.followup.send(
-            f"✅ NGワードリストを再読み込みしました。（{hub.ng_filter.word_count}件）", ephemeral=True
-        )
+        try:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                await run_in_thread(hub.ng_filter.reload)
+            except (OSError, UnicodeError):
+                await interaction.followup.send(
+                    "⚠️ NGワードリストの再読み込みに失敗しました。従来の設定を保持しています。"
+                    "ファイルの読み取り権限と文字コードを確認してください。", ephemeral=True,
+                )
+                return
+            # ハブは残したまま、結果を新しいエフェメラルメッセージとして送る
+            await interaction.followup.send(
+                f"✅ NGワードリストを再読み込みしました。（{hub.ng_filter.word_count}件）", ephemeral=True
+            )
+        finally:
+            hub.end_aggregation("ng_reload")
 
 
 class StatsButton(ui.Button):

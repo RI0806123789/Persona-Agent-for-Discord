@@ -204,6 +204,9 @@ async def bind_panel_message(
         logger.warning("パネルの応答参照の取得に失敗しました。", exc_info=error)
 
 
+PANEL_BUSY_NOTICE = "処理中です。結果が届くまでお待ちください。"
+
+
 class PanelView(ui.View):
     """/functions のハブと各サブパネルに共通する土台となる View。
 
@@ -231,6 +234,10 @@ class PanelView(ui.View):
         self.timeout_notice: str = timeout_notice
         self.blocked_user_check: Callable[[int], bool] | None = None
         self._panel_state = _PanelState(self)
+        # 実行中の重い処理（集計・グラフ描画・再読込）。連打で同じ処理を重ねず、同じ結果を何通も
+        # 送らないため（#398、#415）。パネルを残したまま結果を別の followup で送るボタンは、
+        # パネルの操作世代では止められないので、名前ごとにここで排他する。
+        self._running_aggregations: set[str] = set()
         # UI コールバックを終了処理の回収対象にするための所有者。
         # 未指定時は作成時のコンテキストから自動取得する（コマンド実行中なら設定される）。
         self._task_owner: TaskOwner | None = task_owner if task_owner is not None else _current_owner.get()
@@ -248,6 +255,19 @@ class PanelView(ui.View):
             await task
         else:
             await self._task_owner.run(task)
+
+    def try_begin_aggregation(self, name: str) -> bool:
+        """同じ名前の処理が実行中なら False を返す。判定と登録の間に await を挟まないこと。
+
+        True を返したら、必ず `finally` で `end_aggregation` を呼ぶ。
+        """
+        if name in self._running_aggregations:
+            return False
+        self._running_aggregations.add(name)
+        return True
+
+    def end_aggregation(self, name: str) -> None:
+        self._running_aggregations.discard(name)
 
     def stop(self) -> None:
         if self._panel_state.current is self:

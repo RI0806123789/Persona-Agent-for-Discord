@@ -17,6 +17,7 @@ from persona_bot.config import personas
 from persona_bot.core.app_state import GuildSettings
 from persona_bot.services import summary_service
 from persona_bot.views import functions_view, settings_view, summary_view
+from persona_bot.views.view_parts import PanelView
 from tests.helpers.discord_mocks import make_http_response, make_interaction, make_response
 from tests.helpers.thread_probe import make_thread_probe
 from tests.helpers.persona_helpers import install_persona_catalog
@@ -67,7 +68,7 @@ class ViewIOTests(unittest.IsolatedAsyncioTestCase):
             interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
             operation()
 
-        view = discord.ui.View()
+        view = PanelView(timeout_notice="架空の時間切れ")
         self.addCleanup(view.stop)
         view.ng_filter = SimpleNamespace(reload=Mock(side_effect=reload), word_count=7)
         button = functions_view.NgReloadButton()

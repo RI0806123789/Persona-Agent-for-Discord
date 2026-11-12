@@ -15,8 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import discord
 from persona_bot.core.app_state import AutonomousSession, BotState
-from persona_bot.services import autonomous_service
+from persona_bot.services import autonomous_service, autonomous_speech
 from persona_bot.services.autonomous_service import AutonomousService
+from tests.helpers.autonomous_patch import patch_autonomous
 from tests.helpers.message_handler_helpers import make_message_handler
 from tests.helpers.thread_probe import make_thread_probe
 from tests.helpers.persona_helpers import install_persona_catalog
@@ -75,9 +76,7 @@ class AutonomousSpeechTests(unittest.IsolatedAsyncioTestCase):
             ("send_long_reply", self.sent),
             ("speak_text", self.spoken),
         ):
-            patcher = patch.object(autonomous_service, name, replacement)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+            patch_autonomous(self, name, replacement)
 
     async def speak(self, kind):
         if kind == "opening":
@@ -118,7 +117,7 @@ class AutonomousSpeechTests(unittest.IsolatedAsyncioTestCase):
     async def test_opening_failure_keeps_notice_and_only_monologue_increments_turn(self):
         self.gemini.generate.return_value = (None, None, [])
         await self.speak("opening")
-        self.assertEqual(self.sent.await_args.args[1], autonomous_service.AUTONOMOUS_OPENING_NOTICE)
+        self.assertEqual(self.sent.await_args.args[1], autonomous_speech.AUTONOMOUS_OPENING_NOTICE)
         self.assertEqual(self.session.turn_count, 0)
         self.spoken.assert_not_awaited()
 
@@ -192,7 +191,7 @@ class AutonomousSpeechTests(unittest.IsolatedAsyncioTestCase):
                     self.settings.autonomous_session = self.session
 
     async def test_unsafe_comment_response_is_not_posted(self):
-        with patch.object(autonomous_service, "screen_bot_response_with_status", new=AsyncMock(return_value=("拒否", False))):
+        with patch.object(autonomous_speech, "screen_bot_response_with_status", new=AsyncMock(return_value=("拒否", False))):
             result = await self.service.handle_comment(self.make_comment(), "架空のコメント", self.settings)
         self.assertIsNone(result)
         self.sent.assert_not_awaited()
