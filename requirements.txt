@@ -43,7 +43,7 @@ pypdf==6.21.4
 # 環境変数でキーを渡す運用ならこのパッケージは無くても動く。
 python-dotenv==1.2.4
 # WindowsやタイムゾーンDBを含まない環境でも、日本時間の予定・集計・時間帯制限を使う。
-tzdata==2026.5
+tzdata==2026.6
 
 # 推移依存（上の直接依存が引き込む依存）の固定版。pip install -r requirements.txt で一緒に効く（Issue #285）。
 # 直接依存を足したり版を変えたりしたら .github/workflows/update-constraints.yml で作り直す。
