@@ -80,7 +80,10 @@ const CHANNEL_FIELDS = [
   new RegExp(`(?=(自律行動: 中止時のステージ枠の終了に失敗しました（)(${NAME_SPAN})(）:))`, "g"),
   new RegExp(`(?=(ボイス接続の保護: 元のチャンネル「)(${NAME_SPAN})(」へ戻(?:ります|りました)))`, "g"),
 ];
-const IDENTIFIER_FIELD = /(^|[^A-Za-z0-9_])(guild(?:_id)?|channel(?:_id)?|user_id|移動前|移動後)(\s*=\s*)(?:[0-9]+|<[^>\r\n]+>)/g;
+// 起動確認の「ログイン成功: <ボット名>」。ボット名が未取得・短くて既知の秘密に入らなくても構造で隠す。
+// 名前は行末までとし、末尾の句点・閉じ括弧は残す（デプロイの詳細は「…ログイン成功: 名前）。」の形）。
+const LOGIN_SUCCESS_NAME = /(ログイン成功: )([^\r\n]+?)(?=[）)]?。?(?:\r?\n|$))/g;
+const IDENTIFIER_FIELD =/(^|[^A-Za-z0-9_])(guild(?:_id)?|channel(?:_id)?|user_id|移動前|移動後)(\s*=\s*)(?:[0-9]+|<[^>\r\n]+>)/g;
 
 /** 既知の現在名に依存せず、運用ログの名前・識別子を隠す。 */
 function redactOperationalLog(text: string, mask: string): string {
@@ -109,7 +112,9 @@ function redactOperationalLog(text: string, mask: string): string {
     offset = end;
   }
   const result = parts.join("") + text.slice(offset);
-  return result.replace(IDENTIFIER_FIELD, (_match, before: string, key: string, equals: string) => before + key + equals + mask);
+  return result
+    .replace(LOGIN_SUCCESS_NAME, (_match, label: string) => label + mask)
+    .replace(IDENTIFIER_FIELD, (_match, before: string, key: string, equals: string) => before + key + equals + mask);
 }
 
 export function createPrivacy(enabled: boolean, secrets: string[]): Privacy {

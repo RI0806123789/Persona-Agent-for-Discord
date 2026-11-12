@@ -324,3 +324,18 @@ test("#288 未収集の解決済みホスト名もログ開始失敗の安全な
     }
   }
 });
+
+test("#433 ログイン成功のボット名は既知の秘密に入らなくても構造で隠す", () => {
+  // insights が未取得、または名前が短くて既知の秘密にならない場合を再現する
+  for (const botName of ["架空のボット名", "ab"]) {
+    const line = `PID 1234: journalctl で起動完了を確認しました（ログイン成功: ${botName}）。`;
+    const on = current(true).redact(line);
+    assert.equal(current(false).redact(line), line, "伏せ字OFFは原文");
+    assert.equal(on.includes(botName), false, "ボット名は表示しない");
+    assert.ok(on.includes(`ログイン成功: ${privacy.MASK}`));
+    assert.ok(on.endsWith("）。"), "末尾の句読点は残す");
+  }
+  // 複数行でも前後の行は壊さない
+  const multi = "前の行\nログイン成功: 架空のボット名\n後ろの行";
+  assert.equal(current(true).redact(multi), `前の行\nログイン成功: ${privacy.MASK}\n後ろの行`);
+});
