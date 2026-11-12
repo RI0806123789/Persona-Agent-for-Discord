@@ -435,6 +435,36 @@ class InsightsScriptTests(unittest.TestCase):
         for secret in ("架空の旧利用者", "架空の新利用者", "架空の旧会話", "架空の新会話", "架空の終了理由"):
             self.assertNotIn(secret, self.stdout)
 
+    def test_current_formatter_exception_lines_are_counted(self):
+        # OperationalFormatter は「例外: <型名>」だけを出す。旧形式と合わせて数える（#433）
+        make_fake_bot(self.root, layout="src", with_autonomous_column=True)
+        messages = ["例外: ValueError", "例外情報を読み取れませんでした。", "Traceback (most recent call last):",
+                    "例外: 空白 を 含む", "通常の運用ログ 例外: ValueError"]
+        entries = [{"MESSAGE": message, "__REALTIME_TIMESTAMP": "1000000"} for message in messages]
+        self.assertEqual(self.insights(journal=entries)["activity"]["exceptions"], 3)
+
+    def test_malformed_voice_responses_do_not_drop_the_guild_list(self):
+        make_fake_bot(self.root, layout="src", with_autonomous_column=True)
+        responses = {
+            "/users/@me": {"username": "架空のボット"},
+            "/users/@me/guilds": [{"id": "11", "name": "架空A"}, {"id": "12", "name": "架空B"},
+                                  {"id": "13", "name": "架空C"}, {"id": "14", "name": "架空D"}],
+            "/guilds/11/voice-states/@me": ["配列の応答"],
+            "/guilds/12/voice-states/@me": {"channel_id": "../users/@me"},
+            "/guilds/13/voice-states/@me": {"channel_id": "15"},
+            "/channels/15": ["配列の応答"],
+            "/guilds/14/voice-states/@me": {"channel_id": None},
+        }
+        data = self.insights({"TOKEN_DISCORD": FAKE_TOKEN}, responses=responses, journal=[])["discord"]
+        self.assertTrue(data["ok"])
+        first, second, third, fourth = data["guilds"]
+        self.assertIsNone(first["voice_channel"])
+        self.assertIsNone(first["voice_error"])  # dict でなければ「接続していない」扱い
+        self.assertIsNone(second["voice_channel"])
+        self.assertIsNotNone(second["voice_error"])  # Snowflake でない値はパスに連結しない
+        self.assertIsNotNone(third["voice_channel"])  # 名前だけ取れなくても接続先は分かる
+        self.assertIsNone(fourth["voice_error"])
+
     def test_no_matching_conversation_is_empty_without_permission_warning(self):
         make_fake_bot(self.root, layout="src", with_autonomous_column=True)
         data = self.insights(journal=[], journal_grep_code=1, journal_stderr="")

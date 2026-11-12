@@ -144,8 +144,8 @@ export function DbTableDetail({
       ) : (
         <Notice icon="shield">読み取り専用（mode=ro）で、この 50 行だけを取り寄せています。スクリーンショットを共有するときは伏せ字モード（h）にしてください。</Notice>
       )}
-      {error && <InlineError>{error}</InlineError>}
-      {data?.errors.map((message) => <InlineError key={message}>{message}</InlineError>)}
+      {error && <InlineError>{privacy.redact(error)}</InlineError>}
+      {data?.errors.map((message) => <InlineError key={message}>{privacy.redact(message)}</InlineError>)}
       {!data && !error && <WavyProgress label="取り寄せています" />}
       {data && rows.length === 0 && !data.errors.length && <EmptyState icon="table" title="行がありません" />}
 

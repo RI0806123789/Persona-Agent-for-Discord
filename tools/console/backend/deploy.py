@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
@@ -31,6 +32,12 @@ import remote_commands as rc
 from async_utils import CancellationState, await_shielded
 from profiles import Profile
 from ssh_session import CommandResult, CommandStateUnknownError, SshError, SshSession
+
+logger = logging.getLogger(__name__)
+
+# 想定外の例外は本文を画面へ出さない（パス・ホスト名などを含みうるため。型名だけをログへ残す）
+UNEXPECTED_ERROR_STEP_MESSAGE = "想定外のエラーが発生しました。詳細は管理コンソールのログを確認してください。"
+UNEXPECTED_ERROR_MESSAGE = "想定外のエラーでデプロイを止めました。サーバーの状態を確かめてください。"
 
 # 1つのステップに残す出力の長さ（長いと画面と通信が重くなる。末尾を残す）
 OUTPUT_MAX_CHARS = 8000
@@ -176,7 +183,15 @@ class DeployRunner:
                     self._finish("failed", detail)
             raise
         except Exception as error:  # noqa: BLE001 — 想定外の失敗でも、画面に「動いたまま」と見せないため記録して終える
-            self._finish("failed", f"想定外のエラーでデプロイを止めました（{type(error).__name__}: {error}）。サーバーの状態を確かめてください。")
+            logger.error("デプロイ中に想定外のエラーが発生しました（%s）", type(error).__name__)
+            # 実行中のステップを失敗、未実行のステップを見送りにそろえてから終える
+            for step in self.record.steps:
+                if step.status == "running":
+                    step.status = "failed"
+                    step.message = UNEXPECTED_ERROR_STEP_MESSAGE
+                    step.finished_at = step.finished_at or time.time()
+            self._skip_rest("想定外のエラーで止めたため、実行しません。")
+            self._finish("failed", UNEXPECTED_ERROR_MESSAGE)
         return self.record
 
     def _finish_unknown(self, detail: str) -> None:
@@ -265,6 +280,10 @@ class DeployRunner:
             step.message = str(error)
             if isinstance(error, CommandStateUnknownError):
                 raise
+        except Exception as error:  # noqa: BLE001 — 想定外でもステップを「実行中」のまま残さない
+            logger.error("デプロイのステップで想定外のエラーが発生しました（%s: %s）", key, type(error).__name__)
+            step.status = "failed"
+            step.message = UNEXPECTED_ERROR_STEP_MESSAGE
         else:
             if step.status == "running":
                 step.status = "succeeded"
@@ -512,7 +531,7 @@ class DeployRunner:
                 # 原因を画面に残すため、止まったと分かってから読み直す
                 self._append_log_tail(step, await self._logs_since(step, command))
                 raise StepFailed(f"ボットが起動の途中で止まりました（状態: {state['active_state']} / {state['sub_state']}）。")
-            self._check_startup_process(step, state, pid_after, restarts_after)
+            await self._check_startup_process(step, state, pid_after, restarts_after, command)
             if found:
                 break
             if self._clock() >= deadline:
@@ -525,7 +544,7 @@ class DeployRunner:
         step.checks.append(Check(f"起動したPIDの「{rc.LOGIN_SUCCESS_TEXT}」のログが出た", True,
                                  f"PID {pid_after}: {found['message']}"))
         state = await self._service(step, quiet=False)
-        self._check_startup_process(step, state, pid_after, restarts_after)
+        await self._check_startup_process(step, state, pid_after, restarts_after, command)
         self._check(
             step,
             "サービスが稼働中のまま",
@@ -540,8 +559,13 @@ class DeployRunner:
         )
         step.message = f"「{rc.LOGIN_SUCCESS_TEXT}」まで確認しました（再起動から約 {waited:.0f} 秒）。"
 
-    def _check_startup_process(self, step: Step, state: dict, pid: int | None, restarts: int | None) -> None:
-        """ログ待機中と成功確定直前に、再起動で確認したプロセスが続いているかを照合する。"""
+    async def _check_startup_process(self, step: Step, state: dict, pid: int | None, restarts: int | None, command: str) -> None:
+        """ログ待機中と成功確定直前に、再起動で確認したプロセスが続いているかを照合する。
+
+        落ちて別のPIDで再起動済みだった場合も、原因を追えるよう失敗の前に直近のログを添える。
+        """
+        if (pid is None or state["main_pid"] != pid) or state["restarts"] != restarts:
+            self._append_log_tail(step, await self._logs_since(step, command))
         if pid is None or state["main_pid"] != pid:
             self._check(step, "起動確認中のPIDが変わっていない", False,
                         f"確認対象: {pid or 'なし'} → 現在: {state['main_pid'] or 'なし'}",

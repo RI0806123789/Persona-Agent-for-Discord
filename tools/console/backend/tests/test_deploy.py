@@ -211,6 +211,57 @@ class DeployTest(unittest.IsolatedAsyncioTestCase):
                 message = self.step(record, "health").message
                 self.assertIn("プロセスが変わりました" if change == "main_pid" else "自動再起動しました", message)
 
+    async def test_process_replacement_attaches_recent_logs(self):
+        # 落ちてすぐ別PIDで再起動済みでも、原因を追えるよう直近のログを結果に残す（#433）
+        for change in ("main_pid", "restarts"):
+            with self.subTest(change=change):
+                runner, record, _ = await self.restart_for_health(health_timeout=5)
+                original_service = runner._service
+
+                async def service(*args, **kwargs):
+                    state = await original_service(*args, **kwargs)
+                    state[change] += 1
+                    return state
+
+                crash = {"message": "架空のクラッシュ原因ログ", "pid": self.bot.pid}
+                with patch.object(runner, "_service", side_effect=service), \
+                        patch.object(runner, "_logs_since", new=AsyncMock(return_value=[crash])):
+                    self.assertFalse(await runner._step("health", runner._health))
+                health = self.step(record, "health")
+                self.assertIn("架空のクラッシュ原因ログ", health.output)
+                self.assertTrue(health.output_contains_logs)
+
+    async def test_unexpected_step_error_is_failed_with_fixed_message(self):
+        # 想定外の例外でもステップを「実行中」のまま残さず、例外本文を画面へ出さない（#433）
+        record = new_record(1, self.profile)
+        runner = DeployRunner(self.session, self.profile, record, **FAST)
+        with patch.object(runner, "_pull", new=AsyncMock(side_effect=RuntimeError("秘密のホスト名 /home/secret"))):
+            await runner.run()
+        self.assertEqual(self.step(record, "pull").status, "failed")
+        self.assertEqual(record.status, "failed")
+        for step in record.steps:
+            self.assertNotIn(step.status, ("running", "pending"), step.key)
+            self.assertNotIn("秘密のホスト名", step.message)
+        self.assertNotIn("秘密のホスト名", record.message)
+
+    async def test_unexpected_runner_error_settles_steps_and_hides_message(self):
+        record = new_record(1, self.profile)
+        runner = DeployRunner(self.session, self.profile, record, **FAST)
+
+        async def run_all():
+            self._find_step(record, "precheck").status = "running"
+            raise RuntimeError("秘密のホスト名 /home/secret")
+
+        with patch.object(runner, "_run_all", side_effect=run_all):
+            await runner.run()
+        self.assertEqual(record.status, "failed")
+        self.assertNotIn("秘密のホスト名", record.message)
+        self.assertEqual(self.step(record, "precheck").status, "failed")
+        self.assertTrue(all(step.status in ("failed", "skipped") for step in record.steps))
+
+    def _find_step(self, record, key):
+        return self.step(record, key)
+
     async def test_process_replacement_before_final_confirmation_does_not_pass_health(self):
         runner, record, _ = await self.restart_for_health()
         original_service = runner._service

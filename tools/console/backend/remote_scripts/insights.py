@@ -45,6 +45,9 @@ LOGGING_PREFIX_PATTERN = (
 LOGGING_PREFIX = re.compile("^" + LOGGING_PREFIX_PATTERN)
 CONVERSATION_LINE = "^(?:" + LOGGING_PREFIX_PATTERN + r")?User \("
 TOKEN_LINE = re.compile(r"^Total token count：(\d+)")
+# 現行の OperationalFormatter は例外を「例外: <型名>」の1行で出す（スタックトレースは出さない）
+SAFE_EXCEPTION_LINE = re.compile(r"^(?:例外: \S+|例外情報を読み取れませんでした。)$")
+SNOWFLAKE_RE = re.compile(r"^[0-9]{1,20}$")
 AUTONOMOUS_LINE = re.compile(r"^自律行動: .*(配信を開始しました|配信を終了しました)")
 
 
@@ -519,13 +522,21 @@ class InsightsCollector:
                 if voice_error is None:
                     try:
                         voice, _ = self.discord_get(f"/guilds/{guild_id}/voice-states/@me", token, deadline=deadline)
-                        if voice and voice.get("channel_id"):
-                            channel, _ = self.discord_get(f"/channels/{voice['channel_id']}", token, deadline=deadline)
-                            voice_channel = (channel or {}).get("name") or "（名前を取得できないチャンネル）"
+                        channel_id = voice.get("channel_id") if isinstance(voice, dict) else None
+                        if isinstance(channel_id, str) and SNOWFLAKE_RE.match(channel_id):
+                            channel, _ = self.discord_get(f"/channels/{channel_id}", token, deadline=deadline)
+                            name = channel.get("name") if isinstance(channel, dict) else None
+                            voice_channel = name if isinstance(name, str) and name else "（名前を取得できないチャンネル）"
+                        elif channel_id is not None:
+                            raise DiscordError("ボイス状態の応答を読み取れませんでした。")
                     except DiscordError as error:
                         voice_error = str(error)
                         if isinstance(error, (DiscordRateLimit, DiscordDeadline)):
                             rate_error = voice_error
+                        self.note(f"ボイス状態を取得できませんでした。{voice_error}")
+                    except (KeyError, TypeError, ValueError, AttributeError):
+                        # 1サーバーの想定外の応答で、取得済みの全サーバー一覧を失わない
+                        voice_error = "ボイス状態の応答を読み取れませんでした。"
                         self.note(f"ボイス状態を取得できませんでした。{voice_error}")
                 summaries.append({
                     "name": guild.get("name") if isinstance(guild.get("name"), str) else "名前不明のサーバー",
@@ -624,7 +635,7 @@ class InsightsCollector:
                 activity["gateway_invalidated"] += 1
             elif "heartbeat blocked" in message:
                 activity["heartbeat_blocked"] += 1
-            elif message.startswith("Traceback (most recent call last)"):
+            elif message.startswith("Traceback (most recent call last)") or SAFE_EXCEPTION_LINE.match(message):
                 activity["exceptions"] += 1
             elif match := AUTONOMOUS_LINE.match(message):
                 # 元の行にはサーバー ID・チャンネル名・終了理由があるため、イベントの種類だけ返す

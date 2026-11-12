@@ -73,7 +73,7 @@ export function OperationsPage({
           <div className="ops-status">
             <span className="label-large muted">現在の状態</span>
             <StatusChip tone={tone.tone} label={tone.label} pulse={active} />
-            <code className="body-small">{profile ? `sudo -n systemctl <操作> ${profile.service}` : ""}</code>
+            <code className="body-small">{profile ? privacy.redact(`sudo -n systemctl <操作> ${profile.service}`) : ""}</code>
             {profile?.environment === "production" && <StatusChip tone="serious" icon="shield" label="本番環境に接続中" />}
             {(deployRunning || deployUnknown) && (
               <StatusChip tone={deployUnknown ? "critical" : "info"} icon="rocket"
