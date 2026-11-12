@@ -86,6 +86,12 @@ async def generate_channel_summary(
     if not response_text:
         return False, "⚠️ 要約の生成に失敗しました。時間をおいて再度お試しください。"
 
+    # 生成に成功した時点で消費したトークンを記録する。後段で空になった・拒否された場合も
+    # Gemini を呼んだ分は統計に含める（#432）。
+    usage.log_snapshot(
+        "会話要約", f"{period.name}の要約", f"{source.message_count}件", full_prompt, response_text, usage_info
+    )
+
     # 感情タグが混じった場合の保険（ペルソナが誤って付けることがある）
     response_text = strip_affinity_tag(response_text)
     # Markdown 見出し記号を除去してプレーンテキスト化（#### 等が Discord で見づらいため）
@@ -96,10 +102,6 @@ async def generate_channel_summary(
     # Bot自身の応答としてNGワードマスク＋AIモデレーションを適用する（既存パイプラインと同様）
     response_text = await screen_bot_response(
         response_text, ng_filter, moderator, log_label="会話要約"
-    )
-
-    usage.log_snapshot(
-        "会話要約", f"{period.name}の要約", f"{source.message_count}件", full_prompt, response_text, usage_info
     )
 
     header = f"📋 **会話要約（期間: {period.name} / 対象: {source.message_count}件）**\n\n"

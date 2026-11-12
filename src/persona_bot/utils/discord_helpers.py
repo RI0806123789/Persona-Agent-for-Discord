@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from pathlib import Path
 from typing import Any, Callable, Sequence, TypeGuard, TYPE_CHECKING
+from urllib.parse import quote
 
 import discord
 from PIL import Image
@@ -614,6 +615,15 @@ def mask_grounding_sources(
     ]
 
 
+def _sanitize_link_uri(uri: Any) -> str:
+    """`<URL>` の囲みを壊す文字（空白・制御文字・山括弧）を URL エンコードする。"""
+    text = "" if uri is None else str(uri).strip()
+    return "".join(
+        quote(char) if char.isspace() or char in "<>" or ord(char) < 0x20 or ord(char) == 0x7F else char
+        for char in text
+    )
+
+
 def format_grounding_sources(
     sources: list[dict[str, str]], ng_filter: "NgWordFilter | None" = None,
 ) -> str:
@@ -626,9 +636,10 @@ def format_grounding_sources(
         return ""
     lines: list[str] = []
     for source in mask_grounding_sources(sources, ng_filter):
-        uri = source.get("uri", "")
-        # Markdown リンクの構文を壊さないよう、タイトル中の角括弧は全角に置換する
-        title = source.get("title", "").replace("[", "［").replace("]", "］")
+        # URL に空白・改行・山括弧が入ると `<...>` の囲みが途中で終わるため、除くか符号化して1つのリンクに保つ
+        uri = _sanitize_link_uri(source.get("uri", ""))
+        # Markdown リンクの構文を壊さないよう、タイトルは1行にして角括弧は全角に置換する
+        title = " ".join(str(source.get("title", "")).split()).replace("[", "［").replace("]", "］")
         if title:
             lines.append(f"・ [{title}](<{uri}>)")
         else:

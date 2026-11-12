@@ -138,6 +138,24 @@ class PersonaSettingsTests(PersonaFolderTestCase):
             self.assertIn(word, logs)
         self.assertNotIn("pich", logs)
 
+    def test_unknown_eq_is_warned_and_empty_live_voice_is_accepted_silently(self) -> None:
+        """未登録の音色は読み込み時に知らせる。空の live_voice は「既定の声」の有効な指定（#432）。"""
+        self.write("a.txt")
+        self.write("b.txt")
+        self.write_settings({"personas": {
+            "a.txt": {"voice": {"eq": "存在しない音色"}},
+            "b.txt": {"voice": {"live_voice": "", "eq": "bright"}},
+        }})
+        with self.assertLogs("persona_bot.config.personas", level="WARNING") as captured:
+            catalog = self.load()
+        logs = "\n".join(LOG_FORMATTER.format(record) for record in captured.records)
+        self.assertEqual(catalog.voice_profile("../prompts/a.txt")["eq"], VOICE_PROFILE_FALLBACK["eq"])
+        self.assertIn("eq", logs)
+        self.assertNotIn("存在しない音色", logs)  # 書かれた値そのものはログに出さない
+        self.assertNotIn("live_voice", logs)  # 空の live_voice に「文字列で書いてください」と警告しない
+        self.assertEqual(catalog.voice_profile("../prompts/b.txt")["live_voice"], "")
+        self.assertEqual(catalog.voice_profile("../prompts/b.txt")["eq"], "bright")
+
     def test_live_voice_name_is_checked_before_reaching_the_connection(self) -> None:
         """音声会話（#268）のボイス名は接続の設定にそのまま載るため、英字の名前だけを通す。"""
         self.write("a.txt")

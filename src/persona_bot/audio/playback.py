@@ -40,10 +40,19 @@ class PlaybackController:
 
     async def wait_for_players(self) -> None:
         """キャンセルされても実スレッドが終わるまで所有権を返さない。"""
+        canceled: asyncio.CancelledError | None = None
         while players := list(self._players):
             player = players[0]
-            await run_in_thread(player.join)
-            self._players.discard(player)
+            try:
+                await run_in_thread(player.join)
+            except asyncio.CancelledError as error:
+                # run_in_thread は join の完了を待ってから伝えてくる。残りのスレッドも待ち終えてから再送出する。
+                canceled = error
+            finally:
+                # join が終わった（キャンセル時も）スレッドは記録から外す。残すと同じスレッドを待ち直し続ける。
+                self._players.discard(player)
+        if canceled is not None:
+            raise canceled
 
     def stop(self, voice_client: discord.VoiceClient, *, source: discord.AudioSource | None = None) -> None:
         if source is not None and self._source is not source:

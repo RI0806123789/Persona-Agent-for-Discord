@@ -54,6 +54,19 @@ class GroundingSourceMaskTests(unittest.TestCase):
         self.assertIn("https://example.invalid/", result)
         self.assertEqual(source["title"], "架空NG[の資料]")
 
+    def test_each_source_stays_on_one_line_even_with_newlines_and_breaking_url_characters(self):
+        """改行入りのタイトルや、`>`・空白を含む URL でも、Markdown リンクを崩さず1行にする（#432）。"""
+        sources = [
+            {"title": "1行目\n2行目\r\n3行目", "uri": "https://example.invalid/a b>c\nd"},
+            {"title": "", "uri": "https://example.invalid/<x>"},
+        ]
+        result = discord_helpers.format_grounding_sources(sources)
+        lines = result.split("\n")[3:]
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0], "・ [1行目 2行目 3行目](<https://example.invalid/a%20b%3Ec%0Ad>)")
+        self.assertEqual(lines[1], "・ <https://example.invalid/%3Cx%3E>")
+        self.assertEqual(sources[0]["title"], "1行目\n2行目\r\n3行目")  # 元の取得結果は変えない
+
 
 class ChannelDisplayNameTests(unittest.TestCase):
     def test_missing_name_and_id_have_a_safe_label(self):

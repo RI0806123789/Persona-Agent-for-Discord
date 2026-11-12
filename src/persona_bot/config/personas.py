@@ -43,6 +43,7 @@ from persona_bot.config.constants import (
     PERSONA_SETTINGS_TEMPLATE_FILE_NAME,
     PERSONA_VALUE_PREFIX,
     PROMPT_TEMPLATE_FILE_NAME,
+    VOICE_EQ_PROFILES,
     VOICE_PROFILE_FALLBACK,
 )
 from persona_bot.config.paths import resolve_prompt_path
@@ -323,8 +324,16 @@ def _build_voice(file_name: str, voice: Any) -> dict[str, Any]:
     for key, value in voice.items():
         if key in unsupported:
             continue
+        if key == "live_voice" and value == "":
+            # 空は「既定の声を使う」という有効な指定（既定値と同じ）。警告を出さずそのまま採用する。
+            profile[key] = ""
+            continue
         if not isinstance(value, str) or not value:
             logger.warning(f'警告: personas.json の「<設定値>」の voice.{key} は文字列で書いてください。既定値を使います。')
+            continue
+        if key == "eq" and value not in VOICE_EQ_PROFILES:
+            # 実行時は未知の音色を加工なしで読み上げるだけで、気づきにくい。読み込み時に知らせる。
+            logger.warning("警告: personas.json の「<設定値>」の eq が未登録の音色です（<設定値>）。加工なしの音色を使います。")
             continue
         if key == "rate" and not _EDGE_RATE_PATTERN.match(value):
             logger.warning("警告: personas.json の「<設定値>」の rate が不正です（<設定値>）。'+5%' のような形式で指定してください。既定値を使います。")

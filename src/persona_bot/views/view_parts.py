@@ -22,9 +22,15 @@ async def authorize_panel_operation(view, interaction, *, allowed, recheck, noti
     if not allowed:
         await interaction.response.send_message(notice, ephemeral=True)
         return False
-    begin_panel_operation(view, interaction)
+    operation = begin_panel_operation(view, interaction)
     await interaction.response.defer(ephemeral=True)
-    return await confirm_panel_permission(interaction, await recheck(interaction), notice=notice)
+    if operation is not None and not operation.is_current():
+        # すでに閉じた・別の画面へ移ったパネルの操作は、何も実行しない。
+        return False
+    if not await confirm_panel_permission(interaction, await recheck(interaction), notice=notice):
+        return False
+    # 権限の再確認を待つ間に「戻る」などで画面が移っていたら、副作用を起こさせない。
+    return panel_operation_is_current(view, interaction)
 
 
 def _is_personal_settings_operation(view, interaction, allow_dm: bool) -> bool:

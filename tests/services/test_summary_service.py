@@ -89,6 +89,15 @@ class SummaryMessageCountTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("架空の別ボット本文", prompt)
         self.assertEqual([call.args[0] for call in check.call_args_list], [11, 22, 11, 11, 11, 11, 11])
 
+    async def test_usage_is_recorded_even_when_the_generated_summary_is_discarded(self):
+        """生成に成功したら、見出し除去で空になった場合もトークンを記録する（#432）。"""
+        self.gemini.generate.return_value = ("#### \n", {"total_token_count": 5}, [])
+        success, text = await self.generate([summary_message("架空の投稿")])
+        self.assertFalse(success)
+        self.assertIn("空でした", text)
+        self.usage.log_snapshot.assert_called_once()
+        self.assertIs(self.usage.log_snapshot.call_args.args[5], self.gemini.generate.return_value[1])
+
     async def test_no_usable_messages_skips_generation_and_usage_record(self):
         messages = [summary_message(""), summary_message("<@!99>"), summary_message("", stickers=[object()])]
         success, text = await self.generate(messages)

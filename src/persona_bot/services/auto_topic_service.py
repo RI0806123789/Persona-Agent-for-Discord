@@ -225,6 +225,15 @@ class AutoTopicService:
             else:
                 logger.warning("自発的な会話: 話題の生成に失敗しました。次回の見回りで再試行します。")
             return False
+        # 生成に成功した時点で消費したトークンを記録する。後段のモデレーション・権限の再確認で
+        # 投稿を見送っても、Gemini を呼んだ分が統計から欠けないようにする（#432）。
+        channel_label = channel_display_name(channel)
+        if anniversary:
+            self._usage.log_snapshot(log_label, f"{member.display_name} さんの{anniversary_label}",
+                                     channel_label, full_prompt, response_text, usage_info)
+        else:
+            self._usage.log_snapshot(log_label, f"{channel_label} への話題提供", "自動実行",
+                                     full_prompt, response_text, usage_info)
         screened, done = await self._screen_auto_post(response_text, log_label)
         if not eligible() or (anniversary and not channel.permissions_for(member).view_channel):
             return False
@@ -233,17 +242,12 @@ class AutoTopicService:
             return True
         if screened is None:
             return done
-        channel_label = channel_display_name(channel)
         if anniversary:
-            self._usage.log_snapshot(log_label, f"{member.display_name} さんの{anniversary_label}",
-                                     channel_label, full_prompt, screened, usage_info)
             await send_long_message(
                 channel, f"{member.mention} {screened}",
                 allowed_mentions=discord.AllowedMentions(users=[member], everyone=False, roles=False, replied_user=False),
             )
         else:
-            self._usage.log_snapshot(log_label, f"{channel_label} への話題提供", "自動実行",
-                                     full_prompt, screened, usage_info)
             await send_long_message(channel, screened, allowed_mentions=discord.AllowedMentions.none())
         return True
 

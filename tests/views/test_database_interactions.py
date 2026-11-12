@@ -88,6 +88,56 @@ class DatabaseInteractionTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIs(new_panel.message, interaction.original_response.return_value)
                     self.assertTrue(view.is_finished())
 
+    async def test_stale_panel_operations_do_not_run_side_effects(self):
+        """閉じた・別の画面へ移ったパネルの確定・取消では、DBを更新しない（#432）。"""
+        for kind in ("privacy_save", "reminder_cancel"):
+            with self.subTest(kind=kind):
+                interaction = self.interaction()
+                if kind == "privacy_save":
+                    stats = SimpleNamespace(is_opted_out=Mock(return_value=False), set_opt_out=AsyncMock(return_value=True))
+                    view = StatsPrivacyView(stats, viewer_id="11", viewer_name="架空の本人")
+                    button = next(item for item in view.children if isinstance(item, StatsPrivacyConfirmButton))
+                    side_effect = stats.set_opt_out
+                else:
+                    service = SimpleNamespace(cancel=AsyncMock(return_value=None), describe=Mock(return_value="架空の予定"))
+                    view = ReminderView(service, [{"reminder_id": 1, "message": "架空の予定"}], "11")
+                    button = next(item for item in view.children if isinstance(item, ReminderCancelSelect))
+                    button._values = ["1"]
+                    side_effect = service.cancel
+                view.stop()  # 「戻る」などで画面が移り、停止済みになった
+                await button.callback(interaction)
+                side_effect.assert_not_awaited()
+                interaction.response.edit_message.assert_not_awaited()
+                interaction.edit_original_response.assert_not_awaited()
+
+    async def test_authorize_panel_operation_rejects_stale_views_and_screens_changed_while_waiting(self):
+        from persona_bot.views.view_parts import authorize_panel_operation, begin_panel_operation
+
+        stale = PanelView(timeout_notice="架空")
+        stale.stop()
+        recheck = AsyncMock(return_value=True)
+        interaction = self.interaction()
+        self.assertFalse(await authorize_panel_operation(
+            stale, interaction, allowed=True, recheck=recheck, notice="架空の拒否"))
+        recheck.assert_not_awaited()
+
+        view = PanelView(timeout_notice="架空")
+        self.addCleanup(view.stop)
+        interaction = self.interaction()
+
+        async def move_to_another_screen(_interaction):
+            # 権限の再確認を待つ間に、別の操作（戻るなど）が新しい世代を確保した
+            begin_panel_operation(view, self.interaction())
+            return True
+
+        self.assertFalse(await authorize_panel_operation(
+            view, interaction, allowed=True, recheck=move_to_another_screen, notice="架空の拒否"))
+
+        fresh = PanelView(timeout_notice="架空")
+        self.addCleanup(fresh.stop)
+        self.assertTrue(await authorize_panel_operation(
+            fresh, self.interaction(), allowed=True, recheck=AsyncMock(return_value=True), notice="架空の拒否"))
+
     async def test_deferred_swap_keeps_timeout_and_access_checks(self):
         hub = PanelView(timeout_notice="元の時間切れ")
         panel = PanelView(timeout_notice="新しい時間切れ")

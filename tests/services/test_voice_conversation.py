@@ -211,6 +211,28 @@ class GateTests(ConversationTestBase):
         self.assertEqual(self.live.restarts, 1)
         self.assertTrue(self.live.forgot)
 
+    async def test_bot_move_closes_the_gate_without_waiting_for_the_next_tick(self):
+        self.consent_all()
+        self.assertTrue(self.conversation.is_open)
+        self.voice_client.channel = SimpleNamespace(id=30, members=self.channel.members)
+        self.conversation.handle_self_update()  # ボット自身の voice_state_update から呼ばれる
+        self.assertFalse(self.conversation.is_open)
+
+    async def test_withdrawal_by_a_departed_member_stops_another_speaker_and_playback_at_once(self):
+        """VC を出た人の撤回で文脈を張り替える間も、別の人の発話を古い文脈のまま続けない（#432）。"""
+        self.consent_all()
+        leaving = self.members[USER_A]
+        self.channel.members.remove(leaving)
+        self.conversation.handle_member_update(leaving, SimpleNamespace(channel=self.channel), SimpleNamespace(channel=None))
+        self.speak(USER_B, self.start_frames())
+        self.assertTrue(self.conversation._speaking)
+        self.conversation.withdraw(USER_A)
+        self.assertTrue(self.conversation.is_open)  # 残った人の同意でゲートは開いたまま
+        self.assertFalse(self.conversation._speaking)
+        self.assertTrue(self.conversation._current.discarded)
+        await self.settle()
+        self.assertEqual(self.live.restarts, 1)
+
     async def test_withdrawal_without_prior_consent_keeps_context(self):
         self.conversation.withdraw(USER_A)
         await self.settle()
@@ -981,6 +1003,20 @@ class TranscriptOwnershipTests(ConversationTestBase):
         self.service.blacklist.record_violation.assert_awaited_once()
         self.assertEqual(self.service.blacklist.record_violation.await_args.args[0], USER_B)
 
+    async def test_discarded_utterance_does_not_block_the_next_speakers_transcript(self):
+        """破棄した発言の帰属待ちで、次に話し始めた人の文字起こしを捨てない（#432）。"""
+        self.speak(USER_A, self.start_frames())
+        leaving = self.members[USER_A]
+        self.channel.members.remove(leaving)
+        self.conversation.handle_member_update(leaving, SimpleNamespace(channel=self.channel), SimpleNamespace(channel=None))
+        self.speak(USER_B, self.start_frames())
+        self.assertIsNone(self.conversation._transcript_blocked)
+        await self.transcript("架空のBの発言")
+        current = self.conversation._current
+        self.assertEqual(current.user_id, USER_B)
+        self.assertEqual(current.input_text, "架空のBの発言")
+        self.assertFalse(current.transcript_incomplete)
+
     async def test_interrupted_notice_closes_the_previous_transcript(self):
         await self.barge_in()
         current = self.conversation._current
@@ -1319,6 +1355,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         guild = SimpleNamespace(id=1)
         service.handle_voice_state_update(SimpleNamespace(id=BOT_ID, guild=guild), None, None)
         conversation.handle_member_update.assert_not_called()
+        # ボット自身の移動は、参加者の出入りとしては扱わず、ゲートの更新だけを伝える（#432）
+        conversation.handle_self_update.assert_called_once()
         service.handle_voice_state_update(SimpleNamespace(id=USER_A, guild=SimpleNamespace(id=2)), None, None)
         conversation.handle_member_update.assert_not_called()
         service.handle_voice_state_update(SimpleNamespace(id=USER_A, guild=guild), "before", "after")
