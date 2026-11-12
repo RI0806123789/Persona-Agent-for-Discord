@@ -161,26 +161,43 @@ def join_permission_notice(
     )
 
 
+async def promote_stage_speaker(
+    interaction: discord.Interaction, channel: discord.VoiceChannel | discord.StageChannel,
+    *, leaving: bool = False,
+) -> bool:
+    """ステージでボットを発言者へ昇格する。昇格できなければ案内して False を返す。
+
+    ステージ以外では何もせず True を返す。leaving が真なら、呼び出し側がこの後に退出する
+    ため、「接続しています」ではなく退出する旨を案内する。
+    """
+    if not isinstance(channel, discord.StageChannel):
+        return True
+    try:
+        await enable_stage_speaker(interaction.guild, channel)
+    except Exception as error:
+        logger.error(f'ステージの発言者への昇格に失敗しました: {type(error).__name__}', exc_info=error)
+        hint = "ボットを発言者へ招待するか、管理者にステージの「メンバーをミュート」権限を確認してください。"
+        if leaving:
+            text = f"⚠️ {channel.name} で、ステージの発言者になれなかったため、声で会話できずに退出しました。{hint}"
+        else:
+            text = f"⚠️ {channel.name} へ接続していますが、ステージの発言者になれませんでした。{hint}"
+        await interaction.followup.send(text, allowed_mentions=discord.AllowedMentions.none())
+        return False
+    return True
+
+
 async def announce_voice_join(
     interaction: discord.Interaction, channel: discord.VoiceChannel | discord.StageChannel,
-    *, already_connected: bool = False, live: bool = False,
+    *, already_connected: bool = False, live: bool = False, speaker_ready: bool = False,
 ) -> None:
     """ステージでは発言者へ昇格してから、接続の結果を案内する。
 
     live が真なら、音声会話（Gemini Live）の同意パネルへの案内を添える。
+    speaker_ready が真なら、呼び出し側が昇格を済ませているので再度は行わない。
     """
-    if isinstance(channel, discord.StageChannel):
-        try:
-            await enable_stage_speaker(interaction.guild, channel)
-        except Exception as error:
-            logger.error(f'ステージの発言者への昇格に失敗しました: {type(error).__name__}', exc_info=error)
-            await interaction.followup.send(
-                f"⚠️ {channel.name} へ接続していますが、ステージの発言者になれませんでした。"
-                "ボットを発言者へ招待するか、管理者にステージの「メンバーをミュート」権限を確認してください。",
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
-    message = (f"{channel.name} には既に接続しています。" if already_connected
+    if not speaker_ready and not await promote_stage_speaker(interaction, channel):
+        return
+    message =(f"{channel.name} には既に接続しています。" if already_connected
                else f"{channel.name} に接続しました。")
     if isinstance(channel, discord.StageChannel):
         message += "ステージの発言者として話します。"
@@ -278,6 +295,7 @@ class VoiceSessionCommands:
                     # 移された先で /join された場合も、ここを意図した接続先にする（元へ戻さない）。
                     if voice_guard is not None:
                         voice_guard.adopt(guild.id, voice_channel.id)
+                    speaker_ready = False
                     if live_voice is not None:
                         conversation = live_voice.get(guild.id)
                         if (conversation is None or conversation.stopped
@@ -285,10 +303,15 @@ class VoiceSessionCommands:
                                 or conversation.channel_id != voice_channel.id):
                             # 接続はあるが、このチャンネルの音声会話が動いていない（止まっている・
                             # 移された先で /join された）。同じ接続のまま、このチャンネル用に始め直す。
+                            # ステージでは先に発言者へ昇格し、声を出せないまま会話を始めない。
+                            if not await self.prepare_stage_for_live(interaction, voice_client, voice_channel):
+                                return
                             if not await self.start_live_voice(interaction, voice_client, voice_channel):
                                 return
+                            speaker_ready = True
                     await announce_voice_join(
                         interaction, voice_channel, already_connected=True, live=live_voice is not None,
+                        speaker_ready=speaker_ready,
                     )
                     return
                 # 切り替えの前に保護を解く（/leave と同じ順序）。移動を戻している最中の処理が、
@@ -328,6 +351,27 @@ class VoiceSessionCommands:
             # 開始に進まなかった（接続の失敗・中断）場合も、確保した枠を残さない。
             if live_voice is not None and guild is not None:
                 live_voice.release_reservation(guild.id, reservation=reservation)
+
+    async def prepare_stage_for_live(
+        self, interaction: discord.Interaction, voice_client: discord.VoiceClient,
+        voice_channel: discord.VoiceChannel | discord.StageChannel,
+    ) -> bool:
+        """音声会話を始める前に、ステージでは発言者へ昇格する。昇格できなければ退出して False を返す。
+
+        ステージ以外のチャンネルでは何もせず True を返す。
+        """
+        if await promote_stage_speaker(interaction, voice_channel, leaving=True):
+            return True
+        guild = interaction.guild
+        if guild is not None and guild.voice_client is voice_client:
+            # 声を出せない接続を残さない（start_live_voice の失敗時と同じ片付け）。
+            if self._voice_guard is not None:
+                self._voice_guard.release(guild.id)
+            try:
+                await wait_for_cleanup(voice_client.disconnect(force=True), label="ステージ昇格失敗時の切断")
+            except Exception:
+                logger.warning("ステージの発言者になれなかった後の切断に失敗しました。", exc_info=True)
+        return False
 
     async def start_live_voice(
         self, interaction: discord.Interaction, voice_client: LiveVoiceClient,
@@ -435,12 +479,20 @@ class VoiceSessionCommands:
             # 接続イベントでも登録されるが、人が選んだ接続先を明示的に意図した接続先にする。
             if voice_guard is not None and guild is not None:
                 voice_guard.adopt(guild.id, voice_channel.id)
+            speaker_ready = False
             if live_voice is not None and guild is not None:
+                # ステージでは先に発言者へ昇格する。昇格できないまま会話と同意パネルを始めると、
+                # 観客のまま同時枠だけを占有してしまう。
+                if not await self.prepare_stage_for_live(interaction, attempted_voice_client, voice_channel):
+                    return
                 if not await self.start_live_voice(
                     interaction, attempted_voice_client, voice_channel, reservation=reservation,
                 ):
                     return
-            await announce_voice_join(interaction, voice_channel, live=live_voice is not None)
+                speaker_ready = True
+            await announce_voice_join(
+                interaction, voice_channel, live=live_voice is not None, speaker_ready=speaker_ready,
+            )
 
     async def leave(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild

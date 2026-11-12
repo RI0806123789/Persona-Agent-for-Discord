@@ -29,6 +29,7 @@ import logging
 import asyncio
 from dataclasses import dataclass
 import struct
+import threading
 from typing import Any, Callable
 
 import discord
@@ -204,6 +205,10 @@ class LiveVoiceClient(discord.VoiceClient):
         """話者と割当世代のスナップショット。切断後の再割当も別の世代になる。"""
         return self._ssrc_users.get(ssrc)
 
+    def active_ssrcs(self) -> frozenset[int]:
+        """いま話者の対応がある SSRC。切断した話者のデコーダを回収する目安（#432）。"""
+        return frozenset(self._ssrc_users)
+
 
 class VoiceReceiver:
     """1つの接続の受信を管理する。`start()` で購読を始め、`stop()` で外す。
@@ -228,6 +233,9 @@ class VoiceReceiver:
         self._decoder_factory = decoder_factory or discord.opus.Decoder
         self._echo_reference = echo_reference
         self._decoders: dict[int, _UserDecoder] = {}
+        # デコーダの追加と stop() の全消去を直列化する。停止の直後に UDP スレッドが
+        # デコーダを入れ直して残さないため。
+        self._decoders_lock = threading.Lock()
         self._box: Any = None
         self._box_key: bytes | None = None
         self._running = False
@@ -256,7 +264,8 @@ class VoiceReceiver:
         try:
             self._voice_client._connection.remove_socket_listener(self._on_packet)
         finally:
-            self._decoders.clear()
+            with self._decoders_lock:
+                self._decoders.clear()
 
     # --- ソケットの読み取りスレッド ------------------------------------------------
 
@@ -305,6 +314,7 @@ class VoiceReceiver:
             self._decoders.pop(packet.ssrc, None)
             return None
         user_id = stream[0]
+        self._prune_departed_decoders()
 
         # 接続鍵の変更も通番判定より先に検知する。デコーダは UDP のスレッドでだけ入れ替える。
         box = self._transport_box(connection)
@@ -326,9 +336,13 @@ class VoiceReceiver:
             self._dropped += 1
             return None
         if state is None:
-            state = self._decoders[packet.ssrc] = _UserDecoder(
-                self._decoder_factory(), stream, self._echo_reference,
-            )
+            with self._decoders_lock:
+                if not self._running:
+                    # stop() の後に届いたパケット。デコーダを残さない。
+                    return None
+                state = self._decoders[packet.ssrc] = _UserDecoder(
+                    self._decoder_factory(), stream, self._echo_reference,
+                )
         state.last_sequence = packet.sequence
         if opus == OPUS_SILENCE_FRAME:
             return None
@@ -345,6 +359,18 @@ class VoiceReceiver:
             logger.debug("音声受信: エコー除去に失敗したため、そのまま渡しました。", exc_info=True)
             return (user_id, converted, None)
         return (user_id, echo.pcm, echo.level)
+
+    def _prune_departed_decoders(self) -> None:
+        """話者の対応が消えた（切断した）SSRC のデコーダを捨てる。UDP スレッドでだけ呼ぶ。
+
+        切断した話者のパケットはもう届かないため、通常の経路では回収されない。
+        他の話者のパケットが届くたびに照合する（SSRC は数人分なので軽い）。
+        """
+        if not self._decoders:
+            return
+        active = self._voice_client.active_ssrcs()
+        for ssrc in [ssrc for ssrc in list(self._decoders) if ssrc not in active]:
+            self._decoders.pop(ssrc, None)
 
     def _transport_box(self, connection: Any) -> Any:
         raw_key = getattr(connection, "secret_key", None)

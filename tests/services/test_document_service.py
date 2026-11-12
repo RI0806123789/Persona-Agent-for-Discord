@@ -358,6 +358,17 @@ class DocumentResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.moderator.check.await_count, 2)
         self.assertEqual(self.usage.log_snapshot.call_args.args[4], "要約です。")
 
+    async def test_usage_is_recorded_when_the_response_is_rejected_or_has_only_tags(self) -> None:
+        """生成に成功したら、後段で却下・空判定になってもトークンを記録する（#432）。"""
+        self.moderator.check.side_effect = [(True, ""), (False, "架空の不適切判定")]
+        await self.process_response("架空の不適切な回答")
+        self.usage.log_snapshot.assert_called_once()
+        self.usage.log_snapshot.reset_mock()
+        self.moderator.check.side_effect = None
+        self.moderator.check.return_value = (True, "")
+        await self.process_response("[V:1, A:2]")
+        self.usage.log_snapshot.assert_called_once()
+
     async def test_multiple_tags_with_spaces_are_removed(self) -> None:
         await self.process_response("[V: +1, A: -2]要約です。[V: -3, A: +4]")
         self.assert_clean_response("要約です。")

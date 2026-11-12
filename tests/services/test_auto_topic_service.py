@@ -209,6 +209,38 @@ class AutoTopicServiceTests(unittest.IsolatedAsyncioTestCase):
         self.gemini.generate.assert_awaited_once()
         self.channel.send.assert_not_awaited()
 
+    async def test_usage_is_recorded_even_when_the_generated_text_is_not_posted(self):
+        """生成に成功したら、後段のモデレーション・権限の再確認で見送ってもトークンを記録する（#432）。"""
+        usage = self.service._usage.log_snapshot
+        usage_info = {"total_token_count": 5}
+        for reason in ("moderation", "permission"):
+            for kind in ("topic", "anniversary"):
+                with self.subTest(reason=reason, kind=kind):
+                    usage.reset_mock()
+                    self.channel.send.reset_mock()
+                    self.gemini.generate.return_value = ("架空の本文", usage_info, [])
+                    self.moderator.check.return_value = (reason != "moderation", "架空の判定")
+                    # 生成後の権限再確認で見送る場合は、生成の直後に送信権限を失わせる
+                    original = self.gemini.generate.side_effect
+
+                    async def generate(*args, **kwargs):
+                        if reason == "permission":
+                            self.permissions.send_messages = False
+                        return ("架空の本文", usage_info, [])
+
+                    self.gemini.generate.side_effect = generate
+                    try:
+                        if kind == "topic":
+                            await self.service._post_topic(self.channel, self.settings)
+                        else:
+                            await self.service._post_anniversary(self.channel, self.settings, self.member, "誕生日")
+                    finally:
+                        self.gemini.generate.side_effect = original
+                        self.permissions.send_messages = True
+                    self.channel.send.assert_not_awaited()
+                    usage.assert_called_once()
+                    self.assertIs(usage.call_args.args[5], usage_info)
+
     async def test_active_autonomous_session_skips_generation(self):
         self.settings.autonomous_session = object()
         await self.service.run_pending_checks()

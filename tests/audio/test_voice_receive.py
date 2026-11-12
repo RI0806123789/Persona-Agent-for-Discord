@@ -362,6 +362,39 @@ class ReceiverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.received, [])
 
 
+class ReceiverDecoderLifetimeTests(unittest.IsolatedAsyncioTestCase):
+    """切断した話者のデコーダ回収と、停止後に入れ直さないこと（#432）。"""
+
+    make_receiver = ReceiverTests.make_receiver  # 受信の組み立てを共有する（テストの重複実行は避ける）
+
+    async def test_decoder_of_a_departed_speaker_is_released_when_others_keep_talking(self):
+        receiver = self.make_receiver()
+        receiver.start()
+        receiver._on_packet(encrypt_packet(b"first", sequence=10))
+        departed_ssrc = SSRC + 1
+        receiver._decoders[departed_ssrc] = receiver._decoders[SSRC]  # 切断済みの話者のデコーダ
+        self.assertIn(departed_ssrc, receiver._decoders)
+        receiver._on_packet(encrypt_packet(b"second", sequence=11))
+        self.assertNotIn(departed_ssrc, receiver._decoders)
+        self.assertIn(SSRC, receiver._decoders)
+
+    async def test_active_ssrcs_follow_speaker_assignments(self):
+        receiver = self.make_receiver()
+        voice_client = receiver._voice_client
+        self.assertEqual(voice_client.active_ssrcs(), frozenset({SSRC}))
+        await voice_client._handle_voice_ws_message(None, {"op": 13, "d": {"user_id": USER_ID}})
+        self.assertEqual(voice_client.active_ssrcs(), frozenset())
+
+    async def test_decoder_is_not_inserted_after_stop(self):
+        receiver = self.make_receiver()
+        receiver.start()
+        receiver.stop()
+        # stop() と同時に UDP スレッドが走っていた場合を再現する（_running を見ずに _on_packet を迂回）。
+        self.assertIsNone(receiver._decode_packet(encrypt_packet(b"late")))
+        self.assertEqual(receiver._decoders, {})
+        self.assertEqual(self.decoders, [])
+
+
 class DiscordCompatibilityTests(unittest.TestCase):
     def test_discord_py_still_exposes_the_receive_entry_points(self):
         """受信が依存する discord.py の内部の入口が残っているか（版の更新で消えたら検出する）。"""

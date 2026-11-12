@@ -555,6 +555,9 @@ class VoiceConversation:
             # いない（ゲートが開いたまま）場合もあるため、開閉を待たずに新しいセッションへ張り替える。
             self._live.forget_context()
             spawn(self._live.restart_fresh(), label="音声会話の文脈の破棄")
+            # 張り替えが済むまでの間も、別の人の発話・ペルソナの返答を古い文脈のまま続けない
+            # （再接続の完了通知を待たずに、進行中の発話と再生を止める）。
+            self._pause()
         if self._active_user == user_id:
             self._end_activity(discard=True)
         if self._current is not None and self._current.user_id == user_id:
@@ -580,6 +583,10 @@ class VoiceConversation:
     def _after_consent_change(self) -> None:
         self._update_gate()
         self._schedule_panel_update()
+
+    def handle_self_update(self) -> None:
+        """ボット自身の移動・切断。ゲートの開閉を見回り（tick）を待たずに更新する。"""
+        self._update_gate()
 
     def handle_member_update(self, member: Any, before: Any, after: Any) -> None:
         """参加者の出入り。抜けた人の発話権・発話希望・プリロールを無効にする。"""
@@ -763,6 +770,9 @@ class VoiceConversation:
             utterance.ended_at = now
             if discard:
                 utterance.discarded = True
+                # 破棄した発言の文字起こしは使わない。閉じておかないと、次に話し始めた人の断片が
+                # 破棄済みの発言の帰属待ちに阻まれて捨てられ、その発言が記憶から外れる。
+                self._close_transcript(utterance)
             else:
                 utterance.input_task = spawn(self._judge_input(utterance), label="音声会話の入力判定")
         # 待っていた人に、少しの間だけ優先して話す機会を渡す。
@@ -1579,6 +1589,8 @@ class VoiceConversationService:
             return
         bot_user = self._client.user
         if bot_user is not None and member.id == bot_user.id:
-            # ボット自身の移動・切断は見回り（tick）と voice_guard が扱う。
+            # 接続の終了・戻しは見回り（tick）と voice_guard が扱う。ただし別のチャンネルへ
+            # 移された瞬間から、移動先の人の声を扱わないよう、ゲートだけはすぐ更新する。
+            conversation.handle_self_update()
             return
         conversation.handle_member_update(member, before, after)

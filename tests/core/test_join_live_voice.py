@@ -125,6 +125,52 @@ class JoinLiveVoiceTests(unittest.IsolatedAsyncioTestCase):
                 self.created[0].disconnect.assert_awaited_once_with(force=True)
                 self.voice_guard.release.assert_called_with(1)
 
+    def use_stage_channel(self):
+        stage = Mock(spec=discord.StageChannel, id=20)
+        stage.name = "架空のステージ"
+        stage.permissions_for.return_value = SimpleNamespace(
+            view_channel=True, connect=True, speak=True, mute_members=True)
+        stage.connect = self.channel.connect
+        self.channel = stage
+        self.interaction.user.voice = SimpleNamespace(channel=stage)
+        return stage
+
+    async def test_stage_speaker_is_enabled_before_live_starts(self):
+        stage = self.use_stage_channel()
+        order = []
+        self.live.start.side_effect = lambda *args, **kwargs: order.append("live")
+        with patch("persona_bot.core.voice_commands.enable_stage_speaker",
+                   new=AsyncMock(side_effect=lambda *args: order.append("speaker"))) as speaker:
+            reply = await self.join()
+        self.assertEqual(order, ["speaker", "live"])
+        speaker.assert_awaited_once_with(self.guild, stage)  # 案内の段階で二重に昇格しない
+        self.assertIn("同意して参加", reply)
+
+    async def test_stage_speaker_failure_does_not_start_live_or_leave_a_listening_connection(self):
+        self.use_stage_channel()
+        with patch("persona_bot.core.voice_commands.enable_stage_speaker",
+                   new=AsyncMock(side_effect=discord.Forbidden(Mock(status=403), "架空の権限不足"))):
+            with self.assertLogs("persona_bot.core.voice_commands", level="ERROR"):
+                reply = await self.join()
+        self.live.start.assert_not_awaited()
+        self.assertIn("発言者になれなかった", reply)
+        self.created[0].disconnect.assert_awaited_once_with(force=True)
+        self.voice_guard.release.assert_called_with(1)
+        self.live.release_reservation.assert_called_with(1, reservation=self.live.reserve.return_value)
+
+    async def test_stage_speaker_failure_on_reused_connection_does_not_restart_live(self):
+        stage = self.use_stage_channel()
+        voice_client = FakeLiveVoiceClient(None, stage)
+        self.guild.voice_client = voice_client
+        self.live.get.return_value = None  # 接続はあるが会話が動いていない
+        with patch("persona_bot.core.voice_commands.enable_stage_speaker",
+                   new=AsyncMock(side_effect=RuntimeError("架空の失敗"))):
+            with self.assertLogs("persona_bot.core.voice_commands", level="ERROR"):
+                reply = await self.join()
+        self.live.start.assert_not_awaited()
+        self.assertIn("発言者になれなかった", reply)
+        voice_client.disconnect.assert_awaited_once_with(force=True)
+
     async def test_same_channel_reuses_a_running_conversation(self):
         voice_client = FakeLiveVoiceClient(None, self.channel)
         self.guild.voice_client = voice_client

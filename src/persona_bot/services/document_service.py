@@ -289,11 +289,10 @@ class DocumentService:
                 raise ValueError("Gemini APIの呼び出しに失敗しました。")
 
             # 文書経路では親密度を更新せず、共通関数で感情タグだけを除去する。
-            # タグのみの応答は、空本文や参考リンクだけを送らず生成失敗として扱う。
             response_text = strip_affinity_tag(response_text)
-            if not response_text:
-                raise ValueError("Gemini APIの応答に本文がありませんでした。")
 
+            # 生成に成功した時点で消費したトークンを記録する。タグ除去後に空になった場合や
+            # 後段のモデレーションで却下された場合も、Gemini を呼んだ分は統計に含める（#432）。
             self._usage.log_snapshot(
                 "文書タスク",
                 question,
@@ -302,6 +301,10 @@ class DocumentService:
                 response_text,
                 usage_info,
             )
+
+            # タグのみの応答は、空本文や参考リンクだけを送らず生成失敗として扱う。
+            if not response_text:
+                raise ValueError("Gemini APIの応答に本文がありませんでした。")
 
             response_text, accepted = await screen_bot_response_with_status(
                 response_text, self._ng_filter, self._moderator, log_label="文書応答"
