@@ -20,6 +20,7 @@ from persona_bot.core.background import spawn
 from persona_bot.services.blacklist_service import BlacklistService
 from persona_bot.core.database import Database
 from persona_bot.views.functions_view import GraphButton
+from persona_bot.views.view_parts import PanelView
 from persona_bot.services import memory_service
 from persona_bot.services.memory_service import MemoryService, default_projects_memory
 from persona_bot.services.stats_service import StatsService
@@ -359,7 +360,7 @@ class EventLoopIOTests(unittest.IsolatedAsyncioTestCase):
                         raise OSError("架空の描画失敗")
                     return buffer
 
-                view = discord.ui.View()
+                view = PanelView(timeout_notice="架空の時間切れ")  # 実行中の排他は PanelView が持つ（#415）
                 self.addCleanup(view.stop)
                 view.usage = SimpleNamespace(has_data=Mock(return_value=True), build_graph_buffer=AsyncMock(side_effect=render))
                 button = GraphButton()

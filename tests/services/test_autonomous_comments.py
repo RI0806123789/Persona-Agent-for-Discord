@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 import discord
 from persona_bot.core.app_state import AutonomousSession, BotState
 from persona_bot.core import message_handler
-from persona_bot.services import autonomous_service
+from persona_bot.services import autonomous_service, autonomous_speech
 from persona_bot.services.autonomous_service import AutonomousService
 from persona_bot.services.agent_plan import AgentPlan
 from persona_bot.core.background import spawn
@@ -23,6 +23,7 @@ from persona_bot.config.constants import (
     AUTONOMOUS_COMMENT_COOLDOWN_SECONDS, CHAT_MAX_CONCURRENT_PER_GUILD, MAX_IMAGE_SIZE_BYTES,
 )
 from persona_bot.utils import discord_helpers
+from tests.helpers.autonomous_patch import patch_autonomous
 from tests.helpers.message_handler_helpers import make_message_handler
 
 
@@ -67,9 +68,7 @@ class AutonomousCommentAdmissionTests(unittest.IsolatedAsyncioTestCase):
             ("send_long_reply", self.sent),
             ("datetime", Mock(wraps=datetime)),
         ):
-            patcher = patch.object(autonomous_service, name, replacement)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+            patch_autonomous(self, name, replacement)  # 発話は autonomous_speech、時刻は両方が使う
         autonomous_service.datetime.now.side_effect = lambda *args: self.now
         self.tasks = []
 
@@ -119,7 +118,7 @@ class AutonomousCommentAdmissionTests(unittest.IsolatedAsyncioTestCase):
     async def test_comment_reply_restricts_mentions_without_bot_mention(self) -> None:
         # メンション無しで受け付ける配信コメントでも、応答の通知は返信先本人だけに限る。
         self.gemini.generate.return_value = ("@everyone <@&22> <@33> 架空の応答", None, [])
-        with patch.object(autonomous_service, "send_long_reply", discord_helpers.send_long_reply):
+        with patch.object(autonomous_speech, "send_long_reply", discord_helpers.send_long_reply):
             await self.on_message(self.message)
         self.message.reply.assert_awaited_once()
         mentions = self.message.reply.await_args.kwargs["allowed_mentions"]
@@ -165,11 +164,11 @@ class AutonomousCommentAdmissionTests(unittest.IsolatedAsyncioTestCase):
                         self.settings.autonomous_session = None
                     return "" if case == "empty" else "架空の回答"
 
-                with patch.object(autonomous_service, "load_image_attachments", AsyncMock(return_value=images)), patch.object(
+                with patch.object(autonomous_speech, "load_image_attachments", AsyncMock(return_value=images)), patch.object(
                     self.service, "_load_persona", return_value=None if case == "persona" else "架空のペルソナ",
-                ), patch.object(autonomous_service, "fetch_channel_history_text", AsyncMock(
+                ), patch.object(autonomous_speech, "fetch_channel_history_text", AsyncMock(
                     side_effect=RuntimeError("架空の履歴失敗") if case == "history" else None, return_value="",
-                )), patch.object(autonomous_service, "send_long_reply", AsyncMock(
+                )), patch.object(autonomous_speech, "send_long_reply", AsyncMock(
                     side_effect=RuntimeError("架空の送信失敗") if case == "send" else None,
                 )), patch.object(self.service, "_generate", AsyncMock(side_effect=generate)):
                     call = self.service.handle_comment(self.message, "" if case == "image_only" else "架空のコメント", self.settings)
@@ -185,7 +184,7 @@ class AutonomousCommentAdmissionTests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_comment_skips_persona_history_and_generation(self) -> None:
         self.assertIsNone(await self.service.handle_comment(self.message, " \n", self.settings))
         self.service._load_persona.assert_not_called()
-        autonomous_service.fetch_channel_history_text.assert_not_awaited()
+        autonomous_speech.fetch_channel_history_text.assert_not_awaited()
         self.gemini.generate.assert_not_awaited()
         self.assertIsNone(self.session.last_comment_reply_at)
 

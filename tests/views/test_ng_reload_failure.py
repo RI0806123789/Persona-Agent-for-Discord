@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import discord
 from persona_bot.views.functions_view import NgReloadButton
+from persona_bot.views.view_parts import PanelView
 from tests.helpers.discord_mocks import make_interaction, make_response
 
 
@@ -18,7 +19,7 @@ class NgReloadFailureTests(unittest.IsolatedAsyncioTestCase):
     async def test_read_error_reports_failure_privately_without_closing_hub(self) -> None:
         for error in (PermissionError("架空の読取失敗"), UnicodeError("架空の文字コード不正")):
             with self.subTest(error=type(error).__name__):
-                view = discord.ui.View()
+                view = PanelView(timeout_notice="架空の時間切れ")
                 self.addCleanup(view.stop)
                 view.ng_filter = SimpleNamespace(reload=Mock(side_effect=error), word_count=3)
                 button = NgReloadButton()

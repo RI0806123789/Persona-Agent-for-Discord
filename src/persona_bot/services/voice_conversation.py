@@ -35,8 +35,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
-from collections import Counter, deque
-from dataclasses import dataclass, field
+from collections import Counter
 from statistics import median, quantiles
 from time import monotonic
 from typing import Any, Callable
@@ -50,57 +49,45 @@ from persona_bot.audio.voice_receive import LiveVoiceClient, VoiceReceiver
 from persona_bot.config.constants import (
     LIVE_AEC_ENABLED,
     LIVE_BARGE_IN_FADE_MS,
-    LIVE_BARGE_IN_GAP_MS,
-    LIVE_BARGE_IN_HOLD_SECONDS,
-    LIVE_BARGE_IN_MS,
-    LIVE_CONSENT_PANEL_UPDATE_SECONDS,
     LIVE_ECHO_GUARD_SECONDS,
     LIVE_INPUT_CHUNK_MS,
     LIVE_INPUT_QUEUE_MAX_CHUNKS,
-    LIVE_INPUT_SAMPLE_RATE,
-    LIVE_INPUT_TRANSCRIPT_MAX_WAIT_SECONDS,
-    LIVE_INPUT_TRANSCRIPT_SETTLE_SECONDS,
     LIVE_MAX_CONCURRENT_SESSIONS,
     LIVE_MAX_UTTERANCE_SECONDS,
     LIVE_OUTPUT_BUFFER_MS,
     LIVE_PLAYBACK_STALL_SECONDS,
-    LIVE_SPEAKER_QUEUE_MAX,
-    LIVE_SPEAKER_REQUEST_TTL_SECONDS,
     LIVE_TICK_SECONDS,
     LIVE_TRANSCRIPT_MAX_CHARS,
     LIVE_VAD_ENERGY_THRESHOLD,
-    LIVE_VAD_PREROLL_MS,
     LIVE_VAD_SILENCE_MS,
-    LIVE_VAD_START_GAP_MS,
-    LIVE_VAD_START_MS,
 )
 from persona_bot.config.paths import load_persona_template
 from persona_bot.config.personas import current_persona_catalog
 from persona_bot.core.background import spawn, wait_for_cleanup
-from persona_bot.services.violation_notice import record_violation_notice
-from persona_bot.services.content_moderator import VERDICT_SAFE, VERDICT_UNSAFE
 from persona_bot.services.live_session import CLOSED_QUOTA, LiveOptions, LiveSession, LiveUnavailableError
 from persona_bot.services.prompting import build_live_system_instruction
 from persona_bot.services.voice_barge_in import (
     INTERRUPTION_SPEECH, RecentSpeech, classify_interruption, is_echo_text,
+)
+# 状態オブジェクトと、責務ごとに切り出したミックスイン（#415）。`_Utterance` などは
+# 従来どおりこのモジュールから import できる。
+from persona_bot.services.voice_conversation_consent import VoiceConsentMixin
+from persona_bot.services.voice_conversation_moderation import VoiceModerationMixin
+from persona_bot.services.voice_conversation_state import (
+    _INPUT_BYTES_PER_MS, ConsentState, _Participant, _SpeakerState, _TranscriptState, _Utterance,
 )
 from persona_bot.utils.discord_helpers import can_bot_send_messages
 
 
 logger = logging.getLogger(__name__)
 
-# 16kHz・モノラル・16bit の1ミリ秒あたりのバイト数。
-_INPUT_BYTES_PER_MS = LIVE_INPUT_SAMPLE_RATE * 2 // 1000
+# 送信 1 チャンクのバイト数（16kHz・モノラル・16bit）。
 _INPUT_CHUNK_BYTES = _INPUT_BYTES_PER_MS * LIVE_INPUT_CHUNK_MS
 # 再生を始めるまでに溜める応答音声（48kHz・ステレオ）のバイト数。
 _OUTPUT_BUFFER_BYTES = DISCORD_FRAME_BYTES * max(1, LIVE_OUTPUT_BUFFER_MS // 20)
 _PLAYBACK_STALL_FRAMES = int(LIVE_PLAYBACK_STALL_SECONDS * 50)
-_PREROLL_FRAMES = max(1, LIVE_VAD_PREROLL_MS // 20)
 # 割り込みを確定したときに絞り切るまでのフレーム数（20ms 単位）。
 _FADE_FRAMES = max(1, LIVE_BARGE_IN_FADE_MS // 20)
-# 割り込みの候補として手元に留める音声の上限（保持の長さ＋プリロール。20ms 単位）。
-# ★ 送るときは一度に送信待ちへ積むため、LIVE_INPUT_QUEUE_MAX_CHUNKS の範囲に収める（超えた分は捨てられる）。
-_HOLD_MAX_FRAMES = int(LIVE_BARGE_IN_HOLD_SECONDS * 50) + _PREROLL_FRAMES
 
 _NO_MENTIONS = discord.AllowedMentions.none()
 
@@ -126,249 +113,21 @@ NOTICE_CONSENT_PANEL_FAILED = (
     "ボイスチャンネルのチャットか /join を実行したチャンネルで、ボットに"
     "「チャンネルを見る」「メッセージを送信」の権限があるか確認してください。"
 )
-_NOTICE_INPUT_VIOLATION = "不適切な発言が検出されたため、応答を停止しました。"
 
 
 class ConsentPanelError(Exception):
     """同意パネルを出せない。同意を集められないため、音声会話を始めない。"""
 
 
-@dataclass
-class ConsentState:
-    """接続中だけ保持する同意（user_id の集合）。記憶・親密度は音声処理とは別に数える。"""
+class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
+    """1つのボイスチャンネルの音声会話（Persona Voice Controller）。
 
-    voice: set[int] = field(default_factory=set)
-    memory: set[int] = field(default_factory=set)
-    affinity: set[int] = field(default_factory=set)
-
-
-@dataclass
-class _Participant:
-    """1人分のローカル VAD の状態。プリロールは話し始めの判定前の音声（語頭の欠け防止）。"""
-
-    preroll: deque[bytes] = field(default_factory=lambda: deque(maxlen=_PREROLL_FRAMES))
-    voiced_ms: float = 0.0
-    last_voiced_at: float = float("-inf")
-    # ペルソナの声が出ている間に話し始めた、割り込みの候補の音声（まだ Live へ送っていない。メモリ上だけ）。
-    held: list[bytes] | None = None
-    held_started_at: float = 0.0
-    held_last_voiced_at: float = float("-inf")
-
-    def take_pending_audio(self) -> list[bytes]:
-        """話し始めに Live へ送る音声（留めていた候補か、プリロール）を取り出す。"""
-        frames = self.held if self.held is not None else list(self.preroll)
-        self.drop_pending_audio()
-        return frames
-
-    def drop_pending_audio(self) -> None:
-        self.held = None
-        self.preroll.clear()
-        self.voiced_ms = 0.0
-
-
-@dataclass
-class _Utterance:
-    """参加者の1回の発言と、それに対するボットの返答（1ターン分）。"""
-
-    turn_id: int
-    user_id: int
-    started_at: float
-    ended_at: float | None = None
-    input_text: str = ""
-    input_updated_at: float = float("-inf")
-    output_text: str = ""
-    input_verdict: str | None = None
-    # input_verdict が判定した本文。判定の後に文字起こしが増えたら判定し直し、
-    # 判定していない本文を記憶に保存しない。
-    judged_input: str | None = None
-    output_verdict: str | None = None
-    emotion: tuple[int, int] | None = None
-    # 返答を捨てた（違反・割り込み・一時停止）。以後の音声は再生しない。
-    discarded: bool = False
-    violation_recorded: bool = False
-    output_ng: bool = False
-    response_started: bool = False
-    response_complete: bool = False
-    first_audio_at: float | None = None
-    playback_started_at: float | None = None
-    input_task: asyncio.Task[Any] | None = None
-    # 入力の文字起こしが出そろった（サーバーの finished・返答の終わり・割り込みの通知・時間切れ）。
-    transcript_closed: bool = False
-    # 帰属を確定できない文字起こしを捨てた。足りない文字起こしは記憶に使わない。
-    transcript_incomplete: bool = False
-    # ペルソナの声が出ている間に話し始めた発言の割り込みの状態（None: 割り込みではない、
-    # "pending": 文字起こしで確かめている、"confirmed": 割り込みと確定した）。
-    barge_in: str | None = None
-    # この発言が割り込んだ返答（確定したらフェードアウトさせる）。
-    interrupts: _Utterance | None = None
-    # ペルソナの声が出ている間・止まった直後に話し始めた（自分の声の回り込みを疑う）。
-    echo_suspect: bool = False
-    # サーバー側で生成を打ち切られた返答（最後まで話していないので記憶に使わない）。
-    cut_off: bool = False
-
-
-@dataclass
-class _SpeakerState:
-    """音量判定、発言者と順番待ちを独立して管理する。"""
-
-    participants: dict[int, _Participant] = field(default_factory=dict)
-    reservations: deque[tuple[int, float]] = field(default_factory=deque)
-    active_user: int | None = None
-    speaking: bool = False
-    # 診断用の件数（割り込みの候補にした回数・相槌として捨てた回数）。
-    holds_started: int = 0
-    holds_dropped: int = 0
-
-    def receive(
-        self, user_id: int, pcm: bytes, now: float, *, voiced: bool,
-        bot_speaking: Callable[[], bool], bot_audible: Callable[[], bool],
-    ) -> tuple[str, _Participant]:
-        """1フレームを判定して、行うことを返す。
-
-        - "send": 発話中の人の続き。"begin": 話し始め。"barge_in": ペルソナの声が出ている間の割り込みの候補を
-          Live へ送る。"hold": 割り込みの候補として手元に留めている。"wait": まだ何もしない。
-        """
-        participant = self.participants.setdefault(user_id, _Participant())
-        if self.speaking and self.active_user == user_id:
-            if voiced:
-                participant.last_voiced_at = now
-            return "send", participant
-        if participant.held is not None:
-            if now - participant.held_last_voiced_at < LIVE_BARGE_IN_GAP_MS / 1000:
-                return self._continue_hold(user_id, participant, pcm, now, voiced=voiced, audible=bot_audible())
-            # 声が途切れた。相槌・言いよどみとみなして捨て（Live へは送らない）、このフレームから数え直す。
-            self.holds_dropped += 1
-            participant.drop_pending_audio()
-        participant.preroll.append(pcm)
-        if now - participant.last_voiced_at > LIVE_VAD_START_GAP_MS / 1000:
-            participant.voiced_ms = 0.0
-        if not voiced:
-            return "wait", participant
-        participant.voiced_ms += len(pcm) / _INPUT_BYTES_PER_MS
-        participant.last_voiced_at = now
-        audible = bot_audible()
-        threshold = LIVE_VAD_START_MS if audible or not bot_speaking() else LIVE_BARGE_IN_MS
-        if participant.voiced_ms < threshold:
-            return "wait", participant
-        if audible:
-            # ペルソナの声が出ている。すぐには送らず、話し続けるか手元に留めて確かめる。
-            self.holds_started += 1
-            participant.held = list(participant.preroll)
-            participant.held_started_at = now - participant.voiced_ms / 1000
-            participant.held_last_voiced_at = now
-            participant.preroll.clear()
-            return "hold", participant
-        if self.speaking or not self.floor_available(user_id, now):
-            self.request_floor(user_id, now)
-            return "wait", participant
-        return "begin", participant
-
-    def _continue_hold(
-        self, user_id: int, participant: _Participant, pcm: bytes, now: float, *, voiced: bool, audible: bool,
-    ) -> tuple[str, _Participant]:
-        held = participant.held
-        if held is not None and len(held) < _HOLD_MAX_FRAMES:
-            held.append(pcm)
-        if voiced:
-            participant.held_last_voiced_at = now
-            participant.last_voiced_at = now
-        if not audible:
-            # ペルソナの声が止まった。割り込みではなく、ふつうの話し始めとして送る。
-            if self.speaking or not self.floor_available(user_id, now):
-                self.request_floor(user_id, now)
-                return "hold", participant
-            return "begin", participant
-        if now - participant.held_started_at < LIVE_BARGE_IN_HOLD_SECONDS:
-            return "hold", participant
-        if self.speaking or not self.floor_available(user_id, now):
-            self.request_floor(user_id, now)
-            return "hold", participant
-        return "barge_in", participant
-
-    def expire_holds(self, now: float) -> None:
-        """声が途切れたまま（パケットが来ない）の割り込みの候補を捨てる（見回りから呼ぶ）。"""
-        for participant in self.participants.values():
-            if participant.held is not None and now - participant.held_last_voiced_at >= LIVE_BARGE_IN_GAP_MS / 1000:
-                self.holds_dropped += 1
-                participant.drop_pending_audio()
-
-    def request_floor(self, user_id: int, now: float) -> None:
-        self._expire_reservations(now)
-        if any(queued == user_id for queued, _ in self.reservations):
-            return
-        if len(self.reservations) < LIVE_SPEAKER_QUEUE_MAX:
-            self.reservations.append((user_id, now + LIVE_SPEAKER_REQUEST_TTL_SECONDS))
-
-    def remove_reservation(self, user_id: int) -> None:
-        self.reservations = deque(item for item in self.reservations if item[0] != user_id)
-
-    def floor_available(self, user_id: int, now: float) -> bool:
-        self._expire_reservations(now)
-        return not self.reservations or self.reservations[0][0] == user_id
-
-    def _expire_reservations(self, now: float) -> None:
-        self.reservations = deque(item for item in self.reservations if item[1] > now)
-
-    def extend_reservations(self, now: float) -> None:
-        self._expire_reservations(now)
-        self.reservations = deque(
-            (user_id, now + LIVE_SPEAKER_REQUEST_TTL_SECONDS) for user_id, _ in self.reservations
-        )
-
-
-@dataclass
-class _TranscriptState:
-    """遅延した文字起こしを別の話者に帰属させない。"""
-
-    owner: _Utterance | None = None
-    blocked: _Utterance | None = None
-    next: _Utterance | None = None
-    blocked_since: float = float("-inf")
-    interrupted: _Utterance | None = None
-
-    def assign(self, utterance: _Utterance, now: float) -> None:
-        if self.blocked is not None:
-            if self.next is not None:
-                self.next.transcript_incomplete = True
-            self.next = utterance
-        elif self.owner is None or self.owner.transcript_closed:
-            self.owner = utterance
-        else:
-            self.blocked, self.next, self.owner = self.owner, utterance, None
-            self.blocked_since = now
-
-    def close(self, utterance: _Utterance | None) -> None:
-        if utterance is None:
-            return
-        utterance.transcript_closed = True
-        if utterance is self.blocked or utterance is self.next:
-            self.blocked = None
-            self.owner, self.next = self.next, None
-
-    def reset(self) -> None:
-        self.close(self.blocked)
-        self.close(self.owner)
-        self.owner = self.blocked = self.next = self.interrupted = None
-
-
-def _state_property(owner: str, name: str):
-    """既存の音声会話テストと内部呼び出し向けの参照口。"""
-    return property(lambda self: getattr(getattr(self, owner), name),
-                    lambda self, value: setattr(getattr(self, owner), name, value))
-
-
-class VoiceConversation:
-    """1つのボイスチャンネルの音声会話（Persona Voice Controller）。"""
-
-    _participants = _state_property("_speaker_state", "participants")
-    _reservations = _state_property("_speaker_state", "reservations")
-    _active_user = _state_property("_speaker_state", "active_user")
-    _speaking = _state_property("_speaker_state", "speaking")
-    _transcript_owner = _state_property("_transcript_state", "owner")
-    _transcript_blocked = _state_property("_transcript_state", "blocked")
-    _transcript_next = _state_property("_transcript_state", "next")
-    _transcript_blocked_since = _state_property("_transcript_state", "blocked_since")
-    _interrupted = _state_property("_transcript_state", "interrupted")
+    責務ごとに次のモジュールへ分けている（#415。動作は変えていない）:
+      ・`voice_conversation_state.py`: 同意・参加者・発言・話者の管理・文字起こしの帰属の状態
+      ・`voice_conversation_consent.py`: 同意の付与・撤回と同意パネルの更新（`VoiceConsentMixin`）
+      ・`voice_conversation_moderation.py`: 入出力のモデレーション・違反記録・記憶と親密度への反映（`VoiceModerationMixin`）
+    ここには、受信した音声の振り分け・Live への送信・応答の再生と、それらをつなぐ制御を残す。
+    """
 
     def __init__(
         self,
@@ -475,8 +234,8 @@ class VoiceConversation:
         self._abort_playback()
         await self._wait_previous_player()
         self._clear_send_queue()
-        self._participants.clear()
-        self._reservations.clear()
+        self._speaker_state.participants.clear()
+        self._speaker_state.reservations.clear()
         self._recent_output.clear()
         await wait_for_cleanup(self._live.close(), label="音声会話の Live の切断")
         await asyncio.gather(*(task for task in self._tasks if task is not current), return_exceptions=True)
@@ -537,52 +296,8 @@ class VoiceConversation:
         )
 
     # ==================================================================
-    # 同意（同意パネル・参加者の出入りから呼ばれる）
+    # 参加者の出入り（同意の付与・撤回とパネルの更新は VoiceConsentMixin）
     # ==================================================================
-
-    def grant_voice(self, user_id: int) -> None:
-        self.consent.voice.add(user_id)
-        self._after_consent_change()
-
-    def withdraw(self, user_id: int) -> None:
-        """音声処理への同意を撤回する。記憶・親密度への同意も一緒に外す。"""
-        had_consent = user_id in self.consent.voice
-        self.consent.voice.discard(user_id)
-        self.consent.memory.discard(user_id)
-        self.consent.affinity.discard(user_id)
-        if had_consent:
-            # 撤回した人の発言が残った文脈を使い続けない。撤回した人がボイスチャンネルに
-            # いない（ゲートが開いたまま）場合もあるため、開閉を待たずに新しいセッションへ張り替える。
-            self._live.forget_context()
-            spawn(self._live.restart_fresh(), label="音声会話の文脈の破棄")
-            # 張り替えが済むまでの間も、別の人の発話・ペルソナの返答を古い文脈のまま続けない
-            # （再接続の完了通知を待たずに、進行中の発話と再生を止める）。
-            self._pause()
-        if self._active_user == user_id:
-            self._end_activity(discard=True)
-        if self._current is not None and self._current.user_id == user_id:
-            self._discard_response(self._current, "同意の撤回")
-        self._participants.pop(user_id, None)
-        self._remove_reservation(user_id)
-        self._after_consent_change()
-
-    def toggle_memory(self, user_id: int) -> bool:
-        return self._toggle(self.consent.memory, user_id)
-
-    def toggle_affinity(self, user_id: int) -> bool:
-        return self._toggle(self.consent.affinity, user_id)
-
-    def _toggle(self, target: set[int], user_id: int) -> bool:
-        if user_id in target:
-            target.discard(user_id)
-        else:
-            target.add(user_id)
-        self._schedule_panel_update()
-        return user_id in target
-
-    def _after_consent_change(self) -> None:
-        self._update_gate()
-        self._schedule_panel_update()
 
     def handle_self_update(self) -> None:
         """ボット自身の移動・切断。ゲートの開閉を見回り（tick）を待たずに更新する。"""
@@ -595,11 +310,11 @@ class VoiceConversation:
         if before_id == after_id:
             return
         if before_id == self.channel_id:
-            if self._active_user == member.id:
+            if self._speaker_state.active_user == member.id:
                 self._end_activity(discard=True)
             if self._current is not None and self._current.user_id == member.id:
                 self._discard_response(self._current, "チャンネルから退出")
-            self._participants.pop(member.id, None)
+            self._speaker_state.participants.pop(member.id, None)
             self._remove_reservation(member.id)
         self._update_gate()
         self._schedule_panel_update()
@@ -636,14 +351,14 @@ class VoiceConversation:
         self._schedule_panel_update()
 
     def _pause(self) -> None:
-        if self._speaking:
+        if self._speaker_state.speaking:
             self._end_activity(discard=True)
         if self._current is not None:
             self._discard_response(self._current, "一時停止")
         self._abort_playback()
         self._clear_send_queue()
-        self._reservations.clear()
-        for participant in self._participants.values():
+        self._speaker_state.reservations.clear()
+        for participant in self._speaker_state.participants.values():
             participant.drop_pending_audio()
 
     @property
@@ -715,7 +430,7 @@ class VoiceConversation:
                 # （interrupted）までに届いた残りは、前の返答の音源へ流す（新しい発言の返答と取り違えない）。
                 self._awaiting_interrupt_ack = True
                 self._interrupt_ack_deadline = now + LIVE_PLAYBACK_STALL_SECONDS
-                self._interrupted = previous
+                self._transcript_state.interrupted = previous
                 previous.cut_off = True
         elif self._bot_speaking():
             logger.info("音声会話: 返答中の割り込みを検出したため、再生を止めます。")
@@ -728,7 +443,7 @@ class VoiceConversation:
                     # サーバーが割り込みを知らせないまま終わっても、待ち続けないよう期限を設ける。
                     self._awaiting_interrupt_ack = True
                     self._interrupt_ack_deadline = now + LIVE_PLAYBACK_STALL_SECONDS
-                    self._interrupted = previous
+                    self._transcript_state.interrupted = previous
                 self._discard_response(previous, "割り込み")
             self._abort_playback()
         self._turn_seq += 1
@@ -737,8 +452,8 @@ class VoiceConversation:
             self._current.barge_in = "pending"
             self._current.interrupts = previous
         self._assign_transcript_owner(self._current, now)
-        self._active_user = user_id
-        self._speaking = True
+        self._speaker_state.active_user = user_id
+        self._speaker_state.speaking = True
         self._remove_reservation(user_id)
         self._enqueue("start")
         for frame in participant.take_pending_audio():
@@ -758,13 +473,13 @@ class VoiceConversation:
         self._transcript_state.reset()
 
     def _end_activity(self, *, discard: bool = False) -> None:
-        if not self._speaking:
+        if not self._speaker_state.speaking:
             return
         utterance = self._current
         self._flush_chunk()
         self._enqueue("end")
-        self._speaking = False
-        self._active_user = None
+        self._speaker_state.speaking = False
+        self._speaker_state.active_user = None
         now = self._now()
         if utterance is not None:
             utterance.ended_at = now
@@ -866,13 +581,13 @@ class VoiceConversation:
             return
         self._update_gate()
         self._speaker_state.expire_holds(self._now())
-        if (self._transcript_blocked is not None
-                and self._now() - self._transcript_blocked_since >= LIVE_PLAYBACK_STALL_SECONDS):
+        if (self._transcript_state.blocked is not None
+                and self._now() - self._transcript_state.blocked_since >= LIVE_PLAYBACK_STALL_SECONDS):
             # 前の人の文字起こしが閉じる合図が来ないまま時間が過ぎた。以後の断片は次の人の分とみなす
             # （次の人の冒頭は捨てた可能性があるため、その発言は記憶に使わない）。
-            self._close_transcript(self._transcript_blocked)
-        if self._speaking and self._active_user is not None:
-            participant = self._participants.get(self._active_user)
+            self._close_transcript(self._transcript_state.blocked)
+        if self._speaker_state.speaking and self._speaker_state.active_user is not None:
+            participant = self._speaker_state.participants.get(self._speaker_state.active_user)
             now = self._now()
             started = self._current.started_at if self._current is not None else now
             silent = participant is None or now - participant.last_voiced_at >= LIVE_VAD_SILENCE_MS / 1000
@@ -897,7 +612,7 @@ class VoiceConversation:
             self._on_input_transcript(transcription.text or "", bool(getattr(transcription, "finished", None)))
         if getattr(content, "interrupted", None):
             self._awaiting_interrupt_ack = False
-            previous = self._interrupted
+            previous = self._transcript_state.interrupted
             if previous is not None and not previous.discarded and self._playback_owner is previous:
                 # 割り込みを確かめている間。届いている分は流し切る（確定したらフェードアウトさせる）。
                 self._finish_held_previous(previous)
@@ -905,7 +620,7 @@ class VoiceConversation:
                 self._abort_playback()
             # 割り込まれた発言は、生成が始まった時点で入力を処理し終えている。
             self._close_transcript(previous)
-            self._interrupted = None
+            self._transcript_state.interrupted = None
         model_turn = getattr(content, "model_turn", None)
         if model_turn is not None:
             utterance = self._current
@@ -925,7 +640,7 @@ class VoiceConversation:
 
     def _held_previous(self) -> _Utterance | None:
         """割り込みを確かめている間、再生を続けている前の返答（打ち切りの通知までに届いた残りもここへ流す）。"""
-        previous = self._interrupted
+        previous = self._transcript_state.interrupted
         if (previous is None or not self._awaiting_interrupt_ack or previous.discarded
                 or self._playback_owner is not previous or self._now() >= self._interrupt_ack_deadline):
             return None
@@ -944,10 +659,10 @@ class VoiceConversation:
         """いま届いた応答を受け取る発言。受け取らない（捨てる）なら None。"""
         if self._awaiting_interrupt_ack and self._now() >= self._interrupt_ack_deadline:
             self._awaiting_interrupt_ack = False
-            previous = self._interrupted
+            previous = self._transcript_state.interrupted
             if previous is not None and not previous.discarded and self._playback_owner is previous:
                 self._finish_held_previous(previous)
-        if self._awaiting_interrupt_ack or self._speaking or not self._gate_open:
+        if self._awaiting_interrupt_ack or self._speaker_state.speaking or not self._gate_open:
             return None
         current = self._current
         if current is None or current.ended_at is None or current.discarded:
@@ -955,16 +670,16 @@ class VoiceConversation:
         return current
 
     def _on_input_transcript(self, text: str, finished: bool) -> None:
-        utterance = self._transcript_owner
+        utterance = self._transcript_state.owner
         if utterance is None:
-            blocked = self._transcript_blocked
+            blocked = self._transcript_state.blocked
             if blocked is None:
                 return
             if text:
                 # 前の人の残りか次の人の冒頭か区別できない断片は捨てる（別の人へ帰属させない）。
                 blocked.transcript_incomplete = True
-                if self._transcript_next is not None:
-                    self._transcript_next.transcript_incomplete = True
+                if self._transcript_state.next is not None:
+                    self._transcript_state.next.transcript_incomplete = True
                 logger.debug("音声会話: 話者を確定できない文字起こしを捨てました。")
             if finished:
                 self._close_transcript(blocked)
@@ -1078,11 +793,11 @@ class VoiceConversation:
         if self._awaiting_interrupt_ack:
             # 割り込まれた古い返答の終わり。新しい発言の返答はこの後に届く。
             self._awaiting_interrupt_ack = False
-            previous = self._interrupted
+            previous = self._transcript_state.interrupted
             if previous is not None and not previous.discarded and self._playback_owner is previous:
                 self._finish_held_previous(previous)
             self._close_transcript(previous)
-            self._interrupted = None
+            self._transcript_state.interrupted = None
             return
         utterance = self._current
         if utterance is None or utterance.ended_at is None or not utterance.response_started:
@@ -1096,7 +811,7 @@ class VoiceConversation:
 
     def _on_live_reconnected(self) -> None:
         # 新しい接続は、切れる前の発話の区切りを知らない。途中の発言と返答は捨てる。
-        if self._speaking:
+        if self._speaker_state.speaking:
             self._end_activity(discard=True)
         if self._current is not None:
             self._discard_response(self._current, "Live の再接続")
@@ -1241,150 +956,6 @@ class VoiceConversation:
                 self._fade_out_playback()
             else:
                 self._abort_playback()
-
-    # ==================================================================
-    # モデレーション・記憶・親密度
-    # ==================================================================
-
-    def _reject_input(self, utterance: _Utterance, reason: str) -> None:
-        self._discard_response(utterance, reason)
-        if utterance.violation_recorded:
-            return
-        # 同じ発言の違反は1回だけ数える（文字起こしは少しずつ届くため）。
-        utterance.violation_recorded = True
-        spawn(self._record_violation(utterance.user_id), label="音声会話の違反記録")
-
-    async def _record_violation(self, user_id: int) -> None:
-        member = self.guild.get_member(user_id)
-        name = str(member) if member is not None else str(user_id)
-        text, just_blocked = await record_violation_notice(
-            self._service.blacklist, user_id, name, _NOTICE_INPUT_VIOLATION,
-            blocked_text="以降の音声は処理されません。", log=logger,
-        )
-        if text is not None:
-            await self._notify(text, member)
-        if just_blocked:
-            self._update_gate()
-
-    async def _judge_input(self, utterance: _Utterance) -> None:
-        """話し終わった発言の文字起こしが出そろうのを待って、AI モデレーションに掛ける。"""
-        waited = 0.0
-        while not self._stopped and not utterance.discarded and waited < LIVE_INPUT_TRANSCRIPT_MAX_WAIT_SECONDS:
-            quiet = self._now() - utterance.input_updated_at
-            if utterance.transcript_closed or (utterance.input_text and quiet >= LIVE_INPUT_TRANSCRIPT_SETTLE_SECONDS):
-                break
-            await asyncio.sleep(LIVE_TICK_SECONDS)
-            waited += LIVE_TICK_SECONDS
-        while not self._stopped and not utterance.discarded:
-            text = utterance.input_text
-            verdict = await self._service.moderator.judge_voice_input(text)
-            utterance.input_verdict = verdict
-            utterance.judged_input = text
-            if verdict == VERDICT_UNSAFE:
-                if not self._stopped:
-                    self._reject_input(utterance, "入力の AI モデレーション")
-                return
-            if utterance.input_text == text:
-                return
-            # 判定を待つ間に文字起こしが増えた。増えた分も含めて判定し直す。
-
-    async def _judge_output(self, utterance: _Utterance) -> None:
-        """返答を AI モデレーションに掛け（感情の推定を相乗り）、条件を満たせば記憶・親密度へ反映する。"""
-        verdict, emotion = await self._service.moderator.judge_voice_turn(
-            utterance.input_text, utterance.output_text,
-        )
-        utterance.output_verdict = verdict
-        utterance.emotion = emotion
-        if verdict == VERDICT_UNSAFE:
-            # 返答の生成は再生より速いため、判定の時点で残っている未再生の分を止められる。
-            self._discard_response(utterance, "出力の AI モデレーション")
-        # 遅れて届いた文字起こしで入力の判定がやり直される（タスクが差し替わる）ことがある。
-        while utterance.input_task is not None and not utterance.input_task.done():
-            await asyncio.gather(utterance.input_task, return_exceptions=True)
-        if not self._stopped:
-            await self._remember(utterance)
-
-    async def _remember(self, utterance: _Utterance) -> None:
-        if (
-            utterance.discarded or utterance.output_ng or utterance.violation_recorded
-            or utterance.transcript_incomplete or utterance.cut_off
-            or utterance.input_verdict != VERDICT_SAFE or utterance.output_verdict != VERDICT_SAFE
-            or utterance.judged_input != utterance.input_text
-        ):
-            # 判定不能・違反・割り込み（打ち切られた返答を含む）・文字起こしが欠けた・判定していない本文を
-            # 含む発言は、記憶・親密度の更新に使わない。
-            return
-        user_id = utterance.user_id
-        if user_id not in self.consent.voice or self._service.is_blocked(user_id):
-            return
-        key = str(user_id)
-        if user_id in self.consent.memory:
-            try:
-                await self._service.memory.append_pending_log(key, utterance.input_text, utterance.output_text)
-                spawn(self._service.memory.flush_if_needed(), label="音声会話の記憶圧縮")
-            except Exception as error:
-                logger.error("音声会話: 記憶への追記に失敗しました。", exc_info=error)
-        if user_id in self.consent.affinity and utterance.emotion is not None:
-            try:
-                self._service.affinity.update_emotion(key, *utterance.emotion)
-                spawn(self._service.affinity.save_background(key), label="音声会話の親密度の保存")
-            except Exception as error:
-                logger.error("音声会話: 親密度の更新に失敗しました。", exc_info=error)
-
-    # ==================================================================
-    # 通知・同意パネル
-    # ==================================================================
-
-    async def _notify(self, text: str, member: Any = None) -> None:
-        channel = self.notice_channel
-        if channel is None:
-            return
-        # 通知してよいのは対象の本人だけ（AllowedMentions の既定は @everyone・ロールも許可するため明示する）。
-        mentions = (
-            discord.AllowedMentions(everyone=False, roles=False, users=[member], replied_user=False)
-            if member is not None else _NO_MENTIONS
-        )
-        content = f"{member.mention} {text}" if member is not None else text
-        try:
-            await channel.send(content, allowed_mentions=mentions)
-        except discord.DiscordException as error:
-            logger.error("音声会話: 案内を送信できませんでした。", exc_info=error)
-
-    def _schedule_panel_update(self) -> None:
-        if self.panel_message is None or self._stopped:
-            return
-        task = self._panel_update_task
-        if task is not None and not task.done():
-            return
-        self._panel_update_task = spawn(self._update_panel_later(), label="音声会話の同意パネルの更新")
-
-    async def _update_panel_later(self) -> None:
-        delay = self._panel_updated_at + LIVE_CONSENT_PANEL_UPDATE_SECONDS - self._now()
-        if delay > 0:
-            await asyncio.sleep(delay)
-        if self._stopped:
-            return
-        self._panel_updated_at = self._now()
-        await self._edit_panel()
-
-    async def _edit_panel(self, *, view: Any = ...) -> None:
-        message = self.panel_message
-        if message is None:
-            return
-        from persona_bot.views.voice_consent_view import build_consent_panel_text
-
-        try:
-            if view is ...:
-                await message.edit(content=build_consent_panel_text(self), allowed_mentions=_NO_MENTIONS)
-            else:
-                await message.edit(content=build_consent_panel_text(self), view=view, allowed_mentions=_NO_MENTIONS)
-        except discord.DiscordException as error:
-            logger.warning("音声会話: 同意パネルを更新できませんでした。", exc_info=error)
-
-    async def _finish_panel(self) -> None:
-        if self.panel_view is not None:
-            self.panel_view.stop()
-        await wait_for_cleanup(self._edit_panel(view=None), label="音声会話の同意パネルの終了")
 
 
 class VoiceConversationService:

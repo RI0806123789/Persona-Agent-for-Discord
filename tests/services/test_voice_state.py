@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from persona_bot.config.constants import (
     LIVE_BARGE_IN_GAP_MS, LIVE_BARGE_IN_HOLD_SECONDS, LIVE_SPEAKER_REQUEST_TTL_SECONDS,
 )
-from persona_bot.services.voice_conversation import _HOLD_MAX_FRAMES, _SpeakerState, _TranscriptState, _Utterance
+from persona_bot.services.voice_conversation_state import _HOLD_MAX_FRAMES, _SpeakerState, _TranscriptState, _Utterance
 
 FRAME = (20000).to_bytes(2, "little", signed=True) * 320
 QUIET_BOT = {"voiced": True, "bot_speaking": lambda: False, "bot_audible": lambda: False}

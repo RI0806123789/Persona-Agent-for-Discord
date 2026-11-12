@@ -379,7 +379,7 @@ class GraphSendingTests(unittest.IsolatedAsyncioTestCase):
                         ), viewer_id="11", is_admin=True, feedback=None)
                         button = next(item for item in view.children if isinstance(item, button_class))
                     else:
-                        view = discord.ui.View()
+                        view = view_parts.PanelView(timeout_notice="架空の時間切れ")  # 実行中の排他は PanelView が持つ（#415）
                         view.usage = SimpleNamespace(has_data=Mock(return_value=True), build_graph_buffer=AsyncMock(return_value=buffer))
                         button = button_class()
                         view.add_item(button)

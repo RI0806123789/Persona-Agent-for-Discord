@@ -225,10 +225,10 @@ class GateTests(ConversationTestBase):
         self.channel.members.remove(leaving)
         self.conversation.handle_member_update(leaving, SimpleNamespace(channel=self.channel), SimpleNamespace(channel=None))
         self.speak(USER_B, self.start_frames())
-        self.assertTrue(self.conversation._speaking)
+        self.assertTrue(self.conversation._speaker_state.speaking)
         self.conversation.withdraw(USER_A)
         self.assertTrue(self.conversation.is_open)  # 残った人の同意でゲートは開いたまま
-        self.assertFalse(self.conversation._speaking)
+        self.assertFalse(self.conversation._speaker_state.speaking)
         self.assertTrue(self.conversation._current.discarded)
         await self.settle()
         self.assertEqual(self.live.restarts, 1)
@@ -278,7 +278,7 @@ class SpeakerTests(ConversationTestBase):
         self.conversation.tick()
         kinds = self.drain()
         self.assertEqual(kinds[-1], "end")
-        self.assertIsNone(self.conversation._active_user)
+        self.assertIsNone(self.conversation._speaker_state.active_user)
 
     async def test_long_utterance_is_cut_at_the_limit(self):
         self.speak(USER_A, self.start_frames())
@@ -310,7 +310,7 @@ class SpeakerTests(ConversationTestBase):
         self.assertEqual(self.drain(), [])
         self.speak(USER_B, barge_in)
         self.assertEqual(self.drain()[0], "start")
-        self.assertEqual(self.conversation._active_user, USER_B)
+        self.assertEqual(self.conversation._speaker_state.active_user, USER_B)
 
     async def test_reservation_expires(self):
         self.speak(USER_A, self.start_frames())
@@ -322,7 +322,7 @@ class SpeakerTests(ConversationTestBase):
         self.channel.members.append(member(USER_C))
         self.conversation.grant_voice(USER_C)
         self.speak(USER_C, constants.LIVE_BARGE_IN_MS // 20)
-        self.assertEqual(self.conversation._active_user, USER_C)
+        self.assertEqual(self.conversation._speaker_state.active_user, USER_C)
 
     async def test_start_threshold_returns_to_normal_when_no_reply_arrives(self):
         self.speak(USER_A, self.start_frames())
@@ -333,7 +333,7 @@ class SpeakerTests(ConversationTestBase):
         self.advance(constants.LIVE_PLAYBACK_STALL_SECONDS)
         self.assertFalse(self.conversation._bot_speaking())
         self.speak(USER_B, self.start_frames())
-        self.assertEqual(self.conversation._active_user, USER_B)
+        self.assertEqual(self.conversation._speaker_state.active_user, USER_B)
 
     async def test_member_leaving_mid_utterance_ends_it_without_judging(self):
         self.speak(USER_A, self.start_frames())
@@ -352,7 +352,7 @@ class ResponseTests(ConversationTestBase):
         self.consent_all()
         await self.complete_utterance()
         turn = self.conversation._current
-        self.assertIsNone(self.conversation._active_user)
+        self.assertIsNone(self.conversation._speaker_state.active_user)
         self.conversation.withdraw(USER_A)
         self.assertTrue(turn.discarded)
         await self.settle()
@@ -682,7 +682,7 @@ class ResponseTests(ConversationTestBase):
         previous = self.conversation._current
         self.drain()
         self.speak(USER_B, self.barge_in_frames())
-        self.assertEqual(self.conversation._active_user, USER_B)
+        self.assertEqual(self.conversation._speaker_state.active_user, USER_B)
         return source, previous
 
     async def test_short_backchannel_during_reply_is_not_sent_and_does_not_stop_it(self):
@@ -692,11 +692,11 @@ class ResponseTests(ConversationTestBase):
         source = self.voice_client.play.call_args.args[0]
         self.drain()
         self.speak(USER_B, self.start_frames() + 10)  # 0.6秒ほどの「うんうん」
-        self.assertIsNone(self.conversation._active_user)
+        self.assertIsNone(self.conversation._speaker_state.active_user)
         self.assertEqual(self.drain(), [])
         self.advance(1.0)  # 途切れたので相槌として捨てる
         self.conversation.tick()
-        self.assertIsNone(self.conversation._participants[USER_B].held)
+        self.assertIsNone(self.conversation._speaker_state.participants[USER_B].held)
         self.assertFalse(source.aborted)
         self.assertFalse(source.fading)
         self.assertEqual(self.conversation._speaker_state.holds_dropped, 1)
@@ -803,9 +803,9 @@ class ResponseTests(ConversationTestBase):
         for _ in range(self.barge_in_frames()):
             self.conversation._on_audio(USER_B, VOICED, 0.0)
             self.advance(0.02)
-        self.assertIsNone(self.conversation._active_user)
+        self.assertIsNone(self.conversation._speaker_state.active_user)
         self.speak(USER_B, self.start_frames())
-        self.assertEqual(self.conversation._active_user, USER_B)
+        self.assertEqual(self.conversation._speaker_state.active_user, USER_B)
 
     async def test_stop_cuts_a_fading_reply_immediately(self):
         source, _ = await self.start_reply_and_barge_in()
@@ -846,7 +846,7 @@ class ResponseTests(ConversationTestBase):
         """まだ声が出ていない（生成待ちの）間は、従来どおり LIVE_BARGE_IN_MS ですぐに割り込む。"""
         await self.complete_utterance()
         self.speak(USER_B, constants.LIVE_BARGE_IN_MS // 20)
-        self.assertEqual(self.conversation._active_user, USER_B)
+        self.assertEqual(self.conversation._speaker_state.active_user, USER_B)
         self.assertIsNone(self.conversation._current.barge_in)
 
     async def test_barge_in_before_the_first_reply_chunk_still_waits_for_the_interrupt_notice(self):
@@ -855,10 +855,10 @@ class ResponseTests(ConversationTestBase):
         previous = self.conversation._current
         self.assertFalse(previous.response_started)
         self.speak(USER_B, constants.LIVE_BARGE_IN_MS // 20)
-        self.assertEqual(self.conversation._active_user, USER_B)
+        self.assertEqual(self.conversation._speaker_state.active_user, USER_B)
         self.assertTrue(previous.discarded)
         self.assertTrue(self.conversation._awaiting_interrupt_ack)
-        self.assertIs(self.conversation._interrupted, previous)
+        self.assertIs(self.conversation._transcript_state.interrupted, previous)
         self.advance(constants.LIVE_VAD_SILENCE_MS / 1000 + 0.1)
         self.conversation.tick()
         self.voice_client.play.reset_mock()
@@ -868,7 +868,7 @@ class ResponseTests(ConversationTestBase):
         # interrupted で待ちが解け、前の人の文字起こしの帰属も閉じる
         await self.conversation._on_live_message(live_message(interrupted=True))
         self.assertFalse(self.conversation._awaiting_interrupt_ack)
-        self.assertIsNone(self.conversation._interrupted)
+        self.assertIsNone(self.conversation._transcript_state.interrupted)
         await self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(24000))))
         self.voice_client.play.assert_called_once()
 
@@ -895,7 +895,7 @@ class ResponseTests(ConversationTestBase):
     async def test_reconnect_discards_the_turn_in_progress(self):
         self.speak(USER_A, self.start_frames())
         self.conversation._on_live_reconnected()
-        self.assertIsNone(self.conversation._active_user)
+        self.assertIsNone(self.conversation._speaker_state.active_user)
         self.assertTrue(self.conversation._current.discarded)
         # 音声は捨て、発話の区切りは残す（対応の取れない区切りは送信側が捨てる）
         self.assertEqual(self.drain(), ["start", "end"])
@@ -976,11 +976,11 @@ class TranscriptOwnershipTests(ConversationTestBase):
         await self.respond(complete=False)
         self.conversation.toggle_memory(USER_B)
         self.speak(USER_B, self.barge_in_frames())
-        self.assertEqual(self.conversation._active_user, USER_B)
+        self.assertEqual(self.conversation._speaker_state.active_user, USER_B)
 
     async def test_late_fragment_after_barge_in_is_not_given_to_the_next_speaker(self):
         await self.barge_in()
-        previous = self.conversation._transcript_blocked
+        previous = self.conversation._transcript_state.blocked
         current = self.conversation._current
         self.assertEqual(previous.user_id, USER_A)
         await self.transcript("架空のNG")  # A の残りか B の冒頭か区別できない
@@ -1010,7 +1010,7 @@ class TranscriptOwnershipTests(ConversationTestBase):
         self.channel.members.remove(leaving)
         self.conversation.handle_member_update(leaving, SimpleNamespace(channel=self.channel), SimpleNamespace(channel=None))
         self.speak(USER_B, self.start_frames())
-        self.assertIsNone(self.conversation._transcript_blocked)
+        self.assertIsNone(self.conversation._transcript_state.blocked)
         await self.transcript("架空のBの発言")
         current = self.conversation._current
         self.assertEqual(current.user_id, USER_B)
@@ -1028,7 +1028,7 @@ class TranscriptOwnershipTests(ConversationTestBase):
         await self.complete_utterance(USER_A, "架空の質問")
         await self.respond()  # 返答の終わり（turn_complete）で A の文字起こしは閉じる
         self.speak(USER_B, self.barge_in_frames())
-        self.assertIsNone(self.conversation._transcript_blocked)
+        self.assertIsNone(self.conversation._transcript_state.blocked)
         await self.transcript("架空のBの発言")
         self.assertEqual(self.conversation._current.input_text, "架空のBの発言")
 
@@ -1038,7 +1038,7 @@ class TranscriptOwnershipTests(ConversationTestBase):
         await self.transcript("架空の断片")  # 捨てられる
         self.advance(constants.LIVE_PLAYBACK_STALL_SECONDS)
         self.conversation.tick()
-        self.assertIsNone(self.conversation._transcript_blocked)
+        self.assertIsNone(self.conversation._transcript_state.blocked)
         await self.transcript("架空のBの発言")
         self.assertEqual(current.input_text, "架空のBの発言")
         # 冒頭を捨てた可能性がある発言は記憶に使わない

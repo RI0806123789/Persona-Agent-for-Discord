@@ -293,22 +293,10 @@ class StatsView(PanelView):
         self.temp_item: str = "all"
         # 対象ユーザー。一般ユーザーは自分固定、管理者は選択で変更できる。
         self.temp_target_id: str = viewer_id
-        # 実行中の集計（全体比較・フィードバック）。連打で重い描画・集計を重ねず、
-        # 同じ結果を何通も送らないため（#398）。パネルの操作世代では止められない
-        # （結果はパネルの編集ではなく別の followup で送る）ので、別に持つ。
-        self._running_aggregations: set[str] = set()
+        # 実行中の集計（全体比較・フィードバック）の排他は PanelView の
+        # try_begin_aggregation / end_aggregation を使う（#398、#415）。
 
         self._add_all_items()
-
-    def try_begin_aggregation(self, name: str) -> bool:
-        """同じ集計が実行中なら False を返す。判定と登録の間に await を挟まないこと。"""
-        if name in self._running_aggregations:
-            return False
-        self._running_aggregations.add(name)
-        return True
-
-    def end_aggregation(self, name: str) -> None:
-        self._running_aggregations.discard(name)
 
     def refresh_permissions(self, user: discord.Member | discord.User) -> None:
         """操作時の権限に合わせ、管理者でなくなったら対象を本人へ戻す。"""
