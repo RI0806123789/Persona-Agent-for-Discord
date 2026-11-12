@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Persona Agent for Discord — 呼べば答える。呼ばなくても、話しかけてくる。</title>
+    <meta
+      name="description"
+      content="キャラクターになりきって会話する Discord ボット「Persona Agent for Discord」の紹介ページ。テキストでも声でも話せて、話したことを覚え、ときどき自分から話しかけてきます。"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Persona Agent for Discord" />
+    <meta
+      property="og:description"
+      content="呼べば答える。呼ばなくても、話しかけてくる。キャラクターになりきって会話する Discord ボットです。"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#fbf6ee" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d1413" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <script>
+      // 最初の描画より前に配色を決める（読み込み後に切り替えると、一瞬だけ別の配色が見える）。
+      // 保存した選択が無ければ端末の設定に従う。localStorage が使えない環境でも止めない。
+      (function () {
+        var theme = null;
+        try {
+          theme = localStorage.getItem("site-theme");
+        } catch (error) {
+          theme = null;
+        }
+        if (theme !== "light" && theme !== "dark") {
+          theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <p style="padding: 24px; font-family: sans-serif">
+        このページの表示には JavaScript が必要です。ボットの説明は GitHub の README でも読めます。
+      </p>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

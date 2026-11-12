@@ -12,6 +12,8 @@ on:
       - tools/console/backend/requirements.txt
       - tools/console/frontend/package.json
       - tools/console/frontend/package-lock.json
+      - Site/package.json
+      - Site/package-lock.json
       - .github/audit/requirements.txt
       - .github/workflows/dependency-audit.yml
   pull_request:
@@ -21,6 +23,8 @@ on:
       - tools/console/backend/requirements.txt
       - tools/console/frontend/package.json
       - tools/console/frontend/package-lock.json
+      - Site/package.json
+      - Site/package-lock.json
       - .github/audit/requirements.txt
       - .github/workflows/dependency-audit.yml
   schedule:
@@ -119,13 +123,18 @@ jobs:
           fi
 
   npm-audit:
-    name: npm audit / Console frontend
+    name: npm audit / ${{ matrix.directory }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # 管理コンソールの画面と、紹介サイト（Issue #410）。package-lock.json を持つフォルダを足したらここにも足す
+        directory: [tools/console/frontend, Site]
     defaults:
       run:
         shell: bash
-        working-directory: tools/console/frontend
+        working-directory: ${{ matrix.directory }}
     steps:
       - name: ソースを取得
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -136,6 +145,8 @@ jobs:
         with:
           node-version: '24'
       - name: 画面の依存を検査
+        env:
+          TARGET_DIRECTORY: ${{ matrix.directory }}
         run: |
           # package-lock.json を npm の脆弱性情報と照合する（node_modules の準備は要らない）。
           # 対象は dependencies だけで、devDependencies（ビルド・開発サーバー）は除く。
@@ -146,11 +157,11 @@ jobs:
           else
             result="脆弱性が見つかったか、検査に失敗しました"
             failed=1
-            echo "::warning title=依存の脆弱性検査（tools/console/frontend）::$result。ジョブのログと概要を確認してください。"
+            echo "::warning title=依存の脆弱性検査（$TARGET_DIRECTORY）::$result。ジョブのログと概要を確認してください。"
           fi
           cat npm-audit-report.txt
           {
-            echo "### npm audit --omit=dev: \`tools/console/frontend\`"
+            echo "### npm audit --omit=dev: \`$TARGET_DIRECTORY\`"
             echo
             echo "$result"
             echo

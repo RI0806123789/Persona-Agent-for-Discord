@@ -88,9 +88,12 @@ updates:
     commit-message:
       prefix: fix
 
-  # 管理コンソールの画面（package.json は .npmrc の save-exact で完全一致に固定している）
+  # 管理コンソールの画面と紹介サイト（Issue #410）。どちらも package.json は .npmrc の save-exact で完全一致に固定している。
+  # 紹介サイトは管理コンソールと同じ版だけを使う（リポジトリに新しいパッケージを増やさない）
   - package-ecosystem: npm
-    directory: "/tools/console/frontend"
+    directories:
+      - "/tools/console/frontend"
+      - "/Site"
     schedule:
       interval: weekly
       day: monday

@@ -7,6 +7,7 @@
 - `src/`：Pythonのボット本体。`bot.py`が設定とサービスを配線し、`persona_bot/`を設定（`config/`）・中核処理（`core/`）・機能（`services/`）・画面（`views/`）・音声（`audio/`）・共通処理（`utils/`）に分ける。SQLは`core/database.py`（スキーマ定義は`db_migrations.py`、旧データの読み取りは`db_legacy_importers.py`）、プロンプトは`services/prompting.py`が担当する。
 - `tests/`：設定・中核処理・機能・画面・共通処理・運用・結合テストを用途別に配置し、`helpers/`に共通補助を置く。
 - `prompts/`：ペルソナ。Git管理は書式見本`00_prompt_format.txt`と`personas.json`の見本`00_prompt_format.json`だけで、キャラ別の`.txt`と`personas.json`は利用者がローカルで作る。`assets/`・`docs/`：素材と図。`deploy/`：運用設定例。`.github/`：Issue・PRテンプレート、CI（回帰テスト・依存の脆弱性検査）、Dependabotの設定。
+- `Site/`：紹介用ホームページ（React + TypeScript + Vite。GitHub Pagesで公開）。ボットとは依存・ビルドを分け、文言は`Site/src/content.ts`に集約する。機能や既定値を変えたら、README・ヘルプと合わせて直す。
 - `data/memory/`・`data/ng/`：実行時の記憶とモデレーション関連データ。実データを検証やコミットに含めない。`prompts/`のキャラ別ファイルも同様に扱う。
 
 ## 開発・起動コマンド

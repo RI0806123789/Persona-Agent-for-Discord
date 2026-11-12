@@ -84,7 +84,7 @@ APIキー・`.env` は不要です。外部サービスの呼び出しはモッ�
 
 直接依存は `requirements.txt`、直接依存が引き込む推移依存は `constraints.txt` で固定しています（`requirements.txt` の `-c constraints.txt` から読むので、インストールの手順は変わりません）。直接依存を足したり版を変えたりするPRでは、[推移依存の制約ファイルを作り直す](.github/workflows/update-constraints.yml) ワークフローを手動で実行し、成果物の `constraints.txt` で置き換えてください（ジョブの概要に今の内容との差分が出ます）。`constraints.txt` に直接依存は書きません。推移依存は公開から14日以上たった版だけから選ぶため、依存の脆弱性検査が `constraints.txt` の版で脆弱性を検出し、修正版がまだ14日未満のときは、修正版を `.github/constraints/security-exceptions.txt` に脆弱性の ID・理由・外す条件のコメント付きで書いてから作り直します。
 
-依存の定義ファイル（`requirements.txt`・`constraints.txt`・`tools/console/backend/requirements.txt`・`tools/console/frontend/package.json`・`package-lock.json`）を変えたPRでは、[依存の脆弱性検査](.github/workflows/dependency-audit.yml) も実行されます。`pip-audit` と `npm audit --omit=dev` で既知の脆弱性を照合し、見つかった場合はジョブの概要に一覧と警告を表示します（現在はジョブを失敗させません）。検査には外部通信が必要なため、上の「完全ローカルで確認する」には含めていません。手元で確かめる場合は、作業用とは別の一時的な仮想環境へ `.github/audit/requirements.txt` を入れ、`python -m pip_audit -r requirements.txt` を実行します。影響が無いと確かめた脆弱性はワークフローで除外しているため（理由と外す条件はワークフローのコメントを参照）、CI と同じ結果にするには `--ignore-vuln GHSA-mrfv-m5wm-5w6w` を付けます。`pip-audit` はボットの依存ではないため、`requirements.txt` には追加しないでください。
+依存の定義ファイル（`requirements.txt`・`constraints.txt`・`tools/console/backend/requirements.txt`・`tools/console/frontend`と`Site`の`package.json`・`package-lock.json`）を変えたPRでは、[依存の脆弱性検査](.github/workflows/dependency-audit.yml) も実行されます。`pip-audit` と `npm audit --omit=dev` で既知の脆弱性を照合し、見つかった場合はジョブの概要に一覧と警告を表示します（現在はジョブを失敗させません）。検査には外部通信が必要なため、上の「完全ローカルで確認する」には含めていません。手元で確かめる場合は、作業用とは別の一時的な仮想環境へ `.github/audit/requirements.txt` を入れ、`python -m pip_audit -r requirements.txt` を実行します。影響が無いと確かめた脆弱性はワークフローで除外しているため（理由と外す条件はワークフローのコメントを参照）、CI と同じ結果にするには `--ignore-vuln GHSA-mrfv-m5wm-5w6w` を付けます。`pip-audit` はボットの依存ではないため、`requirements.txt` には追加しないでください。
 
 ## 管理コンソールをローカルで確認する
 
@@ -102,6 +102,19 @@ npm run build
 ```
 
 WindowsでPowerShellの実行ポリシーにより`npm`が使えない場合は`npm.cmd`を使う。`npm run build`はTypeScript検証も含む。ルートの`tests`とバックエンドの`tests`はimport名が異なる前提のため、上記のように作業ディレクトリを分けて実行する。`tests.yml`でバックエンドはWindows/Linux・Python 3.11/3.13、画面はWindows/Linux・Node.js 24を検証する。
+
+## 紹介サイトをローカルで確認する
+
+紹介用ホームページ（`Site/`）は、ボット・管理コンソールとは別にビルドする。外部通信・シークレット・実データは不要。
+
+```bash
+cd Site
+npm ci
+npm test
+npm run build
+```
+
+表示は`npm run preview`（`http://127.0.0.1:4174`）で確かめる。文言の置き場所・公開の手順は[Site/README.md](Site/README.md)を参照する。`site.yml`はLinux・Node.js 24でテストとビルドを検証する。
 
 ## Discord・Geminiを使う確認
 
