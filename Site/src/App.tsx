@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import {
   DISCLAIMER,
   FEATURES_INTRO,
@@ -19,7 +19,7 @@ import {
 import { DiscordDemo } from "./components/DiscordDemo";
 import { Reveal } from "./components/Reveal";
 import { ArrowIcon, GitHubIcon, LogoMark, MoonIcon, SunIcon } from "./components/icons";
-import { useTheme } from "./hooks";
+import { useScrolled, useTheme } from "./hooks";
 
 /** ページの外（GitHub）へ出るリンクかどうか。外へ出るものだけ新しいタブで開く */
 function isExternal(href: string): boolean {
@@ -30,11 +30,17 @@ function externalProps(href: string) {
   return isExternal(href) ? { target: "_blank", rel: "noreferrer" } : {};
 }
 
+/** ファーストビューの要素を、上から順に少しずつ遅らせて出す（遅れは CSS が --hero-order から決める） */
+function heroOrder(order: number): CSSProperties {
+  return { "--hero-order": order } as CSSProperties;
+}
+
 function Header() {
   const [theme, toggleTheme] = useTheme();
+  const scrolled = useScrolled();
   const nextLabel = theme === "dark" ? "明るい配色に切り替える" : "暗い配色に切り替える";
   return (
-    <header className="header">
+    <header className={`header${scrolled ? " is-scrolled" : ""}`}>
       <div className="container header__inner">
         <a className="brand" href="#top">
           <LogoMark />
@@ -49,7 +55,10 @@ function Header() {
         </nav>
         <div className="header__actions">
           <button type="button" className="icon-button" onClick={toggleTheme} aria-label={nextLabel} title={nextLabel}>
-            {theme === "dark" ? <SunIcon /> : <MoonIcon />}
+            {/* key を変えて作り直し、切り替えのたびにアイコンを少し回しながら出す */}
+            <span key={theme} className="icon-swap">
+              {theme === "dark" ? <SunIcon /> : <MoonIcon />}
+            </span>
           </button>
           <a className="icon-button" href={LINKS.repository} aria-label="GitHub のリポジトリを開く" title="GitHub" {...externalProps(LINKS.repository)}>
             <GitHubIcon />
@@ -61,21 +70,30 @@ function Header() {
 }
 
 function Hero() {
+  const titleCount = HERO.titleLines.length;
   return (
     <section className="hero" id="top">
       <div className="hero__glow" aria-hidden />
       <div className="container hero__inner">
         <div className="hero__copy">
-          <p className="eyebrow">{HERO.eyebrow}</p>
+          <p className="eyebrow hero-in" style={heroOrder(0)}>
+            {HERO.eyebrow}
+          </p>
           <h1 className="hero__title">
             {HERO.titleLines.map((line, index) => (
-              <span key={line} className={index === HERO.titleLines.length - 1 ? "is-accent" : undefined}>
+              <span
+                key={line}
+                className={`hero-in${index === HERO.titleLines.length - 1 ? " is-accent" : ""}`}
+                style={heroOrder(index + 1)}
+              >
                 {line}
               </span>
             ))}
           </h1>
-          <p className="hero__lead">{HERO.lead}</p>
-          <div className="hero__actions">
+          <p className="hero__lead hero-in" style={heroOrder(titleCount + 1)}>
+            {HERO.lead}
+          </p>
+          <div className="hero__actions hero-in" style={heroOrder(titleCount + 2)}>
             <a className="button button--primary" href={HERO.primaryAction.href}>
               {HERO.primaryAction.label}
               <ArrowIcon />
@@ -85,13 +103,13 @@ function Hero() {
               {HERO.secondaryAction.label}
             </a>
           </div>
-          <ul className="hero__notes">
+          <ul className="hero__notes hero-in" style={heroOrder(titleCount + 3)}>
             {HERO.notes.map((note) => (
               <li key={note}>{note}</li>
             ))}
           </ul>
         </div>
-        <div className="hero__demo">
+        <div className="hero__demo hero-in hero-in--demo" style={heroOrder(2)}>
           <DiscordDemo />
         </div>
       </div>

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import {
   DEMO_CAST,
   DEMO_NOTE,
@@ -30,6 +30,8 @@ import {
 const TICK_MS = 100;
 // タブが裏に回っている間はタイマーが間引かれる。戻ったときに一気に進まないよう、1 回の進みに上限を置く
 const MAX_STEP_MS = 400;
+
+type TabBox = { left: number; top: number; width: number; height: number };
 
 function ChannelIcon({ kind, size }: { kind: DemoChannelKind; size?: number }) {
   if (kind === "voice") return <SpeakerIcon size={size} />;
@@ -240,7 +242,51 @@ export function DiscordDemo() {
   // 同じ場面をもう一度選んだときにも最初から再生できるよう、再生のたびに番号を進める
   const [playCount, setPlayCount] = useState(0);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const tabListRef = useRef<HTMLDivElement | null>(null);
+  // 選んでいるタブの位置。測れたら、背景の色をタブからタブへ滑らせる（測れるまではタブ自身を塗る）
+  const [indicator, setIndicator] = useState<TabBox | null>(null);
+  // 最初の表示ではタブを横に送らない（ページを開いた直後に勝手に動かさない）
+  const hasSelectedRef = useRef(false);
   const scenario = DEMO_SCENARIOS[index];
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const tab = tabRefs.current[index];
+      if (!tab) return;
+      const next = { left: tab.offsetLeft, top: tab.offsetTop, width: tab.offsetWidth, height: tab.offsetHeight };
+      setIndicator((current) =>
+        current &&
+        current.left === next.left &&
+        current.top === next.top &&
+        current.width === next.width &&
+        current.height === next.height
+          ? current
+          : next,
+      );
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    // フォントの読み込みや画面の幅でタブの大きさが変わったら測り直す
+    const observer = new ResizeObserver(measure);
+    for (const tab of tabRefs.current) {
+      if (tab) observer.observe(tab);
+    }
+    return () => observer.disconnect();
+  }, [index]);
+
+  useEffect(() => {
+    if (!hasSelectedRef.current) {
+      hasSelectedRef.current = true;
+      return;
+    }
+    // 幅の狭い画面ではタブが横にはみ出す。自動で場面が進んでも、選ばれたタブが見えるよう横にだけ送る
+    // （scrollIntoView はページの縦の位置まで動かすので使わない）
+    const list = tabListRef.current;
+    const tab = tabRefs.current[index];
+    if (!list || !tab || typeof list.scrollTo !== "function") return;
+    const left = tab.offsetLeft - (list.clientWidth - tab.offsetWidth) / 2;
+    list.scrollTo({ left: Math.max(0, left), behavior: reducedMotion ? "auto" : "smooth" });
+  }, [index, reducedMotion]);
 
   const select = (next: number) => {
     setIndex(next);
@@ -273,7 +319,26 @@ export function DiscordDemo() {
 
   return (
     <div className="demo" ref={rootRef}>
-      <div className="demo__tabs" role="tablist" aria-label="動作イメージの場面">
+      <div
+        ref={tabListRef}
+        className={`demo__tabs${indicator ? " has-indicator" : ""}`}
+        role="tablist"
+        aria-label="動作イメージの場面"
+      >
+        {indicator && (
+          <span
+            className="demo__tab-indicator"
+            aria-hidden
+            style={
+              {
+                "--tab-x": `${indicator.left}px`,
+                "--tab-y": `${indicator.top}px`,
+                width: indicator.width,
+                height: indicator.height,
+              } as CSSProperties
+            }
+          />
+        )}
         {DEMO_SCENARIOS.map((item, itemIndex) => (
           <button
             key={item.id}
@@ -311,7 +376,9 @@ export function DiscordDemo() {
         <div className="dc-main">
           <div className="dc-header">
             <ChannelIcon kind={scenario.channelKind} size={17} />
-            <span className="dc-header__name">{scenario.channelName}</span>
+            <span key={scenario.id} className="dc-header__name demo-fade">
+              {scenario.channelName}
+            </span>
           </div>
           <ScenarioPlayer
             key={`${scenario.id}:${playCount}`}
@@ -327,7 +394,9 @@ export function DiscordDemo() {
       </div>
 
       <div className="demo__foot">
-        <p className="demo__caption">{scenario.caption}</p>
+        <p key={scenario.id} className="demo__caption demo-fade">
+          {scenario.caption}
+        </p>
         {!reducedMotion && (
           <button
             type="button"

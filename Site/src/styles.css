@@ -189,6 +189,19 @@ button {
   height: 2px;
   border-radius: 2px;
   background: var(--warm);
+  transform-origin: left center;
+}
+
+/* 見出しが現れるときに、飾りの線を左から伸ばす */
+.reveal.is-visible .eyebrow::before,
+.eyebrow.hero-in::before {
+  animation: bar-in 0.8s var(--ease) 0.3s backwards;
+}
+
+@keyframes bar-in {
+  from {
+    transform: scaleX(0);
+  }
 }
 
 /* --- ヘッダー ----------------------------------------------------------- */
@@ -201,6 +214,12 @@ button {
   backdrop-filter: saturate(1.4) blur(14px);
   -webkit-backdrop-filter: saturate(1.4) blur(14px);
   border-bottom: 1px solid var(--border);
+  transition: box-shadow 0.4s var(--ease);
+}
+
+/* 下へ送ったら影を付けて、本文の上に浮いていることを示す */
+.header.is-scrolled {
+  box-shadow: var(--shadow);
 }
 
 .header__inner {
@@ -275,6 +294,19 @@ button {
 .icon-button:hover {
   border-color: var(--accent);
   transform: translateY(-1px);
+}
+
+/* 配色を切り替えたときに、新しいアイコンを少し回しながら出す */
+.icon-swap {
+  display: grid;
+  animation: icon-swap 0.5s var(--ease) backwards;
+}
+
+@keyframes icon-swap {
+  from {
+    opacity: 0;
+    transform: rotate(-70deg) scale(0.7);
+  }
 }
 
 @media (min-width: 860px) {
@@ -367,6 +399,44 @@ button {
     radial-gradient(520px 380px at 18% 30%, var(--glow-a), transparent 70%),
     radial-gradient(480px 360px at 82% 18%, var(--glow-b), transparent 70%);
   pointer-events: none;
+  /* 気づくかどうかの速さで、光をゆっくり揺らす */
+  animation: glow-drift 26s ease-in-out infinite alternate;
+}
+
+@keyframes glow-drift {
+  from {
+    transform: translate3d(-2%, -1%, 0) scale(1);
+  }
+
+  to {
+    transform: translate3d(3%, 3%, 0) scale(1.08);
+  }
+}
+
+/* ファーストビューは、読み込んだときに上から順に現れる。
+   .reveal と同じく animation の backwards にして、現れ終わったあとの hover の動きを邪魔しない */
+.hero-in {
+  animation: hero-in 0.9s var(--ease) backwards;
+  animation-delay: calc(80ms + var(--hero-order, 0) * 90ms);
+}
+
+.hero-in--demo {
+  animation-name: hero-in-demo;
+  animation-duration: 1.1s;
+}
+
+@keyframes hero-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+}
+
+@keyframes hero-in-demo {
+  from {
+    opacity: 0;
+    transform: translateY(28px) scale(0.98);
+  }
 }
 
 .hero__inner {
@@ -440,6 +510,7 @@ button {
 /* --- 疑似 Discord 画面 --------------------------------------------------- */
 
 .demo__tabs {
+  position: relative;
   display: flex;
   gap: 6px;
   margin-bottom: 12px;
@@ -453,6 +524,8 @@ button {
 }
 
 .demo__tab {
+  position: relative;
+  z-index: 1;
   flex: none;
   padding: 7px 14px;
   border: 1px solid var(--border);
@@ -474,6 +547,36 @@ button {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--on-accent);
+}
+
+/* 選んでいるタブの背景。位置を測れたらこちらが色を持ち、タブからタブへ滑って移る */
+.demo__tab-indicator {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  transform: translate(var(--tab-x, 0), var(--tab-y, 0));
+  transition: transform 0.5s var(--ease), width 0.5s var(--ease), background-color 0.3s var(--ease);
+  pointer-events: none;
+}
+
+.demo__tabs.has-indicator .demo__tab.is-active {
+  border-color: transparent;
+  background: transparent;
+}
+
+/* 場面が替わったときに、チャンネル名と説明をふわっと入れ替える */
+.demo-fade {
+  animation: demo-fade 0.5s var(--ease) backwards;
+}
+
+@keyframes demo-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }
 
 .dc {
@@ -1041,6 +1144,12 @@ button {
   background: var(--accent-soft);
   font-size: 1.45rem;
   line-height: 1;
+  transition: transform 0.5s var(--ease), background-color 0.4s var(--ease);
+}
+
+.feature:hover .feature__icon {
+  background: var(--warm-soft);
+  transform: scale(1.08) rotate(-4deg);
 }
 
 .feature h4 {
@@ -1312,6 +1421,8 @@ button {
   *::before,
   *::after {
     animation-duration: 0.001ms !important;
+    /* 遅れを残すと、順番に出す要素がその間だけ見えなくなる */
+    animation-delay: 0s !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
     transition-delay: 0s !important;

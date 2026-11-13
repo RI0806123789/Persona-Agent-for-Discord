@@ -48,6 +48,20 @@ export function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
+/** ページを少しでも下へ送ったかどうか（ヘッダーに影を付ける合図） */
+export function useScrolled(threshold = 8): boolean {
+  const [scrolled, setScrolled] = useState(() => window.scrollY > threshold);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > threshold);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [threshold]);
+
+  return scrolled;
+}
+
 /** 要素が画面に入ったかどうか。once が真なら、一度入ったあとは真のままにする */
 export function useInView<T extends Element>(options: { once: boolean; threshold?: number }) {
   const ref = useRef<T | null>(null);
