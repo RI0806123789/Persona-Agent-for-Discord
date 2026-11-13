@@ -287,7 +287,37 @@ class InsightsCollector:
         return names, default_value
 
     def deployed_version(self):
-        """README の更新履歴の先頭の見出し（例: ver0.1.6 — 2026/08/14）。"""
+        """配備中の版の見出し（例: ver0.1.6 — 2026/08/14、ver0.2.0(BETA)）。
+
+        docs/release-notes/ の verX.Y.Z.md のうち番号が最も大きいファイルの見出しを使う。
+        このフォルダが無い旧版のサーバーでは、README の更新履歴の先頭の見出しを使う。
+        """
+        version = self.release_notes_version()
+        return version if version is not None else self.readme_version()
+
+    def release_notes_version(self):
+        notes_dir = self.bot_dir / "docs" / "release-notes"
+        try:
+            candidates = []
+            for path in notes_dir.glob("ver*.md"):
+                match = re.fullmatch(r"ver(\d+)\.(\d+)\.(\d+)\.md", path.name)
+                if match:
+                    candidates.append((tuple(int(part) for part in match.groups()), path))
+        except OSError:
+            return None
+        # 番号の大きい順に見る（文字列順だと ver0.10.0 が ver0.9.0 より前になる）
+        for _number, path in sorted(candidates, reverse=True):
+            try:
+                text = path.read_text(encoding="utf-8-sig")
+            except OSError:
+                continue
+            for line in text.splitlines():
+                match = re.match(r"^#\s*(ver\d+\.\d+\.\d+.*)$", line.strip())
+                if match:
+                    return match.group(1).strip()
+        return None
+
+    def readme_version(self):
         try:
             for line in (self.bot_dir / "README.md").read_text(encoding="utf-8-sig").splitlines():
                 match = re.match(r"^#{2,4}\s*(ver\d+\.\d+\.\d+.*)$", line.strip())

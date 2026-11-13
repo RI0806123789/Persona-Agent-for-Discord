@@ -44,7 +44,7 @@ Google Gemini をバックエンドに持つ Discord ボット。ペルソナベ
 - ★ **対応する issue があれば、PR 本文の末尾に `Closes #N` を書く**（複数なら 1 行ずつ）。
   本文中に `#N` と書くだけでは**参照リンクになるだけで、マージしても閉じません**
 - PR・コミットにセッション URL を書かない
-- README の更新履歴とリリースは、末尾の「バージョンとリリースの運用」（`AGENTS.md`）に従う
+- 更新履歴（`docs/release-notes/` に版ごとの `ver0.x.x.md`。README には書かない）とリリースは、末尾の「バージョンとリリースの運用」（`AGENTS.md`）に従う
 
 ### 同時に走らせるエージェント
 
@@ -860,6 +860,6 @@ git diff --name-only origin/main...HEAD                 # .env / deploy/bot.serv
 
 ## バージョンとリリースの運用
 
-機能追加のブランチ運用、README への `ver0.x.x(BETA)` の記録、Releases の登録と BETA の解除の方針は、Codex など他のエージェントと共有するため `AGENTS.md` に書いてある（次の行で読み込まれる）。方針を変えるときは `AGENTS.md` だけを直し、ここへ同じ内容を書き写さないこと。
+機能追加のブランチ運用、`docs/release-notes/` への `ver0.x.x(BETA)` の記録、Releases の登録と BETA の解除の方針は、Codex など他のエージェントと共有するため `AGENTS.md` に書いてある（次の行で読み込まれる）。方針を変えるときは `AGENTS.md` だけを直し、ここへ同じ内容を書き写さないこと。
 
 @AGENTS.md
