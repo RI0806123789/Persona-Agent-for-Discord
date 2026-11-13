@@ -82,7 +82,7 @@ Persona-Agent-for-Discord/
 ├── docs/                                       # 設計資料とリリースノート
 │   ├── release-notes/                          # 版ごとのリリースノート（verX.Y.Z.md。一覧は README.md）
 │   ├── console-icons.png                       # 管理コンソールの README で使う画像
-│   └── フロー図.drawio                         # 構成・メッセージ処理・on_message・自律行動のフロー図（draw.io）
+│   └── フロー図.drawio                         # 構成・メッセージ処理・on_message・自律行動のフロー図と、音声会話・サブエージェントのアクティビティ図（draw.io）
 ├── Site/                                       # 紹介用ホームページ（React + TypeScript。GitHub Pages で公開。ボットとは別にビルド。Site/README.md）
 ├── tools/
 │   └── console/                                # 開発者用ダッシュボード（SSH 経由でボットを見守る。ボットとは別に起動。tools/console/README.md）
