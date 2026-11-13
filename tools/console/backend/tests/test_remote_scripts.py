@@ -141,6 +141,37 @@ class InsightsScriptTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def write_release_note(self, name: str, text: str) -> None:
+        notes = self.root / "docs" / "release-notes"
+        notes.mkdir(parents=True, exist_ok=True)
+        (notes / name).write_text(text, encoding="utf-8")
+
+    def test_version_uses_highest_release_note(self):
+        # 文字列順では ver0.9.9 が最後になるが、番号の大きい ver0.10.0 を選ぶ。一覧の README.md は版ではない
+        (self.root / "README.md").write_text("## 📋 更新履歴\n\n### ver0.1.6 — 2026/08/14\n", encoding="utf-8")
+        self.write_release_note("README.md", "# 📋 更新履歴\n\n| [ver0.9.9](ver0.9.9.md) |\n")
+        self.write_release_note("ver0.9.9.md", "# ver0.9.9 — 2026/12/01\n\n## 新機能\n")
+        self.write_release_note("ver0.10.0.md", "# ver0.10.0(BETA)\n\n## 新機能\n")
+        collector = insights.InsightsCollector(self.root, "bot")
+        self.assertEqual(collector.deployed_version(), "ver0.10.0(BETA)")
+
+    def test_version_skips_release_note_without_heading(self):
+        self.write_release_note("ver0.2.0.md", "見出しのない下書き\n")
+        self.write_release_note("ver0.1.9.md", "﻿# ver0.1.9 — 2026/11/02\n")
+        collector = insights.InsightsCollector(self.root, "bot")
+        self.assertEqual(collector.deployed_version(), "ver0.1.9 — 2026/11/02")
+
+    def test_version_falls_back_to_readme_without_release_notes(self):
+        # docs/release-notes/ の無い旧版のサーバーは README の更新履歴を読む
+        (self.root / "README.md").write_text("# bot\n\n## 📋 更新履歴\n\n### ver0.1.8 — 2026/10/25\n", encoding="utf-8")
+        collector = insights.InsightsCollector(self.root, "bot")
+        self.assertEqual(collector.deployed_version(), "ver0.1.8 — 2026/10/25")
+        self.write_release_note("notes.md", "# ver9.9.9\n")
+        self.assertEqual(collector.deployed_version(), "ver0.1.8 — 2026/10/25")
+
+    def test_version_is_none_without_sources(self):
+        self.assertIsNone(insights.InsightsCollector(self.root, "bot").deployed_version())
+
     def test_missing_guild_settings_table_does_not_report_read_error(self):
         db_path = self.root / "data" / "memory" / "bot.db"
         db_path.parent.mkdir(parents=True)
