@@ -13,6 +13,9 @@ export const MASK = "••••••";
 const MIN_SECRET_LENGTH = 3;
 // 伏せ字の対象から外す、よくある値（隠しても意味が無く、文章が読めなくなるもの）
 const NOT_SECRET = new Set(["localhost", "127.0.0.1", "bot", "root", "true", "false"]);
+// サーバー名が取れなかったときに遠隔スクリプト（insights.py）が付ける代替の名前。
+// 実際のサーバー名ではないので秘密にせず、説明文など一般の文まで巻き込まないようにする（#452）
+const GUILD_NAME_PLACEHOLDER = /^(?:名前不明のサーバー|保存済みサーバー \d+)$/;
 
 export interface Privacy {
   enabled: boolean;
@@ -47,12 +50,24 @@ export function collectSecrets(parts: {
   const botUser = parts.insights?.discord.bot_user;
   if (botUser?.includes("#")) values.push(botUser.split("#")[0]);
   for (const profile of [parts.profile, ...parts.profiles]) {
-    values.push(profile?.host, profile?.username, profile?.label, profile?.bot_dir, profile?.id, profile?.deploy_branch);
+    // systemd のサービス名は、既定の bot 以外は利用者が決めた値なので伏せる（概要・操作・接続ページと確認に出る）
+    values.push(
+      profile?.host,
+      profile?.username,
+      profile?.label,
+      profile?.service,
+      profile?.bot_dir,
+      profile?.id,
+      profile?.deploy_branch,
+    );
     const home = profile?.bot_dir?.match(/\/(?:home|Users)\/([^/]+)(?=\/|$)/);
     values.push(home?.[0], home?.[1]);
   }
   for (const guild of parts.insights?.discord.guilds ?? []) {
-    values.push(guild.name, guild.voice_channel);
+    values.push(
+      guild.name && !GUILD_NAME_PLACEHOLDER.test(guild.name) ? guild.name : null,
+      guild.voice_channel,
+    );
   }
   for (const settings of [parts.insights?.dm_settings, ...(parts.insights?.discord.guilds ?? []).map((guild) => guild.settings)]) {
     values.push(settings?.autonomous_stage_channel_id, settings?.autonomous_voice_channel_id);

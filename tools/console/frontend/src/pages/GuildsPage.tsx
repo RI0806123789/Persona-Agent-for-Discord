@@ -60,8 +60,9 @@ export function GuildsPage({
       )}
 
       {guilds.map((guild, index) => {
-        // 空文字・空白だけの名前は「名前が無い」ものとして扱う（見出しとアバター文字が空欄にならないように）。
-        const name = typeof guild.name === "string" && guild.name.trim() !== "" ? guild.name : null;
+        // 空文字・空白だけの名前は「名前が無い」ものとして扱い、前後の空白も除いてから使う
+        // （見出しとアバター文字が空欄・ずれにならないように）。
+        const name = typeof guild.name === "string" && guild.name.trim() !== "" ? guild.name.trim() : null;
         return (
           <section key={`${guild.name}-${index}`} className="m3-card m3-card-filled guild-card span-6">
             <header className="guild-head">

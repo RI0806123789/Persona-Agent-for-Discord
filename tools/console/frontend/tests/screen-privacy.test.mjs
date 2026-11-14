@@ -140,6 +140,12 @@ test("#413 空文字・空白だけのサーバー名は代替の表示にする
   assert.ok(html(GuildsPage, guildPageProps({name: "架空サーバー"}), false).includes(">架<"));
 });
 
+test("#452 前後の空白があるサーバー名でも、除いた値で見出しとアバターを出す", () => {
+  const plain = html(GuildsPage, guildPageProps({name: " 架空サーバー "}), false);
+  assert.ok(plain.includes(">架<"), "アバターの頭文字が空白にならない");
+  assert.ok(plain.includes(">架空サーバー<"), "見出しにも前後の空白を残さない");
+});
+
 test("#292 サーバー・DMの配信先IDは自由文の伏せ字にも登録する", () => {
   const guildSettings = {autonomous_stage_channel_id: "FICTIONAL_STAGE_CHANNEL",
     autonomous_voice_channel_id: "FICTIONAL_VOICE_CHANNEL"};
@@ -153,6 +159,34 @@ test("#292 サーバー・DMの配信先IDは自由文の伏せ字にも登録�
   assert.equal(privacy.createPrivacy(false, secrets).redact(text), text);
   const masked = privacy.createPrivacy(true, secrets).redact(text);
   for (const value of values) assert.equal(masked.includes(value), false);
+});
+
+test("#452 既定の bot 以外のサービス名を、自由文の伏せ字にも登録する", () => {
+  const secrets = privacy.collectSecrets({profile, profiles: [profile], connection: null, insights: null});
+  const command = `sudo -n systemctl restart ${profile.service}.service`;
+  assert.equal(privacy.createPrivacy(false, secrets).redact(command), command);
+  assert.equal(privacy.createPrivacy(true, secrets).redact(command), `sudo -n systemctl restart ${privacy.MASK}.service`);
+  // 既定のサービス名 bot は、一般の単語と見分けが付かないので伏せない。
+  const defaults = privacy.collectSecrets({profile: {...profile, service: "bot"}, profiles: [], connection: null, insights: null});
+  assert.equal(privacy.createPrivacy(true, defaults).redact(command), command);
+});
+
+test("#452 サーバー名が取れないときの代替表示は、秘密に登録しない", () => {
+  const insights = {discord: {ok: true, error: null, guilds: [
+    {name: "架空サーバー", voice_channel: null},
+    {name: "名前不明のサーバー", voice_channel: null},
+    {name: "保存済みサーバー 1", voice_channel: null},
+    {name: "保存済みサーバー 12", voice_channel: null},
+  ]}, dm_settings: {}};
+  const secrets = privacy.collectSecrets({profile: null, profiles: [], connection: null, insights});
+  const text = "保存済みサーバー 1 と 保存済みサーバー 12 は、名前不明のサーバー として表示しています。架空サーバー は取得済みです。";
+  assert.equal(privacy.createPrivacy(false, secrets).redact(text), text);
+  const masked = privacy.createPrivacy(true, secrets).redact(text);
+  assert.ok(masked.includes(privacy.MASK));
+  assert.equal(masked.includes("架空サーバー"), false, "実際に取得できたサーバー名は伏せる");
+  assert.ok(masked.includes("保存済みサーバー 1"), "代替の名前は一般の文として残す");
+  assert.ok(masked.includes("保存済みサーバー 12"), "代替の名前は一般の文として残す");
+  assert.ok(masked.includes("名前不明のサーバー"), "代替の名前は一般の文として残す");
 });
 
 test("#251 サーバー一覧の部分取得は既存行を表示しながら全件取得と区別する", () => {
@@ -202,6 +236,21 @@ test("#216 概要Gitカードの現在ブランチと周辺自由文を描画時
 test("#216 概要Gitカードの取得エラーにも既知の秘密を残さない", () => {
   const props = {connected: true, status: {git_error: `失敗 ${branch}`}, samples: [], logs: [], insights: null, now: 0};
   checkModes((enabled) => html(OverviewPage, props, enabled), [branch]);
+});
+const insightActivity = {window_hours: 24, gemini_calls: 0, gemini_tokens: 0, conversations: 0,
+  last_conversation_at: null, gateway_connects: 0, gateway_resumes: 0, gateway_invalidated: 0,
+  heartbeat_blocked: 0, exceptions: 0, autonomous_events: []};
+test("#452 概要のボット欄のヒント（配備先ディレクトリ入りの文）も伏せる", () => {
+  const insights = {source_dir: "/opt/fictional-bot/src", version: "ver0.2.0(BETA)", persona_estimated: false,
+    discord: {ok: true, error: null, guilds: []}, dm_settings: {}, errors: [],
+    activity: insightActivity, autonomous_supported: true};
+  const props = {connected: true, status: null, samples: [], logs: [], insights, now: 0};
+  const plain = html(OverviewPage, props, false);
+  assert.ok(plain.includes("ver0.2.0(BETA)（/opt/fictional-bot/src/）"), "解除時は元の文面");
+  const masked = html(OverviewPage, props, true);
+  assert.equal(masked.includes("/opt/fictional-bot"), false, "配備先のディレクトリを伏せる");
+  assert.ok(masked.includes(`（${privacy.MASK}/src/）`), "bot_dir 配下の残りは残す");
+  assert.ok(masked.includes("ver0.2.0(BETA)"), "版の表示は残す");
 });
 const railProps = {page: "overview", connected: true, profile, onNavigate: noop, onHelp: noop,
   onMenu: noop, fab: {label: "更新", icon: "refresh", onClick: noop}};
@@ -304,7 +353,7 @@ for (const action of ["stop", "restart", "deploy"]) {
       h.render().setPrivacyOn(enabled); const current = h.render();
       assert.equal(current.confirm, request, "確認要求を作り直さず切り替える");
       const text = dialogDisplay(h.dialog());
-      for (const value of action === "deploy" ? [label, deployBranch] : [label]) {
+      for (const value of action === "deploy" ? [label, deployBranch, profile.service] : [label, profile.service]) {
         assert.equal(text.includes(value), !enabled, value);
       }
     }
