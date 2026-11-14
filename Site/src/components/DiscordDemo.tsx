@@ -143,13 +143,14 @@ function speakingAuthor(scenario: DemoScenario, frame: TimelineFrame): DemoAutho
 
 function VoiceStrip({ scenario, frame }: { scenario: DemoScenario; frame: TimelineFrame }) {
   const members = useMemo(() => {
-    const seen: DemoAuthor[] = [];
-    for (const message of scenario.messages) {
+    // 今までに発言の見えた人だけを並べる。途中参加の人は、その発言が出たときに加わる。
+    // ボットは、呼び出した通話・自分ではじめた配信のどちらでも最初からいるので先頭に置く
+    const seen: DemoAuthor[] = ["bot"];
+    for (const message of scenario.messages.slice(0, frame.visible)) {
       if (!seen.includes(message.author)) seen.push(message.author);
     }
-    // ボットを先頭に置く（ステージでは話し手として見せたい）
-    return seen.sort((a, b) => Number(b === "bot") - Number(a === "bot"));
-  }, [scenario]);
+    return seen;
+  }, [scenario, frame.visible]);
   const speaking = speakingAuthor(scenario, frame);
   return (
     <div className="dc-voice">
@@ -181,9 +182,14 @@ function ScenarioPlayer({ scenario, running, reducedMotion, onFinished }: Player
   const onFinishedRef = useRef(onFinished);
   onFinishedRef.current = onFinished;
 
+  // この場面で最後に反映した視差効果の設定。切り替わったときだけ表示を組み直す
+  const appliedReducedRef = useRef(reducedMotion);
   useEffect(() => {
-    // 動きを減らす設定では、流れる表示をやめて全部の発言を最初から出す
-    if (reducedMotion) setFrame(finishedFrame(timeline));
+    if (appliedReducedRef.current === reducedMotion) return;
+    appliedReducedRef.current = reducedMotion;
+    // 動きを減らす設定では、流れる表示をやめて全部の発言を最初から出す。
+    // 戻すときは、ここまで進めた経過時間の表示へそろえ直す（最終場面のまま固まったり、再生中に急に巻き戻らないように）
+    setFrame(reducedMotion ? finishedFrame(timeline) : frameAt(timeline, elapsedRef.current));
   }, [reducedMotion, timeline]);
 
   useEffect(() => {
@@ -245,8 +251,8 @@ export function DiscordDemo() {
   const tabListRef = useRef<HTMLDivElement | null>(null);
   // 選んでいるタブの位置。測れたら、背景の色をタブからタブへ滑らせる（測れるまではタブ自身を塗る）
   const [indicator, setIndicator] = useState<TabBox | null>(null);
-  // 最初の表示ではタブを横に送らない（ページを開いた直後に勝手に動かさない）
-  const hasSelectedRef = useRef(false);
+  // 前回の選択。最初の表示（StrictMode の2回目の effect 実行も含む）ではタブを横に送らない
+  const lastSelectedRef = useRef<number | null>(null);
   const scenario = DEMO_SCENARIOS[index];
 
   useLayoutEffect(() => {
@@ -275,10 +281,10 @@ export function DiscordDemo() {
   }, [index]);
 
   useEffect(() => {
-    if (!hasSelectedRef.current) {
-      hasSelectedRef.current = true;
-      return;
-    }
+    const previous = lastSelectedRef.current;
+    lastSelectedRef.current = index;
+    // 選択が変わったときだけ送る（視差効果の切り替えや StrictMode の2回目の実行では動かさない）
+    if (previous === null || previous === index) return;
     // 幅の狭い画面ではタブが横にはみ出す。自動で場面が進んでも、選ばれたタブが見えるよう横にだけ送る
     // （scrollIntoView はページの縦の位置まで動かすので使わない）
     const list = tabListRef.current;

@@ -1,5 +1,6 @@
 // 公開ページの文言が、Issue #410 の決定事項と公開時の約束を守っていることを確かめる。
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import * as content from "../src/content.ts";
@@ -22,6 +23,19 @@ test("外部へのリンクは、このリポジトリの中だけを指す", ()
   assert.ok(urls.length > 0);
   for (const url of urls) {
     assert.ok(url.startsWith(REPOSITORY_PREFIX), `リポジトリの外を指すリンクがあります: ${url}`);
+  }
+});
+
+test("blob/main のリンク先のファイルが、リポジトリに実際にある", () => {
+  // 実在しないファイルを指すと GitHub で 404 になる（#452。LICENSE.md のリンク切れの再発防止）
+  const links = Object.entries(content.LINKS);
+  assert.ok(links.length > 0);
+  for (const [name, url] of links) {
+    const match = /^https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/main\/(.+)$/.exec(url);
+    if (!match) continue;
+    const file = new URL(`../../${match[1]}`, import.meta.url);
+    const exists = existsSync(file);
+    assert.ok(exists, `LINKS.${name} の行き先がリポジトリにありません: ${match[1]}`);
   }
 });
 

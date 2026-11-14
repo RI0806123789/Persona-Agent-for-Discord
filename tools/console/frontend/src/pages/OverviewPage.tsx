@@ -314,7 +314,8 @@ function BotInsightsCard({
         <Stat
           label="ボット"
           value={privacy.mask(discord.bot_user ?? null)}
-          hint={`${insights.version ?? "版不明"}${insights.source_dir ? `（${insights.source_dir}/）` : ""}`}
+          // 配備先のディレクトリが入るので、ヒントも既知の秘密を伏せる（value だけ自動では伏せられない）
+          hint={privacy.redact(`${insights.version ?? "版不明"}${insights.source_dir ? `（${insights.source_dir}/）` : ""}`)}
         />
         <Stat label="Discord API の応答" value={discord.api_rtt_ms != null ? `${discord.api_rtt_ms} ms` : "—"} hint="サーバー → Discord の往復" />
         <Stat
