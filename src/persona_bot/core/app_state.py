@@ -250,12 +250,17 @@ class GuildSettings:
 
         再参加時の復元は同じサーバーの保存を待つ。ロック待ち中に見回りが
         キャンセルされても、投稿済みの記録を保存してからキャンセルを伝える。
+        退出後の遅延書き込みは行わない（設定を作り直させないため）。
         """
         self.anniversary_posted_dates[f"{user_id}:{label}"] = posted_date
         if self._db is None:
             return
         async def save() -> None:
             async with self._persist_lock:
+                # ロック待ちの間に退出した場合は、退出後の遅延書き込みで設定を作り直させない
+                # （保存 SETTINGS の is_active 確認と同じ。投稿の記録はメモリには残る）。
+                if not self.is_active:
+                    return
                 try:
                     await run_in_thread(
                         self._db.anniversary_post_record, self.persist_key, user_id, label, posted_date

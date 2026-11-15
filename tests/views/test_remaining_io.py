@@ -92,7 +92,7 @@ class ViewIOTests(unittest.IsolatedAsyncioTestCase):
                 gemini = SimpleNamespace(generate=AsyncMock(return_value=("架空の要約", None, [])))
                 with patch.object(summary_service, "fetch_messages_since", new=AsyncMock(return_value=[message])), patch(
                     "persona_bot.config.paths.load_prompt_template", loader,
-                ), patch.object(summary_service, "screen_bot_response", new=AsyncMock(side_effect=lambda text, *a, **k: text)):
+                ), patch.object(summary_service, "screen_bot_response_with_status", new=AsyncMock(side_effect=lambda text, *a, **k: (text, True))):
                     ok, text = await summary_view.generate_channel_summary(
                         object(), None, summary_view._DEFAULT_PERIOD,
                         guild_settings=GuildSettings(current_prompt_file="../prompts/prompt_default.txt"),

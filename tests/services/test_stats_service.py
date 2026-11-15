@@ -550,6 +550,11 @@ class UserStatsPersistenceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.service._analysis_tasks, {})
 
     async def test_older_analysis_cannot_overwrite_newer_completed_samples(self) -> None:
+        """交代された古い解析は保存せず、キャッシュとDBは新しい結果を保持する（#451）。
+
+        古い解析の呼び出し元には、計算済みの自分の結果をそのまま返す
+        （途中で記録されたサンプルを使った新しい解析の完了を待たせない）。
+        """
         self.service.cache["user-0"]["recent_samples"] = [f"架空の発言{i}" for i in range(10)]
         entered = [asyncio.Event(), asyncio.Event()]
         release = [asyncio.Event(), asyncio.Event()]
@@ -574,11 +579,58 @@ class UserStatsPersistenceTests(unittest.IsolatedAsyncioTestCase):
         release[1].set()
         adopted = await newer
         release[0].set()
-        self.assertEqual(await older, adopted)
+        outdated = await older
+        self.assertEqual(outdated["personality"], "古い架空の解析")
+        self.assertEqual(outdated["sample_count"], 10)
         final = await self.service.ensure_analysis("user-0")
+        self.assertEqual(final, adopted)
         self.assertEqual(final["sample_count"], 11)
         self.assertEqual(final["personality"], "新しい架空の解析")
         self.assertEqual(self.db.stats_load_all()["user-0"]["analysis"], final)
+        self.assertEqual(calls, 2)
+
+    async def test_superseded_analysis_prefers_its_own_result_over_stale_cache(self) -> None:
+        """交代された解析は、TTL の切えたキャッシュより自分の計算結果を優先する（#451）。
+
+        保存は交代先の解析が行うため、この返り値はキャッシュに書き込まれない。
+        """
+        stale = deepcopy(self.generated_analysis)
+        stale["personality"] = "古いキャッシュの解析"
+        stale["sample_count"] = 5
+        stale["computed_at"] = "2020-01-01T00:00:00+00:00"
+        self.service.cache["user-0"]["analysis"] = stale
+        self.service.cache["user-0"]["recent_samples"] = [f"架空の発言{i}" for i in range(10)]
+        entered = [asyncio.Event(), asyncio.Event()]
+        release = [asyncio.Event(), asyncio.Event()]
+        calls = 0
+
+        async def generate(*args, **kwargs):
+            nonlocal calls
+            index = calls
+            calls += 1
+            entered[index].set()
+            await release[index].wait()
+            analysis = deepcopy(self.generated_analysis)
+            analysis["personality"] = "古い解析の計算結果" if index == 0 else "新しい解析の計算結果"
+            return json.dumps(analysis), None, []
+
+        self.gemini.generate.side_effect = generate
+        older = self.start_analysis()
+        await asyncio.wait_for(entered[0].wait(), 2)
+        await self.service.record("user-0", "架空", "追加の架空の発言", self.when)
+        newer = self.start_analysis()
+        await asyncio.wait_for(entered[1].wait(), 2)
+        release[0].set()
+        superseded = await older
+        self.assertEqual(superseded["personality"], "古い解析の計算結果")
+        # この時点ではまだ交代先の解析が完了していないため、キャッシュは古い値のまま。
+        self.assertEqual(self.service.cache["user-0"]["analysis"]["personality"], "古いキャッシュの解析")
+        release[1].set()
+        adopted = await newer
+        self.assertEqual(adopted["personality"], "新しい解析の計算結果")
+        self.assertEqual(adopted["sample_count"], 11)
+        final = await self.service.ensure_analysis("user-0")
+        self.assertEqual(final, adopted)
         self.assertEqual(calls, 2)
 
     async def test_older_waiter_receives_result_when_newer_analysis_is_pending(self):

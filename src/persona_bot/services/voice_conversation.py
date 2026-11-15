@@ -56,6 +56,7 @@ from persona_bot.config.constants import (
     LIVE_MAX_UTTERANCE_SECONDS,
     LIVE_OUTPUT_BUFFER_MS,
     LIVE_PLAYBACK_STALL_SECONDS,
+    LIVE_PLAYBACK_FADE_WAIT_SECONDS,
     LIVE_TICK_SECONDS,
     LIVE_TRANSCRIPT_MAX_CHARS,
     LIVE_VAD_ENERGY_THRESHOLD,
@@ -360,6 +361,10 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
         self._speaker_state.reservations.clear()
         for participant in self._speaker_state.participants.values():
             participant.drop_pending_audio()
+        # 割り込みを確かめている最中で一時停止した場合も、待ちを解消しておく。
+        # 残したままだと、再開後の新しい発話の返答が前の割り込み待ちで破棄されてしまう。
+        self._awaiting_interrupt_ack = False
+        self._transcript_state.interrupted = None
 
     @property
     def is_open(self) -> bool:
@@ -425,6 +430,13 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
             # 確定するまでは、届いている返答を流し続ける（相槌・回り込みなら止めない）。
             logger.info("音声会話: 返答中に話し続けている人の声を送り、割り込みかを確かめます。")
             self._barge_in_stats["sent"] += 1
+            # 未確定の短い発話を挟んだ後でも、まだ鳴っている返答を割り込みの対象にする
+            # （挟んだ発話の返答はまだ届いていない。割り込みを確定したときにフェードアウト
+            # されるのは、いま鳴っている返答でなければならない）。
+            playing = self._playback_owner
+            if (playing is not None and playing is not previous and not playing.discarded
+                    and self._playback_started):
+                previous = playing
             if previous is not None and previous.ended_at is not None and not previous.response_complete:
                 # サーバーはこの発話の開始で生成を打ち切る（START_OF_ACTIVITY_INTERRUPTS）。打ち切りの通知
                 # （interrupted）までに届いた残りは、前の返答の音源へ流す（新しい発言の返答と取り違えない）。
@@ -691,12 +703,37 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
                 self._reject_input(utterance, "入力の NG ワード")
             else:
                 self._check_barge_in(utterance)
-                if (utterance.input_task is not None and utterance.input_task.done()
+                # 初回音声の後に文字起こしが増えた場合も、回り込みへの返答を止められるように
+                # 判定し直す（初回音声の時点では断片が足りず、エコーと分からないことがある）。
+                if (utterance.first_audio_at is not None and not utterance.discarded
+                        and self._is_echo_reply(utterance)):
+                    self._barge_in_stats["echo"] += 1
+                    self._discard_response(utterance, "自分の声の回り込みへの返答")
+                elif (utterance.input_task is not None and utterance.input_task.done()
                         and not utterance.violation_recorded and not self._stopped):
                     # 入力の AI 判定が済んだ後に続きが届いた。増えた分も判定し直す。
                     utterance.input_task = spawn(self._judge_input(utterance), label="音声会話の入力の再判定")
         if finished:
             self._close_transcript(utterance)
+
+    def _recent_echo_text(self, now: float) -> str:
+        """回り込みの照合に使う、ボット自身の直近の発話の全文。
+
+        `_recent_output` は受信時刻基準の窓のため、長い返答の前半は窓からあふれる。
+        いま鳴っている返答（再生・流し切り中）は、その発言の文字起こしの全文を
+        窓の期限に関わらず参照に加える（再生が終わった分は窓で照合する）。
+        """
+        parts = []
+        owner = self._playback_owner
+        if owner is not None and owner.output_text:
+            parts.append(owner.output_text)
+        interrupted = self._transcript_state.interrupted
+        if interrupted is not None and interrupted.output_text:
+            parts.append(interrupted.output_text)
+        recent = self._recent_output.text(now)
+        if recent:
+            parts.append(recent)
+        return "\n".join(parts)
 
     def _check_barge_in(self, utterance: _Utterance) -> None:
         """返答中に話し始めた人の文字起こしが、割り込みとして確定できる中身になったか確かめる。
@@ -705,7 +742,7 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
         """
         if utterance.barge_in != "pending" or utterance.discarded:
             return
-        verdict = classify_interruption(utterance.input_text, self._recent_output.text(self._now()))
+        verdict = classify_interruption(utterance.input_text, self._recent_echo_text(self._now()))
         if verdict != INTERRUPTION_SPEECH:
             return
         utterance.barge_in = "confirmed"
@@ -716,10 +753,13 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
             self._discard_response(previous, "割り込み", fade=True)
 
     def _is_echo_reply(self, utterance: _Utterance) -> bool:
-        """この発言への返答を再生しないか（発言がペルソナ自身の声の回り込みだった）。"""
-        if not utterance.echo_suspect or utterance.barge_in == "confirmed":
+        """この発言への返答を再生しないか（発言がペルソナ自身の声の回り込みだった）。
+
+        割り込みを確定させた後も照合する（短い断片での確定は、回り込みの可能性を消さないため）。
+        """
+        if not utterance.echo_suspect:
             return False
-        return is_echo_text(utterance.input_text, self._recent_output.text(self._now()))
+        return is_echo_text(utterance.input_text, self._recent_echo_text(self._now()))
 
     async def _on_model_audio(self, data: bytes) -> None:
         previous = self._held_previous()
@@ -861,6 +901,12 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
                         or owner is None or owner.discarded):
                     self._release_unplayed(source)
                     return
+                # 割り込みでフェードアウトさせた音源が鳴り終わるのを待つ（prepare の停止で
+                # 絞り切る前にブツ切りしないため）。期限を過ぎたら切り替えを優先する。
+                # 会話の時計は再生と独立しているため、待ちの上限は壁時計で数える。
+                deadline = monotonic() + LIVE_PLAYBACK_FADE_WAIT_SECONDS
+                while self._fading is not None and monotonic() < deadline:
+                    await asyncio.sleep(0.01)
                 await self._playback_controller.prepare(self.voice_client)
                 if (self._stopped or self._playback is not source or source.aborted
                         or owner.discarded or not self.voice_client.is_connected()):
@@ -894,7 +940,9 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
     def _on_playback_finished(self, source: LivePlaybackSource) -> None:
         self._playback_controller.release(source)
         if self._fading is source:
+            # フェードアウトが鳴り終わった。回り込みの照合は、鳴り終わった時刻を基準に続ける。
             self._fading = None
+            self._last_audible_at = self._now()
         if self._playback is source:
             if self._playback_started:
                 self._last_audible_at = self._now()
@@ -933,7 +981,12 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
         started, self._playback_started = self._playback_started, False
         if started and not source.aborted:
             self._last_audible_at = self._now()
-            self._fading = source
+            previous_fading, self._fading = self._fading, source
+            if previous_fading is not None and previous_fading is not source:
+                # フェードアウト中の音源は1つにする。前のものを残すと鳴り続け、
+                # 終了の後片付け（_on_playback_finished）も先の音源のままで追えなくなる。
+                previous_fading.abort()
+                self._stop_player(previous_fading)
             source.fade_out(_FADE_FRAMES)
         else:
             source.abort()

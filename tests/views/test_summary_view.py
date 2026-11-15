@@ -158,7 +158,7 @@ class SummaryGenerationTests(unittest.IsolatedAsyncioTestCase):
                 with patch.object(summary_service, "fetch_messages_since", AsyncMock(side_effect=history)), patch.object(
                     summary_service, "build_summary_source", return_value=SummarySource(SanitizedHistory("架空の発言"), 1),
                 ), patch.object(summary_service, "load_persona_template", AsyncMock(side_effect=prompt)) as loader, patch.object(
-                    summary_service, "screen_bot_response", AsyncMock(side_effect=lambda text, *args, **kwargs: text),
+                    summary_service, "screen_bot_response_with_status", AsyncMock(side_effect=lambda text, *args, **kwargs: (text, True)),
                 ):
                     async def summarize():
                         return await summary_view.generate_channel_summary(
@@ -177,7 +177,7 @@ class SummaryGenerationTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(text=text), patch.object(summary_service, "fetch_messages_since", AsyncMock(return_value=[object()])), patch.object(
                 summary_service, "build_summary_source", return_value=SummarySource(SanitizedHistory("架空の発言"), 1),
             ), patch.object(summary_service, "load_persona_template", AsyncMock(return_value="架空のペルソナ")), patch.object(
-                summary_service, "screen_bot_response", AsyncMock(),
+                summary_service, "screen_bot_response_with_status", AsyncMock(),
             ) as screen:
                 result, _ = await summary_view.generate_channel_summary(
                     object(), object(), SimpleNamespace(value=1, name="1時間"), guild_settings=GuildSettings(),

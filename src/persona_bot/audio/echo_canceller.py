@@ -337,12 +337,10 @@ class EchoCanceller:
         reference = self._reference.read(end - window - _MAX_DELAY, window + _MAX_DELAY)
         if _energy(mic) < _FLOOR_ENERGY or _energy(reference) < _FLOOR_ENERGY:
             return
-        if self._delay is not None:
-            current = reference[_MAX_DELAY - self._delay:_MAX_DELAY - self._delay + window]
-            if _energy(current) < _FLOOR_ENERGY:
-                # ★ 今の遅延なら回り込みが届かない（ボットが話し終えた後の）区間。参加者の声だけの区間で
-                # 推定し直すと偽のピークに切り替わるため、推定しない。
-                return
+        # 今の遅延の位置のエネルギーが低くても（ボットが話し終えた後の区間など）、推定を打ち切らない。
+        # 遅延が短くなった後や短い発話の後は、ここが無音のまま真の遅延でのみ回り込みが届く。
+        # 回り込みの無い区間の偽のピークは、estimate_delay の相関係数の確認と
+        # 下の切替条件（今の遅延とよく合うときは捨てる・2回確認）で防ぐ。
         lag = estimate_delay(mic, reference, _MAX_DELAY)
         if lag is None:
             return

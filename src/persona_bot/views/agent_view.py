@@ -134,6 +134,10 @@ class AgentProgressBase:
             ("done", 報告) / ("failed", None) / ("canceled", None)。
             呼び出し側のキャンセル（ボットの終了など）はそのまま伝える。
         """
+        if self._cancel_event.is_set():
+            # start()/open() の待機中に中止されていたら、子の作業（第1ステップ）を始めない。
+            logger.info("サブエージェント: 依頼した本人が中止しました。")
+            return "canceled", None
         worker = spawn(work, label="サブエージェントの作業")
         canceled = spawn(self._cancel_event.wait(), label="サブエージェントの中止待ち")
         try:

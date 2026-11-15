@@ -85,11 +85,18 @@ class DocumentLifecycleTests(unittest.IsolatedAsyncioTestCase):
             row = self.db._conn.execute("SELECT status FROM queue_tasks WHERE task_id = ?", (self.task["task_id"],)).fetchone()
         self.assertEqual(row["status"], "completed")
 
-    async def test_missing_persona_prevents_attachment_upload(self):
+    async def test_missing_persona_falls_back_to_builtin_prompt_and_answers(self):
+        # ペルソナのファイルが消えても、標準プロンプトで生成を続ける（#451）。
+        # タスクを失敗にしないため、利用者は内容のある返答を受け取れる。
         self.loader.side_effect = FileNotFoundError("架空のパス")
         await self.service._process_task(self.task)
-        self.service._process_attachment.assert_not_awaited()
-        self.message.reply.assert_awaited_once()
+        self.assertEqual(self.service._process_attachment.await_count, 4)
+        self.assertIn(document_service.BUILTIN_PERSONA_PROMPT, self.gemini.generate.await_args.args[0])
+        self.sent.assert_awaited_once()
+        self.message.reply.assert_not_awaited()
+        with self.db._lock:
+            row = self.db._conn.execute("SELECT status FROM queue_tasks WHERE task_id = ?", (self.task["task_id"],)).fetchone()
+        self.assertEqual(row["status"], "completed")
 
     async def test_failure_notice_masks_user_filename(self):
         self.service._ng_filter = SimpleNamespace(mask_with_log=Mock(return_value="マスク済み"))

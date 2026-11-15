@@ -70,8 +70,11 @@ async def handle_agent_request(
         if work_thread is not None:
             self._agent_work_threads.register(work_thread.id, lines, plan.role)
         elif self._agent_work_threads.is_work_thread(message.channel.id):
-            # 再開した作業スレッドの中で受けた追加の依頼。完了したら、このスレッドを閉じ直す
+            # 再開した作業スレッドの中で受けた追加の依頼。完了したら、このスレッドを閉じ直す。
+            # 新しい依頼の定型文とロールで記録を書き替え、LRU の順序も更新する
+            # （take_reopened で consumed 済みなので、archived=False の新規登録と一致する）。
             work_thread = message.channel
+            self._agent_work_threads.register(message.channel.id, lines, plan.role)
         outcome, report = await progress.run(
             self.agent.run(plan, response_settings.model_name, progress.update)
         )

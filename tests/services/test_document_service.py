@@ -442,7 +442,12 @@ class DocumentResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(update.kwargs["status"], "failed")
         return update.kwargs["error"]
 
-    async def test_persona_read_failure_does_not_publish_internal_path(self) -> None:
+    async def test_missing_persona_file_falls_back_to_builtin_prompt_without_publishing_path(self) -> None:
+        """ペルソナのファイルが消えても、標準プロンプトで処理を続ける（#451）。
+
+        タスクを失敗にせず生成まで進むため、利用者は内容のある返答を受け取れる。
+        内部のパスは返信にも診断ログの本文にも出さない（#220）。
+        """
         # 実際の読込経路（load_persona_template → read_text）で FileNotFoundError を起こす。
         install_persona_catalog(self)
         self.service._state.get_guild(10).current_prompt_file = FICTIONAL_PERSONAS[0]
@@ -450,19 +455,16 @@ class DocumentResponseTests(unittest.IsolatedAsyncioTestCase):
             missing = Path(directory) / "fictional-internal-dir" / "missing-persona.txt"
             with patch.object(document_service, "load_persona_template", paths.load_persona_template), \
                     patch.object(paths, "resolve_prompt_path", return_value=missing):
-                with self.assertLogs(document_service.logger, level="ERROR") as captured:
-                    await self.process_response("使われない回答")
-        reply = self.failure_reply()
-        self.assertEqual(reply, document_service.DOCUMENT_FAILURE_NOTICE)
+                with self.assertLogs(document_service.logger, level="WARNING") as captured:
+                    await self.process_response("要約です。")
+        self.assert_clean_response("要約です。")
+        # 生成へ渡したのは、消えたペルソナの代わりの標準プロンプト。
+        self.assertIn(document_service.BUILTIN_PERSONA_PROMPT, self.gemini.generate.await_args.args[0])
         for leaked in (directory, "fictional-internal-dir", "missing-persona.txt", "Errno", "FileNotFoundError"):
-            self.assertNotIn(leaked, reply)
-        # 原因の調査に要る診断は、内部の失敗記録にだけ残る。
-        self.assertIn("FileNotFoundError", self.saved_error())
-        self.assertIn("missing-persona.txt", self.saved_error())
+            self.assertNotIn(leaked, self.sent.await_args.args[1])
         for record in captured.records:
             self.assertNotIn(directory, record.getMessage())
             self.assertNotIn("missing-persona.txt", record.getMessage())
-        self.gemini.generate.assert_not_awaited()
 
     async def test_unexpected_errors_including_plain_value_error_get_fixed_notice(self) -> None:
         # 一般の ValueError も公開してよい検証エラーとはみなさない。

@@ -33,11 +33,14 @@ class SummaryMessageCountTests(unittest.IsolatedAsyncioTestCase):
         self.gemini = SimpleNamespace(generate=AsyncMock(return_value=("架空の要約", {"total_token_count": 5}, [])))
         self.usage = Mock()
 
-    async def generate(self, messages, *, is_blocked=None):
+    async def generate(self, messages, *, is_blocked=None, screen=None):
         # ファイル・実通信を使わず、履歴の選別から表示・使用量の記録までを通す。
+        # screen は既定で通す（採用）。却下の返り値を差し替えたいときだけ渡す。
+        if screen is None:
+            screen = AsyncMock(side_effect=lambda text, *args, **kwargs: (text, True))
         with patch.object(summary_service, "fetch_messages_since", new=AsyncMock(return_value=messages)), \
                 patch.object(summary_service, "load_persona_template", new=AsyncMock(return_value="架空の指示")), \
-                patch.object(summary_service, "screen_bot_response", new=AsyncMock(side_effect=lambda text, *args, **kwargs: text)):
+                patch.object(summary_service, "screen_bot_response_with_status", new=screen):
             return await summary_service.generate_channel_summary(
                 self.channel, self.bot, self.period,
                 guild_settings=GuildSettings(), gemini=self.gemini, moderator=Mock(),
@@ -105,6 +108,18 @@ class SummaryMessageCountTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("要約できる会話がありません", text)
         self.gemini.generate.assert_not_awaited()
         self.usage.log_snapshot.assert_not_called()
+
+    async def test_discarded_summary_returns_apology_without_header(self):
+        """却下された要約は定型の謝罪文だけを返し、見出しを付けない（#451）。"""
+        screen = AsyncMock(return_value=("申し訳ありませんが、適切な応答を生成できませんでした。", False))
+        success, text = await self.generate([summary_message("架空の投稿")], screen=screen)
+        self.assertFalse(success)
+        self.assertEqual(text, "申し訳ありませんが、適切な応答を生成できませんでした。")
+        self.assertNotIn("📋", text)
+        # 却下の判定は Bot 応答として行う（要約専用の別の文言にしない）。
+        self.assertEqual(screen.await_args.kwargs["log_label"], "会話要約")
+        # 生成自体は成功しているため、却下後もトークンは記録済み（#432）。
+        self.usage.log_snapshot.assert_called_once()
 
     def test_structured_source_preserves_sanitized_marker_timezone_and_text_api(self):
         message = summary_message(

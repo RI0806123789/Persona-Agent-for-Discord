@@ -42,7 +42,7 @@ Linuxではルートで `python3 -m venv .venv` を実行し、`src/` から `..
 
 ## コミット・PR
 
-`feat/...`・`fix/...` ブランチで作業し、既存の未コミット変更を保持する。他の作業がある場合は専用worktreeを使い、同じ依頼を複数エージェントで並行実施しない。履歴には `update ver ...` もあるが、新規コミットは `feat:`・`fix:` と日本語の要約を使い、本文に理由と「★ 壊れやすい点」を記載する。CodexのAuthor・Committerは `Codex <codex@openai.com>` にする。
+`feat/...`・`fix/...` ブランチで作業し、既存の未コミット変更を保持する。他の作業がある場合は専用worktreeを使い、同じ依頼を複数エージェントで並行実施しない。履歴には `update ver ...` もあるが、新規コミットは `feat:`・`fix:` と日本語の要約を使い、本文に理由と「★ 壊れやすい点」を記載する。Author・Committerの名義はエージェントごとに指定する: Codexは `Codex <codex@openai.com>`、OpenCode（GLM）は `OpenCode <noreply@z.ai>`。
 
 PRはテンプレートに沿って変更後の動作、確認結果、未確認範囲を説明し、必要な画像を添える。解決するIssueは末尾の `Closes #番号` で関連付ける。詳細は[CONTRIBUTING.md](CONTRIBUTING.md)を参照する。
 
