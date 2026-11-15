@@ -92,3 +92,29 @@ class TranscriptStateTests(unittest.TestCase):
         state.reset()
         self.assertTrue(third.transcript_closed)
         self.assertIsNone(state.owner)
+
+    def test_discarded_next_does_not_hijack_the_blocked_utterance(self):
+        """遮断中の発話より先に次の発話が破棄されても、owner へ昇格させない（#451）。
+
+        昇格させると、まだ閉じていなかった前の発話の遅れた文字起こしが、
+        次に話し始めた人（別の話者も含む）へ誤って帰属する。
+        """
+        state = _TranscriptState()
+        first, second, third = (_Utterance(index, index, 0.0) for index in (1, 2, 3))
+        state.assign(first, 1.0)
+        state.assign(second, 2.0)
+        # second が短い無音で破棄され、first より先に文字起こしが閉じる。
+        state.close(second)
+        self.assertTrue(second.transcript_closed)
+        self.assertIsNone(state.next)
+        # 前の人（first）の遮断は維持する。
+        self.assertIs(state.blocked, first)
+        self.assertIsNone(state.owner)
+        # third が始まっても、first の文字起こしが閉じるまでは帰属先にしない。
+        state.assign(third, 3.0)
+        self.assertIs(state.next, third)
+        self.assertIsNone(state.owner)
+        self.assertFalse(third.transcript_incomplete)
+        state.close(first)
+        self.assertIs(state.owner, third)
+        self.assertIsNone(state.next)

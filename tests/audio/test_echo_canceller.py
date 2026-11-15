@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from persona_bot.audio import echo_canceller
 from persona_bot.audio.echo_canceller import (
-    BLOCK, EchoCanceller, EchoReference, _Timeline, estimate_delay,
+    BLOCK, EchoCanceller, EchoReference, _Timeline, _WINDOW, estimate_delay,
 )
 from persona_bot.config.constants import LIVE_VAD_ENERGY_THRESHOLD
 
@@ -142,6 +142,34 @@ class DelayEstimateTests(unittest.TestCase):
         self.assertLess(abs(lag - delay), 48)
         unrelated = speech_like(2.0, 9, 3000)
         self.assertIsNone(estimate_delay(unrelated[mic_end - window:mic_end], reference, 16000))
+
+    def test_delay_shortening_is_tracked_even_when_the_old_position_is_silent(self):
+        """ボットが話し終えた後の短い発話でも、遅延の短縮に追従する（#451）。
+
+        以前は「現在の遅延の位置の参照信号が無音」だと推定を打ち切っていたため、
+        遅延が短くなった後（相手側のジッタバッファが減った後など）に
+        新しい遅延へ切り替えられなかった。
+        """
+        played = speech_like(0.75, 7, 3000)  # 12000 サンプル分の声
+        end = 30000
+        reference = EchoReference(clock=lambda: 0.0)
+        canceller = EchoCanceller(reference)
+        # 参照信号は [18000, 30000) に鳴り、mic には遅延 500 で届いた声を置く。
+        # 旧遅延（12000）の位置 [8400, 18000) はもう参照信号が無音。
+        reference._timeline.write(18000, played)
+        canceller._mic.write(end - _WINDOW, played[1900:1900 + _WINDOW])
+        canceller._delay = 12000
+        canceller._spurt_start = end - 12000  # 短い発話：候補の窓（9600）ぎりぎりの長さ
+        canceller._estimate_delay(end)
+        # 1回目は偽のピーク除けのため候補に残すだけで、今の遅延はまだ変わらない。
+        candidate = canceller._candidate_delay
+        self.assertIsNotNone(candidate)
+        self.assertLess(abs(candidate - 500), 48)
+        self.assertEqual(canceller._delay, 12000)
+        canceller._estimate_delay(end)
+        # 2回続いたので採用する（フィルタは学び直しになる）。
+        self.assertEqual(canceller._delay, candidate)
+        self.assertIsNone(canceller._candidate_delay)
 
 
 class CancellerTests(unittest.TestCase):

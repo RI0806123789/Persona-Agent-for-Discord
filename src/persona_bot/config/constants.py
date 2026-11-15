@@ -751,6 +751,9 @@ LIVE_TICK_SECONDS = 0.1
 LIVE_OUTPUT_BUFFER_MS = 400
 # 応答の途中で音声が届かなくなったとき、再生を打ち切るまでの時間（秒）。
 LIVE_PLAYBACK_STALL_SECONDS = 5.0
+# フェードアウト中の音源が鳴り終わるのを待つ上限（秒）。LIVE_BARGE_IN_FADE_MS の絞り切りに
+# 再生スレッドの終了が追いつくのを見て、それでも終わらなければ諦めて切り替える。
+LIVE_PLAYBACK_FADE_WAIT_SECONDS = 0.5
 # 話し終わってから、入力の文字起こしが出そろうのを待つ時間（秒）。
 # 文字起こしがこの時間増えなければ、確定とみなして入力の AI モデレーションへ回す。
 LIVE_INPUT_TRANSCRIPT_SETTLE_SECONDS = 0.8

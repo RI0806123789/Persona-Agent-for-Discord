@@ -374,10 +374,16 @@ class ThreadProgressTests(unittest.IsolatedAsyncioTestCase):
         self.channel.webhooks.return_value = [replacement]
         with patch("persona_bot.views.agent_thread.logger"):
             await progress.update(0, "候補の検索")
+            # 1回の投稿では再取得は1回だけ。再取得した Webhook でも見つからなければ
+            # その投稿を諦めて、使えない Webhook をキャッシュから捨てる。
+            self.assertEqual(self.channel.webhooks.await_count, 1)
+            self.assertEqual(replacement.send.await_count, 1)
+            self.assertNotIn(self.channel.id, self.webhooks._cache)
+            # 次の投稿では一時的な失敗とみなして、Webhook の再取得を改めて試みる（#451）。
             await progress.update(1, "特徴の比較")
-        self.channel.webhooks.assert_awaited_once()
-        replacement.send.assert_awaited_once()
-        self.assertNotIn(self.channel.id, self.webhooks._cache)
+            self.assertEqual(self.channel.webhooks.await_count, 3)
+            self.assertEqual(replacement.send.await_count, 3)
+            self.assertNotIn(self.channel.id, self.webhooks._cache)
 
     async def test_webhook_recovery_failure_does_not_stop_work(self) -> None:
         progress = await self.open()

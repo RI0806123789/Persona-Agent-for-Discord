@@ -479,7 +479,9 @@ class StatsService:
                     or self._entry_opted_out(entry)):
                 return deepcopy(entry.get("analysis"))
             if self._analysis_tasks.get(user_id) is not flight:
-                return deepcopy(entry.get("analysis") or analysis)
+                # 新しい解析の実行に交代された。計算済みの新しい結果を優先して返し、
+                # 古いキャッシュは解析が失敗した（analysis が None）ときだけ使う。
+                return deepcopy(analysis or entry.get("analysis"))
             candidate = deepcopy(entry)
             candidate["analysis"] = analysis
             if not await self._save_user_locked(user_id, candidate):

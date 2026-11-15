@@ -412,6 +412,9 @@ class AgentThreadProgress(AgentProgressBase):
 
     async def _child_send(self, content: str, *, suppress_embeds: bool = False) -> None:
         """子の名前とアイコンで投稿する。長い報告は分割する。失敗しても作業は止めない。"""
+        if self._webhook is None and self._bot_user_id is not None:
+            # 一時的な失敗で Webhook を手放した場合も、以降の投稿のたびに再取得を試みる。
+            self._webhook = await self._webhooks.get(self._source.channel, self._bot_user_id)
         retried = False
         for chunk in split_message(content):
             while self._webhook is not None:
@@ -427,6 +430,11 @@ class AgentThreadProgress(AgentProgressBase):
                     )
                     break
                 except discord.NotFound as error:
+                    if error.code == 10003:
+                        # スレッドが削除された（Unknown Channel）。親チャンネルの Webhook は
+                        # 生きているため、キャッシュを捨てずにこの投稿だけを省略する。
+                        logger.warning("サブエージェント: 作業スレッドが削除されたため、子の投稿を省略します。", exc_info=error)
+                        return
                     self._webhooks.forget(self._source.channel.id, self._webhook)
                     self._webhook = None
                     if retried:

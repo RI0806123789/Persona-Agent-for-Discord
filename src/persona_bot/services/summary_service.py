@@ -10,7 +10,7 @@ import discord
 from persona_bot.services.affinity_service import strip_affinity_tag
 from persona_bot.core.app_state import GuildSettings
 from persona_bot.config.constants import SUMMARY_MAX_MESSAGES, SUMMARY_TIMEOUT_SECONDS
-from persona_bot.services.content_moderator import ContentModerator, screen_bot_response
+from persona_bot.services.content_moderator import ContentModerator, screen_bot_response_with_status
 from persona_bot.utils.discord_helpers import build_summary_source, fetch_messages_since
 from persona_bot.services.gemini_service import GeminiService
 from persona_bot.services.ng_word_service import NgWordFilter
@@ -99,10 +99,13 @@ async def generate_channel_summary(
     if not response_text:
         return False, "⚠️ 要約の生成結果が空でした。時間をおいて再度お試しください。"
 
-    # Bot自身の応答としてNGワードマスク＋AIモデレーションを適用する（既存パイプラインと同様）
-    response_text = await screen_bot_response(
+    # Bot自身の応答としてNGワードマスク＋AIモデレーションを適用する（既存パイプラインと同様）。
+    # 却下された謝罪文は要約として公開しないため、is_summary=False として本人だけの表示に戻す。
+    response_text, accepted = await screen_bot_response_with_status(
         response_text, ng_filter, moderator, log_label="会話要約"
     )
+    if not accepted:
+        return False, response_text
 
     header = f"📋 **会話要約（期間: {period.name} / 対象: {source.message_count}件）**\n\n"
     return True, header + response_text

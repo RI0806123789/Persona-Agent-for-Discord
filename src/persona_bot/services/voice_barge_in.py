@@ -150,6 +150,10 @@ def classify_interruption(text: str, recent_output: str) -> str:
     """ペルソナの発話中に話し始めた人の文字起こしを判定する（INTERRUPTION_*）。"""
     if is_echo_text(text, recent_output):
         return INTERRUPTION_ECHO
+    if recent_output and len(_compact(text[:LIVE_TRANSCRIPT_MAX_CHARS])) < LIVE_ECHO_TEXT_MIN_CHARS:
+        # ペルソナの声が出ている間の短い断片は、回り込みの一部かもしれない。文字数が足りないと
+        # echo_overlap が 0 を返して照合できないため、割り込みに確定せず続きを待つ（相槌と同じ扱い）。
+        return INTERRUPTION_FILLER
     if estimate_word_count(text) >= LIVE_BARGE_IN_MIN_WORDS:
         return INTERRUPTION_SPEECH
     return INTERRUPTION_FILLER

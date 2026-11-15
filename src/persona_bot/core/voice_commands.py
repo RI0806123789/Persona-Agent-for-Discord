@@ -292,21 +292,58 @@ class VoiceSessionCommands:
                 if (isinstance(voice_client, discord.VoiceClient) and voice_client.is_connected()
                         and getattr(voice_client.channel, "id", None) == voice_channel.id
                         and (live_voice is None or isinstance(voice_client, LiveVoiceClient))):
+                    conversation = live_voice.get(guild.id) if live_voice is not None else None
+                    restarting = live_voice is not None and (
+                        conversation is None or conversation.stopped
+                        or conversation.voice_client is not voice_client
+                        or conversation.channel_id != voice_channel.id
+                    )
+                    reservation = None
+                    if restarting:
+                        # 新規接続のパスと同じく、保護の引継ぎやステージ昇格の API の前に
+                        # 同時実行の上限を確かめる（後で断ると、その分を無駄にした上で
+                        # 接続を切ることになる）。
+                        reservation = live_voice.reserve(guild.id)
+                        if not reservation:
+                            # 会話が動いていない接続は残しても音声会話に使えないため、
+                            # 開始失敗時と同じ片付け（保護の解除と切断）を行う。
+                            if voice_guard is not None:
+                                voice_guard.release(guild.id)
+                            try:
+                                await wait_for_cleanup(
+                                    voice_client.disconnect(force=True), label="同時実行上限での切断",
+                                )
+                            except Exception:
+                                logger.warning("同時実行の上限に達した後の切断に失敗しました。", exc_info=True)
+                            await interaction.followup.send(
+                                NOTICE_LIVE_CAPACITY, allowed_mentions=discord.AllowedMentions.none(),
+                            )
+                            return
                     # 移された先で /join された場合も、ここを意図した接続先にする（元へ戻さない）。
                     if voice_guard is not None:
                         voice_guard.adopt(guild.id, voice_channel.id)
                     speaker_ready = False
                     if live_voice is not None:
-                        conversation = live_voice.get(guild.id)
-                        if (conversation is None or conversation.stopped
-                                or conversation.voice_client is not voice_client
-                                or conversation.channel_id != voice_channel.id):
+                        if restarting:
                             # 接続はあるが、このチャンネルの音声会話が動いていない（止まっている・
                             # 移された先で /join された）。同じ接続のまま、このチャンネル用に始め直す。
-                            # ステージでは先に発言者へ昇格し、声を出せないまま会話を始めない。
+                            # まず旧チャンネル用に動いていた会話を止める（この後の昇格に失敗して
+                            # 退出するときも、会話タスクを残留させない）。ステージでは先に発言者へ
+                            # 昇格し、声を出せないまま会話を始めない。
+                            if conversation is not None and not conversation.stopped:
+                                await live_voice.stop(guild.id, reason="/join による音声会話の始め直し")
                             if not await self.prepare_stage_for_live(interaction, voice_client, voice_channel):
+                                live_voice.release_reservation(guild.id, reservation=reservation)
                                 return
-                            if not await self.start_live_voice(interaction, voice_client, voice_channel):
+                            if not await self.start_live_voice(interaction, voice_client, voice_channel, reservation=reservation):
+                                return
+                            speaker_ready = True
+                        else:
+                            # 同じチャンネルで会話が続いている。ステージで聴衆へ降格されていた場合に
+                            # 備えて発言者へ戻す（戻せないなら、声を出せない会話を続けさせない）。
+                            # ここで昇格を済ませるため、案内側の昇格は行わない。
+                            if not await self.prepare_stage_for_live(interaction, voice_client, voice_channel):
+                                await live_voice.stop(guild.id, reason="ステージの発言者に戻れなかったため会話を終了")
                                 return
                             speaker_ready = True
                     await announce_voice_join(

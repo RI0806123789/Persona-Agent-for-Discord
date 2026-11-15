@@ -6,6 +6,8 @@
 全サーバー共通の違反情報は、サーバー管理者へ開示しない。
 """
 
+import logging
+
 import discord
 from discord import ui
 
@@ -15,6 +17,9 @@ from persona_bot.utils.discord_helpers import is_bot_owner, is_current_bot_owner
 from persona_bot.views.view_parts import (
     BackButton, HubFactory, PanelView, authorize_panel_operation, edit_panel_message, select_option_text,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class UnblockSelect(ui.Select):
@@ -46,7 +51,16 @@ class UnblockSelect(ui.Select):
         user_id = int(self.values[0])
         # 選択肢のラベルから表示名を拾う（通知メッセージ用）
         name = next((o.label for o in self.options if o.value == self.values[0]), str(user_id))
-        if await view.blacklist.unblock(user_id):
+        try:
+            unblocked = await view.blacklist.unblock(user_id)
+        except OSError as error:
+            # data/ng/blacklist.json への書き込みに失敗したときも、失敗を黙って捨てない。
+            logger.error("ブロック解除パネル: 解除の保存に失敗しました。", exc_info=error)
+            await edit_panel_message(interaction, deferred=True,
+                content=f"⚠️ {name} のブロック解除を保存できませんでした。時間をおいて再度お試しください。", view=None
+            )
+            return
+        if unblocked:
             await edit_panel_message(interaction, deferred=True, content=f"✅ {name} のブロックを解除しました。", view=None)
         else:
             await edit_panel_message(interaction, deferred=True,

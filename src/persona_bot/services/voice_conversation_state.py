@@ -240,9 +240,14 @@ class _TranscriptState:
         if utterance is None:
             return
         utterance.transcript_closed = True
-        if utterance is self.blocked or utterance is self.next:
+        if utterance is self.blocked:
+            # 遮断を解いて、待たせていた発言を帰属先に昇格させる。
             self.blocked = None
             self.owner, self.next = self.next, None
+        elif utterance is self.next:
+            # 待たせていた発言が先に閉じた（破棄された）場合も、前の人の遮断は維持する。
+            # ここで owner に昇格させると、前の人の遅れた文字起こしが次に話し始めた人へ混入する。
+            self.next = None
 
     def reset(self) -> None:
         self.close(self.blocked)

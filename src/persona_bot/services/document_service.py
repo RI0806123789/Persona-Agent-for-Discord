@@ -14,6 +14,7 @@ from persona_bot.services.affinity_service import strip_affinity_tag
 from persona_bot.core.app_state import BotState
 from persona_bot.core.background import run_in_thread, spawn, wait_for_cleanup
 from persona_bot.config.constants import (
+    BUILTIN_PERSONA_PROMPT,
     DOCUMENT_FAILURE_NOTICE,
     DOCUMENT_MEMORY_CONTEXT_LIMIT,
     DOCUMENT_ONLY_QUESTION,
@@ -86,7 +87,7 @@ class DocumentService:
         ng_filter: NgWordFilter | None = None,
         moderator: ContentModerator | None = None,
         *,
-        is_blocked: Callable[[int], bool] | None = None,
+        is_blocked: Callable[[int | str], bool] | None = None,
     ) -> None:
         self._client = client
         self._state = state
@@ -215,6 +216,20 @@ class DocumentService:
 
         try:
             message = await self._fetch_message_from_task(task)
+            # 文書タスクは投稿者の記憶スペースに紐付けて処理する（ユーザー別記憶）。
+            author_id = str(task.get("author_id") or message.author.id)
+            if author_id == "0":
+                author_id = str(message.author.id)
+            # 受付後にブロックされた投稿者のタスクは、生成・返信のどちらも行わず破棄する
+            # （on_message のブロック済み破棄と同じ扱い。失敗の返信も送らない）。
+            # blacklist の参照は内部で文字列化するため、受付時のID表現のまま渡してよい。
+            if self._is_blocked is not None and self._is_blocked(author_id):
+                logger.info("文書タスク: 投稿者がブロックされたため、タスクを破棄しました。")
+                await self._update_task(
+                    task_id, status="failed", finished_at=utc_now_iso(),
+                    error="投稿者がブロックされたため破棄しました。",
+                )
+                return
             attachments = [
                 attachment
                 for attachment in message.attachments
@@ -223,10 +238,6 @@ class DocumentService:
             if not attachments:
                 raise DocumentUserError("対応する文書の添付が見つかりませんでした。")
 
-            # 文書タスクは投稿者の記憶スペースに紐付けて処理する（ユーザー別記憶）。
-            author_id = str(task.get("author_id") or message.author.id)
-            if author_id == "0":
-                author_id = str(message.author.id)
             # 質問は、受付時に NG 判定と入力モデレーションを通した保存済みの値だけを使う（#203）。
             # 再取得した投稿の本文は、受付後に編集されていても誰も検査していないため生成へ渡さない。
             # 添付は編集で外すことしかできず差し替えられないので、再取得した一覧を使ってよい。
@@ -240,7 +251,13 @@ class DocumentService:
             guild_settings = await self._state.get_guild_async(guild_id)
             response_settings = guild_settings.snapshot_response()
 
-            prompt = await load_persona_template(response_settings.prompt_file)
+            try:
+                prompt = await load_persona_template(response_settings.prompt_file)
+            except FileNotFoundError as error:
+                # 受付後にペルソナのファイルが消えた場合も、組み込みの標準プロンプトで処理を続ける
+                # （タスク全体を失敗にすると、利用者は内容に関係なく汎用の失敗通知しか受け取れない）。
+                logger.warning("文書タスク: ペルソナのファイルが見つからないため、標準のプロンプトで処理します。", exc_info=error)
+                prompt = BUILTIN_PERSONA_PROMPT
             summaries = [
                 await self._process_attachment(attachment, author_id, response_settings.model_name)
                 for attachment in attachments
