@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import app
 from profiles import Profile
-from ssh_session import CONNECTION_LOST_SAFE_MESSAGE, SshError, SshSession
+from ssh_session import CONNECTION_LOST_SAFE_MESSAGE, CommandStateUnknownError, SshError, SshSession
 from test_api import request
 
 
@@ -225,3 +225,25 @@ class SshErrorPrivacyTests(unittest.IsolatedAsyncioTestCase):
         await session.disconnect()
         self.assertIsNone(session.snapshot().get("last_error_safe"))
         self.assertEqual(session.history_list()[0]["error_safe"], CONNECTION_LOST_SAFE_MESSAGE)
+
+    async def test_update_command_transport_failure_keeps_the_safe_message_when_rewrapped(self):
+        # 更新操作の通信失敗は、状態不明の注意を足して作り直される。その例外にも安全な文面が残ること。
+        session = SshSession()
+        session.profile = profile()
+        resolved_host = "uncollected-resolved.fixture.invalid"
+        session._conn = SimpleNamespace(create_process=AsyncMock(side_effect=OSError(resolved_host)))
+        with self.assertRaises(CommandStateUnknownError) as raised:
+            await session.run("架空のコマンド", label="更新の確認", wait_for_exit=True)
+        error = raised.exception
+        self.assertIn(resolved_host, str(error))
+        self.assertIsNotNone(error.safe_message)
+        self.assertNotIn(resolved_host, error.safe_message)
+        self.assertIn("バックエンドを起動し直してください", error.safe_message)
+        record = session.history_list()[0]
+        self.assertEqual(record["error_safe"], error.safe_message)
+        self.assertIn(resolved_host, record["error"])
+        # APIも安全な文面を detail_safe として返す。
+        response = await app.handle_command_state_unknown(None, error)
+        body = json.loads(response.body)
+        self.assertEqual(body["detail_safe"], error.safe_message)
+        self.assertNotIn(resolved_host, body["detail_safe"])

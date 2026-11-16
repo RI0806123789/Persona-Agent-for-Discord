@@ -102,7 +102,10 @@ async def handle_ssh_error(_request: Request, error: SshError) -> JSONResponse:
 
 @app.exception_handler(CommandStateUnknownError)
 async def handle_command_state_unknown(_request: Request, error: CommandStateUnknownError) -> JSONResponse:
-    return JSONResponse({"detail": str(error)}, status_code=409)
+    detail = {"detail": str(error)}
+    if error.safe_message is not None:
+        detail["detail_safe"] = error.safe_message
+    return JSONResponse(detail, status_code=409)
 
 
 @app.exception_handler(ProfileError)

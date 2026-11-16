@@ -205,6 +205,11 @@ def collect(db_path, table, offset=0, limit=50):
 
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
+    if len(args) < 3:
+        print(json.dumps({
+            "errors": ["引数が足りません。bot.db と blacklist.json、およびオフセット・件数を指定してください。"],
+        }))
+        return
     # 省略時・不正値のときは、従来どおり開始位置と件数を一緒に既定値へ戻す。
     offset, limit = args[3:5] if len(args) >= 5 else (0, 50)
     result = collect(args[1], args[2], offset, limit)

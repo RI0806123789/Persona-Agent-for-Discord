@@ -198,6 +198,7 @@ export function DataPage({
 /** 本番のスキーマの版を、手元のリポジトリ（src/persona_bot/core/database.py）の版と比べる。 */
 function SchemaChip({ deployed, latest }: { deployed: number | undefined; latest: number | null | undefined }) {
   if (latest === null || latest === undefined) return <StatusChip tone="neutral" label="手元の版を読めません" />;
+  if (deployed === null || deployed === undefined) return <StatusChip tone="neutral" label="サーバーの版を読めません" />;
   if (deployed === latest) return <StatusChip tone="good" icon="checkCircle" label="手元と同じ" />;
   if (deployed !== undefined && deployed > latest) return <StatusChip tone="warning" icon="alert" label={`手元（v${latest}）より新しい`} />;
   return <StatusChip tone="warning" icon="alert" label={`手元は v${latest}（未デプロイ）`} />;

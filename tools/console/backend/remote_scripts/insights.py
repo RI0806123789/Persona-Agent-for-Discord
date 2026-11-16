@@ -707,6 +707,11 @@ def collect(bot_dir, service, journal_sudo=False):
 
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
+    if len(args) < 3:
+        print(json.dumps({
+            "errors": ["引数が足りません。bot ディレクトリとサービス名を指定してください。"],
+        }))
+        return
     # 既存の --insights フラグと引数の位置を維持する。
     result = collect(args[1], args[2], "--journal-sudo" in args[3:])
     print(json.dumps(result))

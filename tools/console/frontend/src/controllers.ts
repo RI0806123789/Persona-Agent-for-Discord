@@ -75,7 +75,12 @@ export function useDeployController(
       notify({ tone: "info", title: "デプロイを始めました", detail: "サービス操作のページで、1ステップずつ進み具合を確かめられます。" });
     } catch (error) {
       if (!isCurrent()) return;
-      notify({ tone: "critical", title: "デプロイを始められませんでした", detail: errorMessage(error) });
+      notify({
+        tone: "critical",
+        title: "デプロイを始められませんでした",
+        detail: errorMessage(error),
+        detailSafe: error instanceof ApiError ? error.safeMessage : undefined,
+      });
     } finally {
       if (deployStarting.current === isCurrent) deployStarting.current = null;
     }
@@ -105,7 +110,12 @@ export function useServiceController(
         );
       } catch (error) {
         if (!isCurrent()) return;
-        notify({ tone: "critical", title: `${ACTION_LABELS[action]}できませんでした`, detail: errorMessage(error) });
+        notify({
+          tone: "critical",
+          title: `${ACTION_LABELS[action]}できませんでした`,
+          detail: errorMessage(error),
+          detailSafe: error instanceof ApiError ? error.safeMessage : undefined,
+        });
       } finally {
         if (isCurrent()) {
           setActionState(null);

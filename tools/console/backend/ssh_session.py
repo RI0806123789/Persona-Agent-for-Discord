@@ -289,8 +289,9 @@ class SshSession:
             raise SshError(message) from error
         except (asyncssh.Error, OSError) as error:
             message = f"{label}: 通信に失敗しました（{type(error).__name__}: {error}）。"
-            self._record(label, command, None, started, ok=False, error=message)
-            raise SshError(message) from error
+            safe_message = f"{label}: 通信に失敗しました。"
+            self._record(label, command, None, started, ok=False, error=message, error_safe=safe_message)
+            raise SshError(message, safe_message=safe_message) from error
 
         exit_status = result.exit_status
         duration_ms = self._record(label, command, exit_status, started, ok=exit_status == 0)
@@ -331,7 +332,8 @@ class SshSession:
                         await process.wait_closed()
             except (asyncssh.Error, OSError) as error:
                 raise CommandStateUnknownError(
-                    f"{label}: 通信に失敗し、遠隔コマンドの終了を確認できません（{type(error).__name__}: {error}）。"
+                    f"{label}: 通信に失敗し、遠隔コマンドの終了を確認できません（{type(error).__name__}: {error}）。",
+                    safe_message=f"{label}: 通信に失敗し、遠隔コマンドの終了を確認できません。",
                 ) from error
             except CommandStateUnknownError:
                 raise
@@ -373,11 +375,14 @@ class SshSession:
                 raise SshError(f"{label}: {timeout:g} 秒以内に応答がありませんでした。遠隔コマンドの終了を確認しました。") from error
         except CommandStateUnknownError as error:
             self.command_state_unknown = True
-            message = str(error) + " 状態不明のため、サーバーで処理の終了と状態を確認してからバックエンドを起動し直してください。"
-            self._record(label, command, None, started, ok=False, error=message)
+            suffix = " 状態不明のため、サーバーで処理の終了と状態を確認してからバックエンドを起動し直してください。"
+            message = str(error) + suffix
+            # 作り直す例外にも安全な文面を引き継ぐ（落とすと、伏せ字中に生のエラーへ戻ってしまう）。
+            safe_message = None if error.safe_message is None else error.safe_message + suffix
+            self._record(label, command, None, started, ok=False, error=message, error_safe=safe_message)
             if canceled:
                 raise asyncio.CancelledError from error
-            raise CommandStateUnknownError(message) from error
+            raise CommandStateUnknownError(message, safe_message=safe_message) from error
         except SshError as error:
             message = str(error)
             self._record(label, command, finished_exit_status, started, ok=False, error=message)
@@ -403,8 +408,9 @@ class SshSession:
             process = await conn.create_process(command, errors="replace")
         except (asyncssh.Error, OSError) as error:
             message = f"{label}: 開始できませんでした（{error}）。"
-            self._record(label, command, None, started, ok=False, error=message)
-            raise SshError(message) from error
+            safe_message = f"{label}: 開始できませんでした。SSHの接続状態を確認してから再試行してください。"
+            self._record(label, command, None, started, ok=False, error=message, error_safe=safe_message)
+            raise SshError(message, safe_message=safe_message) from error
         self._record(label, command, None, started, ok=True)
         return process
 

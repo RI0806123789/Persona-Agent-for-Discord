@@ -988,6 +988,7 @@ class DbTableScriptTests(unittest.TestCase):
 
     def test_names_are_looked_up_only_for_the_shown_users(self) -> None:
         con = sqlite3.connect(":memory:")
+        self.addCleanup(con.close)
         con.execute("CREATE TABLE reminders (reminder_id INTEGER PRIMARY KEY, user_id TEXT, user_name TEXT)")
         con.execute("CREATE TABLE user_stats (user_id TEXT PRIMARY KEY, user_name TEXT)")
         # 表示しない利用者の行を多数置いても、問い合わせは表示中の ID だけに絞られる
@@ -1014,6 +1015,7 @@ class DbTableScriptTests(unittest.TestCase):
         chunk = db_table.NAME_LOOKUP_CHUNK
         self.assertLess(chunk, 999)  # 古い SQLite の変数の上限
         con = sqlite3.connect(":memory:")
+        self.addCleanup(con.close)
         con.execute("CREATE TABLE user_stats (user_id TEXT PRIMARY KEY, user_name TEXT)")
         ids = [str(10_000 + index) for index in range(chunk * 2 + 1)]
         con.executemany("INSERT INTO user_stats VALUES (?, ?)", [(user_id, "架空" + user_id) for user_id in ids])
