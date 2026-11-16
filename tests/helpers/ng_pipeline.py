@@ -4,7 +4,6 @@ Discord・Gemini はモックに置き換える。NG 語は架空の1語だけ�
 data/ng/NG_WORD.txt・data/ng/NG_WORD_private.txt・data/ng/blacklist.json には触れない。
 """
 
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
@@ -18,6 +17,7 @@ from persona_bot.services import ng_word_service
 from persona_bot.services.blacklist_service import BlacklistService
 from persona_bot.services.ng_word_service import NgWordFilter
 from tests.helpers.message_handler_helpers import make_message_handler
+from tests.helpers.discord_mocks import make_spec_channel
 
 FICTIONAL_NG_WORD = "ふわもこ禁止語"
 BOT_USER_ID = 99
@@ -31,14 +31,7 @@ def close_coroutine(coro, **kwargs):
 
 
 def make_channel(spec: type, channel_id: int) -> Mock:
-    channel = Mock(spec=spec, id=channel_id)
-
-    @asynccontextmanager
-    async def typing():
-        yield
-
-    channel.typing.side_effect = typing
-    return channel
+    return make_spec_channel(spec, channel_id)
 
 
 def make_voice_client(channel_id: int, *, connected: bool = True) -> Mock:

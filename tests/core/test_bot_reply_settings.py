@@ -27,6 +27,7 @@ from persona_bot.config.constants import GROUNDING_MODEL_NAME
 from persona_bot.services.gemini_service import GeminiService
 from persona_bot.services.feedback_service import FeedbackService
 from persona_bot.utils.logging_setup import LOG_DATE_FORMAT, LOG_FORMAT, OperationalFormatter
+from tests.helpers.discord_mocks import make_spec_channel
 
 
 LOG_FORMATTER = OperationalFormatter(LOG_FORMAT, LOG_DATE_FORMAT)
@@ -290,13 +291,7 @@ class ReplySettingsTests(unittest.IsolatedAsyncioTestCase):
         self.settings = self.state.get_guild(None)
         self.configure_old()
         self.message.guild = None
-        self.message.channel = Mock(spec=discord.DMChannel, id=10)
-
-        @asynccontextmanager
-        async def typing():
-            yield
-
-        self.message.channel.typing.side_effect = typing
+        self.message.channel = make_spec_channel(discord.DMChannel, 10)
         await self.check_old_settings_are_used()
 
     async def test_generation_failure_is_not_tracked_or_spoken(self) -> None:

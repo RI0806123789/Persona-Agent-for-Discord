@@ -35,7 +35,7 @@ from persona_bot.views import stats_view
 from persona_bot.views import summary_view
 from persona_bot.views import unblock_view
 from persona_bot.views import view_parts
-from tests.helpers.discord_mocks import make_channel, make_interaction as make_discord_interaction, make_message
+from tests.helpers.discord_mocks import make_channel, make_interaction as make_discord_interaction, make_message, make_permissions
 from tests.helpers.member_helpers import make_member
 
 
@@ -178,7 +178,7 @@ class LongMessageTests(unittest.IsolatedAsyncioTestCase):
         text = "あ" * 4001
         channel = SimpleNamespace(
             id=10, name="架空のチャンネル", send=AsyncMock(), guild=SimpleNamespace(me=object()),
-            permissions_for=Mock(return_value=SimpleNamespace(view_channel=True, send_messages=True)),
+            permissions_for=Mock(return_value=make_permissions(send_messages_in_threads=False)),
         )
         settings = auto_topic_service.GuildSettings(
             current_prompt_file="架空のパス", current_model_name="架空モデル",

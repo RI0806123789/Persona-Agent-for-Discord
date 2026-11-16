@@ -17,7 +17,9 @@ from tests.helpers.discord_mocks import (
     make_history,
     make_interaction,
     make_message,
+    make_permissions,
     make_response,
+    make_spec_channel,
 )
 
 
@@ -170,6 +172,42 @@ class ChannelGuildMessageTests(unittest.IsolatedAsyncioTestCase):
         author = SimpleNamespace(id=1, bot=True)
         self.assertIs(make_message(author=author).author, author)
         self.assertIsNot(make_message().channel, make_message().channel)
+
+
+class PermissionsAndTypingTests(unittest.IsolatedAsyncioTestCase):
+    def test_permissions_default_to_allowed_and_accept_overrides(self) -> None:
+        self.assertEqual(
+            vars(make_permissions()),
+            {"view_channel": True, "send_messages": True, "send_messages_in_threads": True},
+        )
+        permissions = make_permissions(send_messages=False, manage_threads=True)
+        self.assertFalse(permissions.send_messages)
+        self.assertTrue(permissions.manage_threads)
+        self.assertTrue(permissions.view_channel)
+
+    async def test_spec_channel_keeps_its_type_and_typing_does_nothing(self) -> None:
+        import discord
+
+        channel = make_spec_channel(discord.DMChannel, 7)
+        self.assertIsInstance(channel, discord.DMChannel)
+        self.assertEqual(channel.id, 7)
+        async with channel.typing():
+            pass
+        self.assertEqual(channel.typing.call_count, 1)
+        # 独自の動きが要るときは side_effect を差し替えられる。
+        entered = []
+
+        class Recording:
+            async def __aenter__(self):
+                entered.append(True)
+
+            async def __aexit__(self, *exc):
+                return False
+
+        channel.typing.side_effect = lambda: Recording()
+        async with channel.typing():
+            pass
+        self.assertEqual(entered, [True])
 
 
 if __name__ == "__main__":

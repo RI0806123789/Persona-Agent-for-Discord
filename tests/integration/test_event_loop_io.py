@@ -26,6 +26,7 @@ from persona_bot.services.memory_service import MemoryService, default_projects_
 from persona_bot.services.stats_service import StatsService
 from persona_bot.utils.storage import load_json_file, write_json_file
 from persona_bot.utils.usage_graph import UsageTracker
+from tests.helpers.discord_mocks import make_interaction, make_response
 
 
 class EventLoopIOTests(unittest.IsolatedAsyncioTestCase):
@@ -348,9 +349,9 @@ class EventLoopIOTests(unittest.IsolatedAsyncioTestCase):
     async def test_graph_button_defers_before_render_and_reports_errors(self) -> None:
         for failed in (False, True):
             with self.subTest(failed=failed):
-                interaction = SimpleNamespace(
-                    response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
-                    followup=SimpleNamespace(send=AsyncMock()),
+                interaction = make_interaction(
+                    response=make_response("defer", "send_message"),
+                    without=("edit_original_response", "original_response"),
                 )
                 buffer = io.BytesIO(b"fictional-png")
 

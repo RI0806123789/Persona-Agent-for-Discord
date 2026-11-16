@@ -22,6 +22,7 @@ from persona_bot.services import autonomous_service
 from persona_bot.services import voice_guard as voice_guard_module
 from persona_bot.services.autonomous_service import AutonomousService
 from persona_bot.services.voice_guard import VoiceGuard
+from tests.helpers.discord_mocks import make_http_response
 
 BOT_ID = 99
 HOME_ID = 10
@@ -189,8 +190,8 @@ class VoiceGuardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_stage_promotion_leaves_and_releases_protection(self) -> None:
         errors = (
-            discord.Forbidden(SimpleNamespace(status=403, reason="架空の拒否"), "架空の権限変更"),
-            discord.HTTPException(SimpleNamespace(status=500, reason="架空の障害"), "架空のAPI失敗"),
+            discord.Forbidden(make_http_response(403, "架空の拒否"), "架空の権限変更"),
+            discord.HTTPException(make_http_response(500, "架空の障害"), "架空のAPI失敗"),
             RuntimeError("架空のボイス状態取得失敗"),
         )
         for error in errors:

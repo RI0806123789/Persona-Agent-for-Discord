@@ -21,6 +21,7 @@ from tests.helpers.autonomous_patch import patch_autonomous
 from tests.helpers.message_handler_helpers import make_message_handler
 from tests.helpers.thread_probe import make_thread_probe
 from tests.helpers.persona_helpers import install_persona_catalog
+from tests.helpers.discord_mocks import make_http_response, make_spec_channel
 
 
 class AutonomousSpeechTests(unittest.IsolatedAsyncioTestCase):
@@ -37,14 +38,8 @@ class AutonomousSpeechTests(unittest.IsolatedAsyncioTestCase):
             last_human_at=now, last_spoke_at=now, busy=True,
         )
         self.settings.autonomous_session = self.session
-        self.channel = Mock(spec=discord.VoiceChannel, id=10)
+        self.channel = make_spec_channel(discord.VoiceChannel, 10)
         self.channel.name = "架空の配信チャンネル"
-
-        @asynccontextmanager
-        async def typing():
-            yield
-
-        self.channel.typing.side_effect = typing
         self.voice = Mock(spec=discord.VoiceClient)
         self.voice.channel = self.channel
         self.voice.is_connected.return_value = True
@@ -95,7 +90,7 @@ class AutonomousSpeechTests(unittest.IsolatedAsyncioTestCase):
                 self.settings.autonomous_session = self.session
                 self.session.busy = True
                 self.voice.disconnect.reset_mock()
-                self.sent.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="禁止"), "架空の送信拒否")
+                self.sent.side_effect = discord.Forbidden(make_http_response(403, "禁止"), "架空の送信拒否")
                 await self.speak(kind)
                 self.assertIsNone(self.settings.autonomous_session)
                 self.assertFalse(self.session.busy)

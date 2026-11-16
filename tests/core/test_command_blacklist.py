@@ -15,6 +15,7 @@ from persona_bot.core.app_state import GuildSettings
 from persona_bot.views.functions_view import FunctionsView
 from persona_bot.views.settings_view import SettingsView
 from persona_bot.views.view_parts import BackButton, swap_panel
+from tests.helpers.discord_mocks import make_interaction
 
 
 class CommandBlacklistTests(unittest.IsolatedAsyncioTestCase):
@@ -32,11 +33,9 @@ class CommandBlacklistTests(unittest.IsolatedAsyncioTestCase):
         guild = SimpleNamespace(id=guild_id, voice_client=SimpleNamespace(disconnect=AsyncMock()))
         user = Mock(spec=discord.Member, id=11, voice=SimpleNamespace(channel=channel),
                     guild_permissions=SimpleNamespace(administrator=admin))
-        return SimpleNamespace(
+        return make_interaction(
             user=user, guild=guild if guild_id is not None else None, guild_id=guild_id,
-            response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock(), edit_message=AsyncMock(),
-                                     is_done=Mock(return_value=False)),
-            original_response=AsyncMock(), followup=SimpleNamespace(send=AsyncMock()),
+            without=("edit_original_response",),
         )
 
     async def test_all_commands_reject_blocked_users_before_any_side_effect(self):
