@@ -8,19 +8,20 @@
 パネルの本文には人数だけを出し、誰が同意していないかは出さない。
 
 機能パネル（`PanelView`）ではなく、チャンネルに出す1通のメッセージに付ける部品なので
-`ui.View` を直接継承する（`agent_view.AgentCancelView` と同じ）。
+`OwnedView` を継承する（`agent_view.AgentCancelView` と同じ）。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable
 
 import discord
 from discord import ui
 
-from persona_bot.core.background import TaskOwner, _current_owner
+from persona_bot.core.background import TaskOwner
 from persona_bot.utils.discord_helpers import reject_blocked_interaction
+from persona_bot.views.view_parts import OwnedView
 
 if TYPE_CHECKING:
     from persona_bot.services.voice_conversation import VoiceConversation
@@ -68,25 +69,22 @@ def _describe_user(conversation: VoiceConversation, user_id: int) -> str:
     )
 
 
-class VoiceConsentView(ui.View):
+class VoiceConsentView(OwnedView):
     """同意パネルのボタン。押した本人の同意だけを切り替え、結果は本人だけに返す。"""
+
+    # SDK既定の repr 付きログへ渡さない（基底の on_error が使う）。
+    _error_logger = logger
+    _error_log_message = "音声会話: 同意パネルの操作中にエラーが発生しました。"
 
     def __init__(
         self, conversation: VoiceConversation, *, is_blocked: Callable[[int], bool],
         task_owner: TaskOwner | None = None,
     ) -> None:
         # 接続している間ずっと押せるようにする（終了時に呼び出し側が stop する）。
-        super().__init__(timeout=None)
+        # Discordが直接起動するコールバックにも、作成時の所有者を引き継ぐ（基底が行う）。
+        super().__init__(timeout=None, task_owner=task_owner)
         self._conversation = conversation
         self._is_blocked = is_blocked
-        # Discordが直接起動するコールバックにも、作成時の所有者を引き継ぐ。
-        self._task_owner = task_owner if task_owner is not None else _current_owner.get()
-
-    async def on_error(
-        self, interaction: discord.Interaction, error: Exception, item: ui.Item[Any], /
-    ) -> None:
-        """SDK既定の repr 付きログへ渡さない。"""
-        logger.error("音声会話: 同意パネルの操作中にエラーが発生しました。", exc_info=error)
 
     async def _run(self, interaction: discord.Interaction, action: Callable[[int], str]) -> None:
         async def invoke() -> None:
@@ -101,10 +99,7 @@ class VoiceConsentView(ui.View):
             )
 
         try:
-            if self._task_owner is None:
-                await invoke()
-            else:
-                await self._task_owner.run(invoke())
+            await self.run_owned(invoke())
         except discord.HTTPException as error:
             # 応答に失敗しても、受け付けた同意の変更は維持する。
             logger.warning("音声会話: 同意パネルの操作に応答できませんでした。", exc_info=error)

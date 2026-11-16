@@ -39,6 +39,7 @@ from persona_bot.config.constants import (
     LIVE_RECONNECT_MAX_ATTEMPTS,
 )
 from persona_bot.core.background import spawn, wait_for_cleanup
+from persona_bot.services.genai_client import QUOTA_EXHAUSTED_STATUS, error_status_code, is_quota_exhausted
 
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,8 @@ logger = logging.getLogger(__name__)
 # 接続の設定そのものを受け付けなかったことを示す WebSocket の終了コード・HTTP の状態。
 # ボイス名や検索ツールに未対応のモデルでは、ここで拒否される。
 _CONFIG_ERROR_CODES = frozenset({1007, 1008, 400, 403, 404})
-_QUOTA_ERROR_CODES = frozenset({429})
+# WebSocket の終了コード（4桁）を含めて読む上限。
+_MAX_ERROR_CODE = 4999
 _QUOTA_ERROR_WORDS = ("quota", "resource_exhausted", "resource exhausted", "rate limit", "exceeded")
 
 CLOSED_QUOTA = "quota"
@@ -71,13 +73,14 @@ class LiveOptions:
 
 
 def _error_code(error: BaseException) -> int | None:
-    code = getattr(error, "code", None)
-    return code if isinstance(code, int) else None
+    # WebSocket の終了コード（1007・1011 など）も含めて読むため、上限を HTTP の範囲より広げる。
+    return error_status_code(error, max_code=_MAX_ERROR_CODE)
 
 
 def is_quota_error(error: BaseException) -> bool:
     """利用枠の超過か。超過なら再接続しない（無制限に叩き続けない）。"""
-    if _error_code(error) in _QUOTA_ERROR_CODES:
+    code = _error_code(error)
+    if code == QUOTA_EXHAUSTED_STATUS or (code is None and is_quota_exhausted(error)):
         return True
     text = " ".join(str(part) for part in (getattr(error, "status", ""), getattr(error, "message", ""), error))
     return any(word in text.lower() for word in _QUOTA_ERROR_WORDS)

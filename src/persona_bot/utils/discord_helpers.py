@@ -130,6 +130,9 @@ def build_history_text(
         # （`not all(...)` と等価だが、空リストの扱いを言語仕様に暗黙に頼らず条件式で読めるようにする）。
         if any(not attachment_is_image(attachment) for attachment in history_message.attachments):
             clean_content += " [添付ファイルあり]"
+        if not clean_content.strip():
+            # 本文も添付も無い発言（スタンプだけ・メンションだけなど）は、役割だけの空行にしない。
+            continue
         lines.append(f"{role}: {clean_content}")
     return SanitizedHistory("\n".join(lines))
 

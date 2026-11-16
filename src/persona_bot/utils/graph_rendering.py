@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import io
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from functools import wraps
 import threading
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
@@ -28,6 +29,25 @@ def graph_font_context() -> dict[str, list[str]]:
                 if family in installed or f"font.{family}" in rcParams]
     # 日本語フォント未導入でも描画自体は継続する。字形の準備はREADMEの手順で行う。
     return {"font.family": families or ["sans-serif"]}
+
+
+@contextmanager
+def plot_figure(*subplots_args: Any, **subplots_kwargs: Any) -> Iterator[tuple[Figure, Any]]:
+    """日本語フォント設定の下で Figure を作り、どの経路でも最後に閉じる（#434）。
+
+    `plt.rc_context(graph_font_context())` と `plt.subplots(...)` を1つにまとめたもの。
+    `save_figure_to_buffer` が成功・失敗とも閉じるが、その前（軸の設定・描画）で例外が出ても
+    Figure を残さないため、ここでも閉じる（閉じ済みの Figure を重ねて閉じても害はない）。
+    呼び出しは `@serialized_plot` の下で行うこと。
+    """
+    from matplotlib import pyplot as plt
+
+    with plt.rc_context(graph_font_context()):
+        figure, axes = plt.subplots(*subplots_args, **subplots_kwargs)
+        try:
+            yield figure, axes
+        finally:
+            plt.close(figure)
 
 
 def serialized_plot(function: Callable[_Params, _Result]) -> Callable[_Params, _Result]:

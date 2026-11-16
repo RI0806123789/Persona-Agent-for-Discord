@@ -29,7 +29,7 @@ from persona_bot.utils.discord_helpers import (
 from persona_bot.services.gemini_service import GeminiService
 from persona_bot.services.memory_service import MemoryService
 from persona_bot.services.ng_word_service import NgWordFilter
-from persona_bot.config.paths import load_persona_template
+from persona_bot.config.paths import load_persona_or_default, load_persona_template
 from persona_bot.services.prompting import build_anniversary_prompt, build_auto_topic_prompt
 from persona_bot.utils.timeutil import resolve_timezone
 from persona_bot.utils.usage_graph import UsageTracker
@@ -197,10 +197,11 @@ class AutoTopicService:
         if not eligible() or not self._can_send(channel) or (anniversary and not channel.permissions_for(member).view_channel):
             return False
         response_settings = guild_settings.snapshot_response()
-        try:
-            persona_prompt = await load_persona_template(response_settings.prompt_file)
-        except FileNotFoundError:
-            logger.warning("%s: プロンプトファイルが見つかりません。", short_label, exc_info=True)
+        persona_prompt = await load_persona_or_default(
+            response_settings.prompt_file, logger=logger, loader=load_persona_template,
+            message=f"{short_label}: プロンプトファイルが見つかりません。",
+        )
+        if persona_prompt is None:
             return False
         history_text = await fetch_channel_history_text(
             channel, guild_settings.channel_reset_points.get(channel.id), self._client.user,

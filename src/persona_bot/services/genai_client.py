@@ -1,6 +1,7 @@
 """Gemini Developer API のクライアントと非同期生成の共通境界。"""
 
 import asyncio
+import re
 from math import ceil
 from typing import Any
 from weakref import WeakKeyDictionary
@@ -10,6 +11,47 @@ from google.genai import types
 import httpx
 
 from persona_bot.core.background import spawn
+
+
+# 利用枠の超過を示す HTTP ステータス。
+QUOTA_EXHAUSTED_STATUS = 429
+
+
+def error_status_code(error: BaseException, *, max_code: int = 599) -> int | None:
+    """SDK と HTTP クライアントの例外からステータスを読み取る（#434）。
+
+    `code`・`status_code`・`response.status_code` を順に見て、最初に 100〜`max_code` の整数
+    （3桁の数字文字列を含む。bool は除く）として読めたものを返す。Live の WebSocket の終了コード
+    （1007・1011 など）も扱う呼び出し側は `max_code` を広げる。
+    """
+    for code in (
+        getattr(error, "code", None), getattr(error, "status_code", None),
+        getattr(getattr(error, "response", None), "status_code", None),
+    ):
+        if isinstance(code, str) and re.fullmatch(r"[0-9]{3}", code.strip()):
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and 100 <= code <= max_code:
+            return code
+    return None
+
+
+def is_quota_exhausted(error: BaseException, status_code: int | None = None) -> bool:
+    """利用枠の超過（429 / RESOURCE_EXHAUSTED）か。
+
+    型付きのステータスがあればそれだけで決める（認証・サーバー障害のコードを文面で誤って
+    利用枠と読まない）。無い旧形式の例外だけ、文面の `RESOURCE_EXHAUSTED` と 429 で補う。
+    """
+    if status_code is None:
+        status_code = error_status_code(error)
+    if status_code is not None:
+        return status_code == QUOTA_EXHAUSTED_STATUS
+    message = " ".join(str(part) for part in (
+        getattr(error, "status", ""), getattr(error, "code", ""), error,
+    )).lower()
+    return (
+        "resource_exhausted" in message or "resource exhausted" in message
+        or re.search(r"(?<!\d)429(?!\d)", message) is not None
+    )
 
 
 class _UploadStatusTransport(httpx.AsyncBaseTransport):

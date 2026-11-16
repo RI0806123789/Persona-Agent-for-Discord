@@ -23,6 +23,7 @@ from discord import ui
 from persona_bot.config.constants import DISCORD_SELECT_MAX_OPTIONS
 from persona_bot.core.app_state import GuildSettings
 from persona_bot.services.autonomous_stage import can_use_stage, can_use_voice, find_channel
+from persona_bot.utils.select_options import limit_keeping_selected
 from persona_bot.views.view_parts import (
     authorize_administrator_operation, begin_panel_operation, edit_panel_message, BackButton,
     HubFactory, PanelView, select_option_text,
@@ -38,11 +39,9 @@ NOT_ADMIN_NOTICE = "この機能はサーバー管理者のみ利用できます
 
 def _visible_channels(channels: Sequence[Any], selected_id: int | None) -> list[Any]:
     """セレクトに並べるチャンネル。上限を超える分は出さないが、指定中のものは残す。"""
-    visible = list(channels[:_MAX_CHANNEL_OPTIONS])
-    selected = find_channel(channels, selected_id)
-    if selected is not None and selected not in visible:
-        visible[-1] = selected
-    return visible
+    return limit_keeping_selected(
+        channels, lambda channel: bool(selected_id) and channel.id == selected_id, _MAX_CHANNEL_OPTIONS,
+    )
 
 
 def _channel_options(

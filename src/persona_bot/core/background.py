@@ -88,12 +88,17 @@ class TaskOwner:
         if task is None:
             # 手動で駆動されたコルーチンも、実行本体を所有タスクとして回収できるようにする。
             return await spawn(coro, label="イベント処理", owner=self)
-        self._track(task)
+        # 入れ子（UI基底の受付全体を包む run の中でコールバックがもう一度 run する）で、
+        # 内側が外側の追跡を外さないよう、すでに追跡中なら登録と解除を行わない。
+        already_tracked = task in self._tasks
+        if not already_tracked:
+            self._track(task)
         try:
             with self.scope():
                 return await coro
         finally:
-            self._tasks.pop(task, None)
+            if not already_tracked:
+                self._tasks.pop(task, None)
 
     def stop_accepting(self) -> None:
         """新規受付と周期処理を止め、サービスの終了通知を先行できるようにする。"""
