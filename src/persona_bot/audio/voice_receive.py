@@ -249,7 +249,8 @@ class VoiceReceiver:
 
     def echo_stats(self) -> list[EchoStats]:
         """話者ごとのエコー除去の診断値（話者は含めない）。stop() の前に読むこと。"""
-        return [state.canceller.stats() for state in list(self._decoders.values()) if state.canceller is not None]
+        with self._decoders_lock:
+            return [state.canceller.stats() for state in list(self._decoders.values()) if state.canceller is not None]
 
     def start(self) -> None:
         if self._running:
@@ -311,7 +312,8 @@ class VoiceReceiver:
         stream = self._voice_client.stream_for_ssrc(packet.ssrc)
         if stream is None:
             # SPEAKING の通知より先に届いた音声。話者が分からないので捨てる。
-            self._decoders.pop(packet.ssrc, None)
+            with self._decoders_lock:
+                self._decoders.pop(packet.ssrc, None)
             return None
         user_id = stream[0]
         self._prune_departed_decoders()
@@ -322,7 +324,8 @@ class VoiceReceiver:
             return None
         state = self._decoders.get(packet.ssrc)
         if state is not None and state.stream != stream:
-            self._decoders.pop(packet.ssrc, None)
+            with self._decoders_lock:
+                self._decoders.pop(packet.ssrc, None)
             state = None
         if state is not None and not is_newer_sequence(packet.sequence, state.last_sequence):
             return None
@@ -369,8 +372,9 @@ class VoiceReceiver:
         if not self._decoders:
             return
         active = self._voice_client.active_ssrcs()
-        for ssrc in [ssrc for ssrc in list(self._decoders) if ssrc not in active]:
-            self._decoders.pop(ssrc, None)
+        with self._decoders_lock:
+            for ssrc in [ssrc for ssrc in list(self._decoders) if ssrc not in active]:
+                self._decoders.pop(ssrc, None)
 
     def _transport_box(self, connection: Any) -> Any:
         raw_key = getattr(connection, "secret_key", None)
@@ -381,7 +385,8 @@ class VoiceReceiver:
             # 再接続で鍵が変わったら作り直す。
             self._box = nacl.secret.Aead(key)
             self._box_key = key
-            self._decoders.clear()
+            with self._decoders_lock:
+                self._decoders.clear()
         return self._box
 
     @staticmethod
