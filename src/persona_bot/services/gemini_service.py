@@ -181,7 +181,7 @@ class GeminiService:
                     regenerations_left -= 1
                     # 同じ条件で生成し直す（index は進めない）。待ち時間は生成全体の残りから使う。
                     continue
-                sources = self._grounding_sources(response) if use_grounding else []
+                sources = self._grounding_sources(response) if (use_grounding and text is not None) else []
                 return GenerationResult(
                     text, getattr(response, "usage_metadata", None), sources,
                     effective_model if text is not None else None,

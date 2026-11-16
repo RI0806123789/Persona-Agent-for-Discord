@@ -89,7 +89,7 @@ class StatsPrivacyConfirmButton(ui.Button):
         else:
             result = "✅ 統計収集を再開しました。以降のあなたの発言が記録されます。"
         shown = await edit_panel_message(interaction, deferred=True, content=result, view=None)
-        if not shown and not saved:
+        if not shown:
             await interaction.followup.send(result, ephemeral=True)
 
 
@@ -126,7 +126,7 @@ class StatsDataDeleteButton(ui.Button):
             result = "⚠️ データを削除できませんでした。時間をおいて再度お試しください。"
 
         shown = await edit_panel_message(interaction, deferred=True, content=result, view=None)
-        if not shown and not deleted:
+        if not shown:
             await interaction.followup.send(result, ephemeral=True)
 
 

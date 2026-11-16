@@ -175,6 +175,17 @@ class StatsService:
         """エントリが収集停止中かを返す（キーが無い旧形式は既定値で扱う）。"""
         return bool(entry.get("opt_out", STATS_OPT_OUT_DEFAULT))
 
+    @staticmethod
+    def _total_count(entry: dict) -> int:
+        """発言回数を int に揃える。壊れた／None の値は 0 として扱い、例外を出さない。"""
+        value = entry.get("total_count", 0)
+        if isinstance(value, bool):
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
     def _to_local_hour(self, when: datetime) -> int:
         """発言時刻（UTC aware 想定）を集計用タイムゾーンの「時」に変換する。"""
         if when.tzinfo is None:
@@ -192,7 +203,7 @@ class StatsService:
                 if entry is None:
                     entry = self._new_entry(user_name)
                 entry["user_name"] = user_name
-                entry["total_count"] = int(entry.get("total_count", 0)) + 1
+                entry["total_count"] = self._total_count(entry) + 1
                 hourly = entry.get("hourly")
                 if not isinstance(hourly, list) or len(hourly) != STATS_HOURLY_BUCKETS:
                     hourly = [0] * STATS_HOURLY_BUCKETS
@@ -314,7 +325,7 @@ class StatsService:
     # ---- 参照ヘルパー -----------------------------------------------------
 
     def has_data(self) -> bool:
-        return any(int(d.get("total_count", 0)) > 0 and not self._entry_opted_out(d) for d in self.cache.values())
+        return any(self._total_count(d) > 0 and not self._entry_opted_out(d) for d in self.cache.values())
 
     def display_name(self, user_id: str) -> str:
         entry = self.cache.get(user_id)
@@ -330,9 +341,9 @@ class StatsService:
         同じく載らないため、外形上は両者を区別できない＝停止したこと自体は漏れない。
         """
         items = [
-            (uid, data.get("user_name") or uid, int(data.get("total_count", 0)))
+            (uid, data.get("user_name") or uid, self._total_count(data))
             for uid, data in self.cache.items()
-            if int(data.get("total_count", 0)) > 0 and not self._entry_opted_out(data)
+            if self._total_count(data) > 0 and not self._entry_opted_out(data)
         ]
         items.sort(key=lambda t: t[2], reverse=True)
         selected = items[:STATS_MAX_USERS_IN_SELECT]
@@ -346,7 +357,7 @@ class StatsService:
 
     def _is_fresh(self, computed_at: str | None) -> bool:
         """解析キャッシュが TTL 内かどうかを判定する。"""
-        if not computed_at:
+        if not isinstance(computed_at, str) or not computed_at:
             return False
         try:
             when = parse_iso_datetime(computed_at)
@@ -567,9 +578,9 @@ class StatsService:
         （get_user_options と同じ理由）。
         """
         snapshot = {
-            uid: (data.get("user_name") or uid, int(data.get("total_count", 0)))
+            uid: (data.get("user_name") or uid, self._total_count(data))
             for uid, data in self.cache.items()
-            if int(data.get("total_count", 0)) > 0 and not self._entry_opted_out(data)
+            if self._total_count(data) > 0 and not self._entry_opted_out(data)
         }
         if not snapshot:
             return None
@@ -623,14 +634,14 @@ class StatsService:
         # 「まだありません」と同一の文言を返す（専用の文言を出すと停止が露見する）。
         if opted_out and viewer_id is not None and viewer_id != user_id:
             return (f"{name} さんの会話データはまだありません。", [])
-        if not entry or int(entry.get("total_count", 0)) == 0:
+        if not entry or self._total_count(entry) == 0:
             return (f"{name} さんの会話データはまだありません。", [])
 
         images: list[tuple[str, io.BytesIO]] = []
         try:
             lines = [
                 f"📈 **会話統計 — {name} さん**",
-                f"・累計発言回数: {int(entry.get('total_count', 0))} 回",
+                f"・累計発言回数: {self._total_count(entry)} 回",
             ]
             if opted_out:
                 # 本人向けの注記。停止後も残っているデータを見ていることが分かるようにする。
@@ -669,7 +680,7 @@ class StatsService:
                     if radar is not None:
                         images.append(("stats_personality.png", radar))
                         summary = analysis.get("personality") if analysis else ""
-                        if summary:
+                        if isinstance(summary, str) and summary:
                             lines.append(f"・性格推定: {summary}")
                         lines.append("※ これは発言からの推定であり、確定的な性格診断ではありません。")
                     elif opted_out:
