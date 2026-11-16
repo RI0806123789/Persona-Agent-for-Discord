@@ -332,18 +332,47 @@ class VoiceSessionCommands:
                             # 昇格し、声を出せないまま会話を始めない。
                             if conversation is not None and not conversation.stopped:
                                 await live_voice.stop(guild.id, reason="/join による音声会話の始め直し")
-                            if not await self.prepare_stage_for_live(interaction, voice_client, voice_channel):
+                            # live_voice.stop() は予約枠も解放するため、開始の移譲前に再度枠を確保する
+                            #（旧予約票の自己破棄の防止）。開始に失敗したら確実に解放する（枠リークの防止）。
+                            reservation = live_voice.reserve(guild.id)
+                            if not reservation:
+                                await interaction.followup.send(
+                                    NOTICE_LIVE_CAPACITY, allowed_mentions=discord.AllowedMentions.none(),
+                                )
+                                return
+                            try:
+                                if not await self.prepare_stage_for_live(interaction, voice_client, voice_channel):
+                                    # 保護解除 → 音声会話停止 → 切断 の順序を守る。
+                                    # prepare_stage_for_live は保護の解除まで行うため、ここでは停止と切断だけを行う。
+                                    live_voice.release_reservation(guild.id, reservation=reservation)
+                                    try:
+                                        await wait_for_cleanup(
+                                            voice_client.disconnect(force=True), label="ステージ昇格失敗時の切断",
+                                        )
+                                    except Exception:
+                                        logger.warning("ステージの発言者になれなかった後の切断に失敗しました。", exc_info=True)
+                                    return
+                                # start_live_voice は予約の所有権を受け取り、成否に関わらず finally で解放する。
+                                if not await self.start_live_voice(interaction, voice_client, voice_channel, reservation=reservation):
+                                    return
+                                speaker_ready = True
+                            except Exception:
+                                # 開始の移譲前で例外・キャンセルが起きても、確保した枠を残さない。
                                 live_voice.release_reservation(guild.id, reservation=reservation)
-                                return
-                            if not await self.start_live_voice(interaction, voice_client, voice_channel, reservation=reservation):
-                                return
-                            speaker_ready = True
+                                raise
                         else:
                             # 同じチャンネルで会話が続いている。ステージで聴衆へ降格されていた場合に
                             # 備えて発言者へ戻す（戻せないなら、声を出せない会話を続けさせない）。
                             # ここで昇格を済ませるため、案内側の昇格は行わない。
                             if not await self.prepare_stage_for_live(interaction, voice_client, voice_channel):
+                                # 保護解除 → 音声会話停止 → 切断 の順序を守る（prepare_stage_for_live は保護の解除まで行う）。
                                 await live_voice.stop(guild.id, reason="ステージの発言者に戻れなかったため会話を終了")
+                                try:
+                                    await wait_for_cleanup(
+                                        voice_client.disconnect(force=True), label="ステージ昇格失敗時の切断",
+                                    )
+                                except Exception:
+                                    logger.warning("ステージの発言者になれなかった後の切断に失敗しました。", exc_info=True)
                                 return
                             speaker_ready = True
                     await announce_voice_join(
@@ -400,14 +429,10 @@ class VoiceSessionCommands:
         if await promote_stage_speaker(interaction, voice_channel, leaving=True):
             return True
         guild = interaction.guild
-        if guild is not None and guild.voice_client is voice_client:
-            # 声を出せない接続を残さない（start_live_voice の失敗時と同じ片付け）。
-            if self._voice_guard is not None:
-                self._voice_guard.release(guild.id)
-            try:
-                await wait_for_cleanup(voice_client.disconnect(force=True), label="ステージ昇格失敗時の切断")
-            except Exception:
-                logger.warning("ステージの発言者になれなかった後の切断に失敗しました。", exc_info=True)
+        if guild is not None and self._voice_guard is not None:
+            # 声を出せない接続を残さない：保護を解く。切断と音声会話の停止は呼び出し側で、
+            # 「保護解除 → 停止 → 切断」の順序で行う。
+            self._voice_guard.release(guild.id)
         return False
 
     async def start_live_voice(
@@ -521,6 +546,13 @@ class VoiceSessionCommands:
                 # ステージでは先に発言者へ昇格する。昇格できないまま会話と同意パネルを始めると、
                 # 観客のまま同時枠だけを占有してしまう。
                 if not await self.prepare_stage_for_live(interaction, attempted_voice_client, voice_channel):
+                    # 保護は prepare_stage_for_live で解放済み。会話を開始できないので接続を切断する。
+                    try:
+                        await wait_for_cleanup(
+                            attempted_voice_client.disconnect(force=True), label="ステージ昇格失敗時の切断",
+                        )
+                    except Exception:
+                        logger.warning("ステージの発言者になれなかった後の切断に失敗しました。", exc_info=True)
                     return
                 if not await self.start_live_voice(
                     interaction, attempted_voice_client, voice_channel, reservation=reservation,

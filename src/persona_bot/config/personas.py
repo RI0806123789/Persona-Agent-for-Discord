@@ -328,6 +328,12 @@ def _build_voice(file_name: str, voice: Any) -> dict[str, Any]:
             # 空は「既定の声を使う」という有効な指定（既定値と同じ）。警告を出さずそのまま採用する。
             profile[key] = ""
             continue
+        if key == "voice":
+            if not isinstance(value, str) or not value.strip():
+                logger.warning(f'警告: personas.json の「<設定値>」の voice は空白以外の文字列で書いてください。既定値を使います。')
+                continue
+            profile[key] = value.strip()
+            continue
         if not isinstance(value, str) or not value:
             logger.warning(f'警告: personas.json の「<設定値>」の voice.{key} は文字列で書いてください。既定値を使います。')
             continue

@@ -136,7 +136,9 @@ class AgentProgressBase:
         """
         if self._cancel_event.is_set():
             # start()/open() の待機中に中止されていたら、子の作業（第1ステップ）を始めない。
+            # 未開始のコルーチンを close しないと「never awaited」の RuntimeWarning が出る。
             logger.info("サブエージェント: 依頼した本人が中止しました。")
+            work.close()
             return "canceled", None
         worker = spawn(work, label="サブエージェントの作業")
         canceled = spawn(self._cancel_event.wait(), label="サブエージェントの中止待ち")
