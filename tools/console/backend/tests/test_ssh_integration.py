@@ -6,9 +6,7 @@
 
 import asyncio
 import json
-import shutil
 import sys
-import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -20,40 +18,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import asyncssh  # noqa: E402
 
 import remote_commands as rc  # noqa: E402
-from fake_ssh_server import start_fake_server  # noqa: E402
-from profiles import Profile  # noqa: E402
+from ssh_fixtures import FakeSshEnvironment  # noqa: E402
 from ssh_session import SshError, SshSession  # noqa: E402
 
 
 class SshIntegrationTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.key_dir = Path(tempfile.mkdtemp(prefix="pbc-test-"))
-        self.acceptor, self.bot, port, self.live_task = await start_fake_server(
-            "127.0.0.1", 0, self.key_dir, live_interval=(0.2, 0.4)
-        )
-        self.profile = Profile(
-            id="test",
-            label="test",
-            environment="development",
-            host="127.0.0.1",
-            port=port,
-            username="ubuntu",
-            key_path=str(self.key_dir / "client_key"),
-            known_hosts=str(self.key_dir / "known_hosts"),
-            use_ssh_config=False,
-            service="bot",
-            bot_dir="/home/ubuntu/Persona-Chat-in-Discord",
-            journal_sudo=False,
-            note="",
-        )
+        self.env = await FakeSshEnvironment.start(live_interval=(0.2, 0.4))
+        self.addAsyncCleanup(self.env.close)
+        self.key_dir, self.bot, self.profile = self.env.key_dir, self.env.bot, self.env.profile
+        self.acceptor, self.live_task = self.env.acceptor, self.env.live_task
         self.session = SshSession()
-
-    async def asyncTearDown(self):
-        await self.session.disconnect()
-        self.live_task.cancel()
-        self.acceptor.close()
-        await self.acceptor.wait_closed()
-        shutil.rmtree(self.key_dir, ignore_errors=True)
+        # 後に登録した片付けから先に実行される（接続を切ってから模擬サーバーを閉じる）。
+        self.addAsyncCleanup(self.session.disconnect)
 
     async def test_connect_and_read_status(self):
         await self.session.connect(self.profile)

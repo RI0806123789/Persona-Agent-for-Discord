@@ -2,8 +2,8 @@ import logging
 import discord
 from discord import ui
 
-from persona_bot.config.constants import DISCORD_SELECT_MAX_OPTIONS
 from persona_bot.utils.discord_helpers import is_administrator, is_current_administrator, split_message
+from persona_bot.utils.select_options import limit_keeping_selected
 from persona_bot.services.feedback_service import FeedbackService, get_default_service
 from persona_bot.services.stats_service import StatsService
 from persona_bot.views.view_parts import (
@@ -51,11 +51,8 @@ class StatsUserSelect(ui.Select):
 
     def __init__(self, users: list[tuple[str, str, int]], current: str) -> None:
         options = []
-        selected = users[:DISCORD_SELECT_MAX_OPTIONS]
-        if not any(str(uid) == current for uid, _, _ in selected):
-            target = next((user for user in users if str(user[0]) == current), None)
-            if target is not None:
-                selected = selected[:DISCORD_SELECT_MAX_OPTIONS - 1] + [target]
+        # 通常は get_user_options が絞り済み。それ以外の一覧が渡されても、同じ規則で25件に収める。
+        selected = limit_keeping_selected(users, lambda user: str(user[0]) == current)
         for user_id, name, count in selected:
             options.append(
                 discord.SelectOption(

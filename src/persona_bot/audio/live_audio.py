@@ -51,13 +51,21 @@ def _lowpass_taps(count: int, cutoff_hz: float, sample_rate: int) -> np.ndarray:
     return (taps / taps.sum()).astype(np.float32)
 
 
+# 不変の FIR 係数は1回だけ作り、話者ごとの Downsampler で共有する（読み取り専用）。
+_DOWNSAMPLE_TAPS = _lowpass_taps(LIVE_DOWNSAMPLE_TAPS, LIVE_DOWNSAMPLE_CUTOFF_HZ, TTS_SAMPLE_RATE)
+_DOWNSAMPLE_TAPS.setflags(write=False)
+
+
 class Downsampler:
     """48kHz ステレオの PCM を 16kHz モノラルへ変換する（1人分の状態を持つ）。"""
 
     _RATIO = TTS_SAMPLE_RATE // LIVE_INPUT_SAMPLE_RATE
 
     def __init__(self) -> None:
-        self._taps = _lowpass_taps(LIVE_DOWNSAMPLE_TAPS, LIVE_DOWNSAMPLE_CUTOFF_HZ, TTS_SAMPLE_RATE)
+        # 間引きの位相の計算は、入力レートが出力レートの整数倍であることを前提にしている。
+        if self._RATIO < 1 or TTS_SAMPLE_RATE % LIVE_INPUT_SAMPLE_RATE:
+            raise ValueError("音声入力の間引きには正確な整数倍のサンプルレートが必要です。")
+        self._taps = _DOWNSAMPLE_TAPS
         self._history = np.zeros(len(self._taps) - 1, dtype=np.float32)
         # これまでに受け取ったサンプル数を間引き比で割った余り（断片の長さが比の倍数でなくても位相を保つ）。
         self._offset = 0

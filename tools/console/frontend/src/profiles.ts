@@ -7,3 +7,8 @@ import type { Profile } from "./types";
 export function unsetFieldsOf(profile: Profile | null | undefined): string[] {
   return profile?.unset_fields ?? [];
 }
+
+/** 案内文に差し込む「YOUR_ で始まる値（項目名・項目名）」。 */
+export function unsetFieldsText(fields: string[]): string {
+  return `YOUR_ で始まる値（${fields.join("・")}）`;
+}

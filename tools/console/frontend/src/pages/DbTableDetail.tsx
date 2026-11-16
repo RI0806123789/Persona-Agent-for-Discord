@@ -236,7 +236,7 @@ function DetailRow({ open, id, colSpan, children }: { open: boolean; id: string;
 }
 
 /** 行を開いたときの、全部の列。 */
-function RowFields({ columns, row, page }: { columns: ColumnSpec[]; row: DbRow; page: DbTablePage }) {
+export function RowFields({ columns, row, page }: { columns: ColumnSpec[]; row: DbRow; page: DbTablePage }) {
   return (
     <dl className="db-fields">
       {columns.map((column) => (

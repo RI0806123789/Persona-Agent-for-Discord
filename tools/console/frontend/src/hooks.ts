@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
 import { logStreamUrl } from "./api";
 import { appendLogEntries } from "./logs";
 import { createLogPrivacyTracker } from "./logPrivacy";
+import { REDUCED_MOTION_QUERY, prefersReducedMotion } from "./motionPreference";
 import type { LogEntry } from "./types";
 
 /** enabled の間、callback を intervalMs ごとに呼ぶ（前の呼び出しが終わってから次を予約する）。 */
@@ -75,11 +76,7 @@ export function useMediaQuery(query: string): boolean {
 
 /** OS の「視差効果を減らす / アニメーションを減らす」設定。途中で切り替えても追従する。 */
 export function useReducedMotion(): boolean {
-  return useMediaQuery("(prefers-reduced-motion: reduce)");
-}
-
-function prefersReducedMotion(): boolean {
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return useMediaQuery(REDUCED_MOTION_QUERY);
 }
 
 // 直前に「ボタンを押した」時刻（クリック、または Enter / Space）。ショートカットのキー（? など）で開いたときに、

@@ -15,6 +15,7 @@ HTTP 応答（`make_http_response`）もここにある（#400）。
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -62,6 +63,34 @@ def make_http_response(status: int, reason: str = "架空") -> SimpleNamespace:
     実物の `aiohttp.ClientResponse` は使わず、例外が参照する `status` と `reason` だけを持つ。
     """
     return SimpleNamespace(status=status, reason=reason)
+
+
+def make_permissions(**overrides: Any) -> SimpleNamespace:
+    """`channel.permissions_for(...)` が返す権限の模擬。既定は「見える・送れる・スレッドでも送れる」。
+
+    例: `make_permissions(send_messages=False)`。Discord の権限に無い名前も足せる。
+    """
+    return SimpleNamespace(**{
+        "view_channel": True, "send_messages": True, "send_messages_in_threads": True, **overrides,
+    })
+
+
+@asynccontextmanager
+async def no_typing() -> AsyncIterator[None]:
+    """何もしない `channel.typing()` の模擬（入力中表示の出入りだけを通す）。"""
+    yield
+
+
+def make_spec_channel(spec: type, channel_id: int = 10, **attributes: Any) -> Mock:
+    """`Mock(spec=...)` のチャンネルで、`typing()` が何もしない非同期コンテキストを返すもの。
+
+    `isinstance(channel, spec)` を満たす必要がある経路（DM・スレッド・ボイスなど）で使う。
+    入力中表示の途中で設定を変えるなど、`typing` に独自の動きが要るテストは、この戻り値の
+    `typing.side_effect` を差し替える。
+    """
+    channel = Mock(spec=spec, id=channel_id, **attributes)
+    channel.typing.side_effect = no_typing
+    return channel
 
 
 def make_interaction(

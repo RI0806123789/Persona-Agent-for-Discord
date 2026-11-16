@@ -14,7 +14,7 @@ from persona_bot.services.content_moderator import ContentModerator, screen_bot_
 from persona_bot.utils.discord_helpers import build_summary_source, fetch_messages_since
 from persona_bot.services.gemini_service import GeminiService
 from persona_bot.services.ng_word_service import NgWordFilter
-from persona_bot.config.paths import load_persona_template
+from persona_bot.config.paths import load_persona_or_default, load_persona_template
 from persona_bot.services.prompting import build_summary_prompt
 from persona_bot.utils.usage_graph import UsageTracker
 
@@ -64,12 +64,11 @@ async def generate_channel_summary(
         return False, f"この期間（{period.name}）には要約できる会話がありませんでした。"
 
     # --- ペルソナテンプレート読み込み（キャラ設定パネルで選択中のペルソナ） ---
-    try:
-        persona_prompt = await load_persona_template(response_settings.prompt_file)
-    except FileNotFoundError as error:
-        # ペルソナが見つからなくても議事録自体は作れるため、口調なしで続行する
-        logger.warning("要約: プロンプトファイルが見つかりません。口調なしで続行します。", exc_info=error)
-        persona_prompt = ""
+    # ペルソナが見つからなくても議事録自体は作れるため、口調なしで続行する
+    persona_prompt = await load_persona_or_default(
+        response_settings.prompt_file, logger=logger, loader=load_persona_template, default="",
+        message="要約: プロンプトファイルが見つかりません。口調なしで続行します。",
+    )
 
     full_prompt = build_summary_prompt(persona_prompt, period.name, source.text)
 

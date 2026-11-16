@@ -1,6 +1,5 @@
 import logging
 import asyncio
-import re
 from math import ceil
 from pathlib import Path
 from time import monotonic
@@ -18,7 +17,9 @@ from persona_bot.config.constants import (
     MAX_GROUNDING_SOURCES,
 )
 from persona_bot.utils.grounding import normalize_sources
-from persona_bot.services.genai_client import generate_content, generate_json_content
+from persona_bot.services.genai_client import (
+    error_status_code, generate_content, generate_json_content, is_quota_exhausted,
+)
 from persona_bot.services.prompting import build_document_summary_prompt
 from persona_bot.utils.storage import (
     contains_internal_response_text,
@@ -57,37 +58,6 @@ def _grounding_is_unsupported(status_code: Any, message: str, *, multimodal: boo
         "unsupported", "not supported", "not available", "not enabled", "not found",
         "unknown name", "not permitted", "not allowed",
     ))
-
-
-def _error_status_code(error: BaseException) -> int | None:
-    """SDK と HTTP クライアントの例外から HTTP ステータスを読み取る。"""
-    for code in (
-        getattr(error, "code", None), getattr(error, "status_code", None),
-        getattr(getattr(error, "response", None), "status_code", None),
-    ):
-        if isinstance(code, str) and re.fullmatch(r"[0-9]{3}", code.strip()):
-            code = int(code.strip())
-        if isinstance(code, int) and not isinstance(code, bool) and 100 <= code <= 599:
-            return code
-    return None
-
-
-def _grounding_quota_exhausted(status_code: int | None, error: BaseException) -> bool:
-    """検索付きの試行が利用枠（429）で断られたか。
-
-    検索の利用枠はモデルの世代ごとに別に数えられ、Gemini 3 以降の検索は無料枠に含まれない。
-    そのため選択モデルで断られても、検索用のサブモデルや検索なしの生成は通りうる。
-    """
-    if status_code is not None:
-        return status_code == 429
-    # 型付きのステータスが無い旧形式だけを文面で補う。認証・サーバー障害のコードを優先する。
-    message = " ".join(str(part) for part in (
-        getattr(error, "status", ""), getattr(error, "code", ""), error,
-    )).lower()
-    return (
-        "resource_exhausted" in message or "resource exhausted" in message
-        or re.search(r"(?<!\d)429(?!\d)", message) is not None
-    )
 
 
 class GenerationResult(NamedTuple):
@@ -189,12 +159,14 @@ class GeminiService:
             except asyncio.TimeoutError:
                 raise
             except Exception as error:
-                status_code = _error_status_code(error)
+                status_code = error_status_code(error)
                 if use_grounding and _grounding_is_unsupported(status_code, str(error), multimodal=bool(images)):
                     logger.warning("検索ツールが非対応のため、残り時間内で代替の生成を試します。", exc_info=error)
                     index += 1
                     continue
-                if use_grounding and _grounding_quota_exhausted(status_code, error):
+                # 検索の利用枠はモデルの世代ごとに別に数えられ、Gemini 3 以降の検索は無料枠に含まれない。
+                # 選択モデルで断られても、検索用のサブモデルや検索なしの生成は通りうる。
+                if use_grounding and is_quota_exhausted(error, status_code):
                     logger.warning("検索の利用枠を超えたため、残り時間内で代替の生成を試します。", exc_info=error)
                     index += 1
                     continue

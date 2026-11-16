@@ -18,7 +18,7 @@ from persona_bot.services.auto_topic_service import AutoTopicService
 from persona_bot.services.autonomous_service import AutonomousService
 from persona_bot.core import commands
 from persona_bot.services import content_moderator
-from persona_bot.utils import discord_helpers
+from persona_bot.utils import discord_helpers, select_options
 from persona_bot.utils.discord_helpers import (
     REPLY_ALLOWED_MENTIONS, build_history_text, fetch_channel_history_text, is_administrator, send_long_message,
     send_long_reply, split_message,
@@ -35,7 +35,7 @@ from persona_bot.views import stats_view
 from persona_bot.views import summary_view
 from persona_bot.views import unblock_view
 from persona_bot.views import view_parts
-from tests.helpers.discord_mocks import make_channel, make_interaction as make_discord_interaction, make_message
+from tests.helpers.discord_mocks import make_channel, make_interaction as make_discord_interaction, make_message, make_permissions
 from tests.helpers.member_helpers import make_member
 
 
@@ -178,7 +178,7 @@ class LongMessageTests(unittest.IsolatedAsyncioTestCase):
         text = "あ" * 4001
         channel = SimpleNamespace(
             id=10, name="架空のチャンネル", send=AsyncMock(), guild=SimpleNamespace(me=object()),
-            permissions_for=Mock(return_value=SimpleNamespace(view_channel=True, send_messages=True)),
+            permissions_for=Mock(return_value=make_permissions(send_messages_in_threads=False)),
         )
         settings = auto_topic_service.GuildSettings(
             current_prompt_file="架空のパス", current_model_name="架空モデル",
@@ -488,8 +488,10 @@ class AdministratorAndConstantsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_select_limits_and_labels_follow_constants(self) -> None:
         for module in (unblock_view, reminder_view, stats_view):
+            # 統計のユーザー選択の上限は、共通の絞り込み（select_options）が持つ定数に従う（#434）。
+            limit_owner = select_options if module is stats_view else module
             with self.subTest(module=module.__name__), \
-                    patch.object(module, "DISCORD_SELECT_MAX_OPTIONS", 2), \
+                    patch.object(limit_owner, "DISCORD_SELECT_MAX_OPTIONS", 2), \
                     patch.object(view_parts, "DISCORD_SELECT_LABEL_MAX_LENGTH", 4):
                 if module is unblock_view:
                     select = module.UnblockSelect([{"user_id": i, "user_name": "あ" * 110} for i in range(3)])

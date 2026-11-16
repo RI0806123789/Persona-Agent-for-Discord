@@ -1,17 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { compile, readSource as source } from "./helpers/compile.mjs";
+import { nodes } from "./helpers/tree.mjs";
 
-const source = async (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
-function compile(text, modules) {
-  const exports = {};
-  const output = ts.transpileModule(text, { compilerOptions: {
-    module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
-  } }).outputText;
-  new Function("require", "exports", output)((name) => modules[name] ?? {}, exports);
-  return exports;
-}
 
 const status = compile(await source("status.ts"), {});
 const ui = Object.fromEntries(["Button", "Card", "EmptyState", "StatusChip", "Chip", "InlineError", "Notice", "Sparkline", "SplitButton", "Stat"]
@@ -23,6 +14,7 @@ const modules = {
   "../components/expressive": { LoadingIndicator: "LoadingIndicator", WavyProgress: "WavyProgress" },
   "../privacy": { usePrivacy: () => ({ redact: (value) => value, mask: (value) => masked ? "MASKED" : value }) },
   "../format": new Proxy({}, { get: () => () => "架空の表示値" }),
+  "../deployPlan": compile(await source("deployPlan.ts")),
   "./DeployCard": { DeployCard: "DeployCard" }, "./shared": { NotConnected: "NotConnected" },
 };
 const { OperationsPage } = compile(await source("pages/OperationsPage.tsx"), modules);
@@ -45,11 +37,6 @@ test("デプロイのブランチと操作履歴の接続先は伏せ字設定�
   } finally { masked = false; }
 });
 
-function nodes(node) {
-  if (Array.isArray(node)) return node.flatMap(nodes);
-  if (!node || typeof node !== "object") return [];
-  return [node, ...nodes(node.props?.children)];
-}
 
 function stopControl(page, service, overrides = {}) {
   const actions = [];

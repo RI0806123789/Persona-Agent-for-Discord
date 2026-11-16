@@ -16,7 +16,7 @@
 - 中止ボタンは依頼した本人だけが押せる。全体の期限（`AGENT_TOTAL_TIMEOUT_SECONDS`）もここで管理する。
 
 機能パネル（`PanelView`）ではなく、チャンネルに出す1通のメッセージに付ける部品なので
-`ui.View` を直接継承する（パネルの差し替え・操作世代の仕組みは使わない）。
+`OwnedView`（終了処理の回収と on_error の土台）を継承する（パネルの差し替え・操作世代の仕組みは使わない）。
 """
 
 from __future__ import annotations
@@ -30,39 +30,34 @@ import discord
 from discord import ui
 
 from persona_bot.config.constants import AGENT_PROGRESS_MIN_INTERVAL_SECONDS, AGENT_TOTAL_TIMEOUT_SECONDS
-from persona_bot.core.background import TaskOwner, _current_owner, spawn, wait_for_cleanup
+from persona_bot.core.background import TaskOwner, spawn, wait_for_cleanup
 from persona_bot.services.agent_plan import AgentPlan
 from persona_bot.services.agent_service import AgentReport, render_agent_line
+from persona_bot.views.view_parts import OwnedView
 
 
 logger = logging.getLogger(__name__)
 
 
-class AgentCancelView(ui.View):
+class AgentCancelView(OwnedView):
     """進捗メッセージに付ける中止ボタン。押せるのは依頼した本人だけ。"""
+
+    # 中止ボタンもSDK既定の repr 付きログへ渡さない（基底の on_error が使う）。
+    _error_logger = logger
+    _error_log_message = "サブエージェント: 中止ボタンの操作中にエラーが発生しました。"
 
     def __init__(
         self, requester_id: int, cancel_event: asyncio.Event, *, task_owner: TaskOwner | None = None,
     ) -> None:
         # 作業の期限より少し長く待つ（期限で終わったときは呼び出し側がボタンを外す）。
-        super().__init__(timeout=AGENT_TOTAL_TIMEOUT_SECONDS + 60)
+        # Discordが直接起動するコールバックにも、作成時の所有者を引き継ぐ（基底が行う）。
+        super().__init__(timeout=AGENT_TOTAL_TIMEOUT_SECONDS + 60, task_owner=task_owner)
         self.requester_id = requester_id
         self.cancel_event = cancel_event
-        # Discordが直接起動するコールバックにも、作成時の所有者を引き継ぐ。
-        self._task_owner = task_owner if task_owner is not None else _current_owner.get()
-
-    async def on_error(
-        self, interaction: discord.Interaction, error: Exception, item: ui.Item[Any], /
-    ) -> None:
-        """中止ボタンもSDK既定の repr 付きログへ渡さない。"""
-        logger.error("サブエージェント: 中止ボタンの操作中にエラーが発生しました。", exc_info=error)
 
     @ui.button(label="中止", emoji="⏹️", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, _button: ui.Button) -> None:
-        if self._task_owner is None:
-            await self._cancel(interaction)
-        else:
-            await self._task_owner.run(self._cancel(interaction))
+        await self.run_owned(self._cancel(interaction))
 
     async def _cancel(self, interaction: discord.Interaction) -> None:
         try:

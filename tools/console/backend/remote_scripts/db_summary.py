@@ -7,6 +7,12 @@ import sys
 from pathlib import Path
 
 
+def quote(name):
+    # SQLite の識別子として引用する。db_table.py の quote と同じ実装（遠隔へは1ファイルずつ送るため、
+    # import で共有できない。2つが食い違わないことは tests/test_remote_scripts.py が確かめる）。
+    return '"' + name.replace('"', '""') + '"'
+
+
 def collect(db_path, blacklist_path):
     # Path を渡されても動くよう、最初に文字列へそろえる（"-wal" の連結や JSON 出力で TypeError にしない）。
     db_path = str(db_path)
@@ -34,7 +40,7 @@ def collect(db_path, blacklist_path):
                 for name in names:
                     try:
                         result["tables"][name] = con.execute(
-                            'SELECT COUNT(*) FROM "%s"' % name.replace('"', '""')).fetchone()[0]
+                            "SELECT COUNT(*) FROM " + quote(name)).fetchone()[0]
                     except sqlite3.Error:
                         result["errors"].append("一部のテーブルの件数を取得できませんでした。")
                 result["reminders_by_status"] = count_by(con, "SELECT status, COUNT(*) FROM reminders GROUP BY status", "リマインダー")

@@ -19,6 +19,7 @@ from persona_bot.core.voice_commands import VoiceCommandCoordinator
 from persona_bot.services import autonomous_stage
 from tests.helpers.network_guard import block_network
 from persona_bot.utils.logging_setup import LOG_DATE_FORMAT, LOG_FORMAT, OperationalFormatter
+from tests.helpers.discord_mocks import make_http_response, make_interaction, make_response
 
 
 LOG_FORMATTER = OperationalFormatter(LOG_FORMAT, LOG_DATE_FORMAT)
@@ -46,12 +47,12 @@ class JoinCommandTests(unittest.IsolatedAsyncioTestCase):
                               None, None, None, None, self.autonomous, voice_guard=self.voice_guard)
         self.channel = self.make_channel(20)
         self.guild = SimpleNamespace(id=1, me=object(), voice_client=None)
-        self.interaction = SimpleNamespace(
+        self.interaction = make_interaction(
             guild=self.guild,
             command=SimpleNamespace(name="join"),
             user=Mock(spec=discord.Member, voice=SimpleNamespace(channel=self.channel)),
-            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), is_done=Mock(return_value=False)),
-            followup=SimpleNamespace(send=AsyncMock()),
+            response=make_response("defer", "send_message", "is_done"),
+            without=("edit_original_response", "original_response"),
         )
 
     @staticmethod
@@ -135,7 +136,7 @@ class JoinCommandTests(unittest.IsolatedAsyncioTestCase):
                 self.guild.voice_client = self.make_voice_client(self.channel) if outcome == "already_connected" else None
                 self.channel.permissions_for.return_value.connect = outcome != "missing_permissions"
                 self.channel.connect.side_effect = (
-                    discord.Forbidden(SimpleNamespace(status=403, reason="禁止"), "架空の拒否")
+                    discord.Forbidden(make_http_response(403, "禁止"), "架空の拒否")
                     if outcome == "forbidden" else None
                 )
                 await self.commands["join"](self.interaction)
@@ -402,12 +403,12 @@ class JoinCommandTests(unittest.IsolatedAsyncioTestCase):
                 self.channel.connect.assert_not_awaited()
 
     def another_interaction(self, *, guild=None, channel=None, name="join"):
-        return SimpleNamespace(
+        return make_interaction(
             guild=guild if guild is not None else self.guild,
             command=SimpleNamespace(name=name),
             user=Mock(spec=discord.Member, voice=SimpleNamespace(channel=channel or self.channel)),
-            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), is_done=Mock(return_value=False)),
-            followup=SimpleNamespace(send=AsyncMock()),
+            response=make_response("defer", "send_message", "is_done"),
+            without=("edit_original_response", "original_response"),
         )
 
     def connect_to_guild(self, guild, channel, *, started=None, release=None):

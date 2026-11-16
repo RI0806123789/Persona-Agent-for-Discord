@@ -6,11 +6,10 @@ from typing import Any
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 
 from persona_bot.core.background import run_in_thread
-from persona_bot.utils.graph_rendering import graph_font_context, save_figure_to_buffer, serialized_plot
+from persona_bot.utils.graph_rendering import plot_figure, save_figure_to_buffer, serialized_plot
 from persona_bot.config.constants import MAX_USAGE_HISTORY
 
 
@@ -81,8 +80,7 @@ class UsageTracker:
     def _render_graph_buffer(
         self, input_tokens: list[int], output_tokens: list[int], total_tokens: list[int],
     ) -> io.BytesIO:
-        with plt.rc_context(graph_font_context()):
-            figure, axis = plt.subplots(figsize=(10, 6))
+        with plot_figure(figsize=(10, 6)) as (figure, axis):
             x = np.arange(1, len(total_tokens) + 1)
             axis.plot(x, input_tokens, label="入力トークン数", marker="o", color="red")
             axis.plot(x, output_tokens, label="出力トークン数", marker="o", color="blue")

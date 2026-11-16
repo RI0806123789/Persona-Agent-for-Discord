@@ -3,7 +3,7 @@ import asyncio
 from dataclasses import dataclass
 import io
 from inspect import isawaitable
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Coroutine, Optional
 
 import discord
 from discord import ui
@@ -207,7 +207,59 @@ async def bind_panel_message(
 PANEL_BUSY_NOTICE = "処理中です。結果が届くまでお待ちください。"
 
 
-class PanelView(ui.View):
+class OwnedView(ui.View):
+    """終了処理の回収対象になる View の共通の土台（#434）。
+
+    次の3つをここに集約する。機能パネルの `PanelView` のほか、チャンネルへ出す1通のメッセージに付ける
+    `AgentCancelView`・`VoiceConsentView` も継承する。
+
+    ・`TaskOwner` の保持（未指定なら作成時のコンテキストから取得する）
+    ・終了開始後の新規操作の拒否（`_dispatch_item`）と、受付全体の回収（`_scheduled_task`）
+    ・`on_error` で SDK 既定の View/Item の repr をログへ出さない
+
+    ★ ボタンのコールバックを直接呼ぶ経路（テストなど）でも回収できるよう、必要な View は
+    `run_owned` でコールバック本体を包む。`TaskOwner.run` は入れ子でも追跡を外さない。
+    """
+
+    # on_error のログの出力先と文面。モジュールごとのロガー名を保つため、サブクラスが差し替える。
+    _error_logger: logging.Logger = logger
+    _error_log_message = "パネル操作中にエラーが発生しました。"
+
+    def __init__(self, *, timeout: float | None, task_owner: TaskOwner | None = None) -> None:
+        super().__init__(timeout=timeout)
+        # UI コールバックを終了処理の回収対象にするための所有者。
+        # 未指定時は作成時のコンテキストから自動取得する（コマンド実行中なら設定される）。
+        self._task_owner: TaskOwner | None = task_owner if task_owner is not None else _current_owner.get()
+
+    @property
+    def is_owner_stopping(self) -> bool:
+        """ボットの終了が始まり、新しい操作を受け付けない状態か。"""
+        return self._task_owner is not None and self._task_owner.stopping
+
+    async def run_owned(self, coro: Coroutine[Any, Any, Any]) -> Any:
+        """コールバック本体を所有者の終了待機に含めて実行する（所有者が無ければそのまま待つ）。"""
+        if self._task_owner is None:
+            return await coro
+        return await self._task_owner.run(coro)
+
+    def _dispatch_item(self, item: discord.ui.Item[Any], interaction: discord.Interaction) -> Optional[asyncio.Task[None]]:
+        """終了後の新規操作を拒否し、処理の開始は discord.py に任せる。"""
+        if self.is_owner_stopping:
+            return None
+        return super()._dispatch_item(item, interaction)
+
+    async def _scheduled_task(self, item: discord.ui.Item[Any], interaction: discord.Interaction) -> None:
+        """ライブラリの処理全体を所有者の終了待機に含める。"""
+        await self.run_owned(super()._scheduled_task(item, interaction))
+
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item[Any], /
+    ) -> None:
+        """View や操作内容の repr を出さず、例外は共通ログの診断へ渡す。"""
+        self._error_logger.error(self._error_log_message, exc_info=error)
+
+
+class PanelView(OwnedView):
     """/functions のハブと各サブパネルに共通する土台となる View。
 
     各パネルにコピーされていた次の定型をここへ集約する:
@@ -227,7 +279,7 @@ class PanelView(ui.View):
         timeout_notice: str,
         task_owner: TaskOwner | None = None,
     ) -> None:
-        super().__init__(timeout=timeout)
+        super().__init__(timeout=timeout, task_owner=task_owner)
         # タイムアウト時に UI を取り除くためのパネルメッセージ参照（送信後に設定される）。
         self.message: discord.InteractionMessage | None = None
         # タイムアウトしたときにユーザーへ表示する文言（パネルごとに変える）。
@@ -238,23 +290,6 @@ class PanelView(ui.View):
         # 送らないため（#398、#415）。パネルを残したまま結果を別の followup で送るボタンは、
         # パネルの操作世代では止められないので、名前ごとにここで排他する。
         self._running_aggregations: set[str] = set()
-        # UI コールバックを終了処理の回収対象にするための所有者。
-        # 未指定時は作成時のコンテキストから自動取得する（コマンド実行中なら設定される）。
-        self._task_owner: TaskOwner | None = task_owner if task_owner is not None else _current_owner.get()
-
-    def _dispatch_item(self, item: discord.ui.Item[Any], interaction: discord.Interaction) -> Optional[asyncio.Task[None]]:
-        """終了後の新規操作を拒否し、処理の開始は discord.py に任せる。"""
-        if self._task_owner is not None and self._task_owner.stopping:
-            return None
-        return super()._dispatch_item(item, interaction)
-
-    async def _scheduled_task(self, item: discord.ui.Item[Any], interaction: discord.Interaction) -> None:
-        """ライブラリの処理全体を所有者の終了待機に含める。"""
-        task = super()._scheduled_task(item, interaction)
-        if self._task_owner is None:
-            await task
-        else:
-            await self._task_owner.run(task)
 
     def try_begin_aggregation(self, name: str) -> bool:
         """同じ名前の処理が実行中なら False を返す。判定と登録の間に await を挟まないこと。
@@ -290,7 +325,7 @@ class PanelView(ui.View):
         """パネルを開いた後にブロックされた利用者も、操作のたびに拒否する。"""
         if self.is_finished() or self._panel_state.current is not self:
             return False
-        if self._task_owner is not None and self._task_owner.stopping:
+        if self.is_owner_stopping:
             return False
         if self.blocked_user_check is not None and await reject_blocked_interaction(interaction, self.blocked_user_check):
             return False
@@ -312,12 +347,6 @@ class PanelView(ui.View):
             source=self,
         )
         return False
-
-    async def on_error(
-        self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item[Any], /
-    ) -> None:
-        """パネルや操作内容の repr を出さず、例外は共通ログの診断へ渡す。"""
-        logger.error("パネル操作中にエラーが発生しました。", exc_info=error)
 
     async def on_timeout(self) -> None:
         """タイムアウト時に、操作できなくなった UI をメッセージから取り除く。"""

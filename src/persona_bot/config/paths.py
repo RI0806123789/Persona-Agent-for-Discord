@@ -1,3 +1,5 @@
+import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from persona_bot.config.constants import BASE_DIR, BUILTIN_PERSONA_PROMPT
@@ -32,3 +34,29 @@ async def load_persona_template(prompt_file: str) -> str:
 
 def _load_persona_template(prompt_file: str) -> str:
     return load_prompt_template(resolve_prompt_path(prompt_file))
+
+
+async def load_persona_or_default(
+    prompt_file: str,
+    *,
+    logger: logging.Logger,
+    message: str,
+    loader: Callable[[str], Awaitable[str]] = load_persona_template,
+    default: str | None = None,
+) -> str | None:
+    """ペルソナを読み、ファイルが無いときは警告ログを出して `default` を返す（#434）。
+
+    自発会話・自律行動・会話要約など、ペルソナが読めなければ処理を見送る（None）か、口調なしで続ける
+    （空文字）サービスの定型を共通化する。警告は呼び出し側のロガーに出し、運用ログの出元を変えない。
+
+    Args:
+        logger: 警告の出力先（呼び出し元モジュールのロガー）。
+        message: 警告の文面。ファイル名・パスを含めないこと。
+        loader: 読込関数。呼び出し元モジュールで差し替えられる名前（テストの差し替え口）を渡す。
+        default: ファイルが無いときの戻り値。
+    """
+    try:
+        return await loader(prompt_file)
+    except FileNotFoundError:
+        logger.warning(message, exc_info=True)
+        return default

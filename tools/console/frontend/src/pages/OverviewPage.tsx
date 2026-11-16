@@ -390,7 +390,7 @@ function GitCard({ status, now }: { status: StatusResponse | null; now: number }
   );
 }
 
-function RecentLogs({ logs, onNavigate }: { logs: LogEntry[]; onNavigate: (page: PageId) => void }) {
+export function RecentLogs({ logs, onNavigate }: { logs: LogEntry[]; onNavigate: (page: PageId) => void }) {
   const privacy = usePrivacy();
   const recent = prepareLogEntries(logs, privacy).slice(-8);
   return (

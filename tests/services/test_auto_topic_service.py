@@ -19,6 +19,7 @@ from persona_bot.core.background import spawn
 from persona_bot.services.auto_topic_service import AutoTopicService
 from tests.helpers.thread_probe import make_thread_probe
 from tests.helpers.persona_helpers import install_persona_catalog
+from tests.helpers.discord_mocks import make_http_response, make_permissions
 
 
 class AutoTopicServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -29,7 +30,7 @@ class AutoTopicServiceTests(unittest.IsolatedAsyncioTestCase):
         self.settings.auto_topic_enabled = True
         self.settings.auto_topic_interval_hours = 1
         self.settings.auto_topic_channels[10] = datetime.now(timezone.utc) - timedelta(hours=2)
-        self.permissions = SimpleNamespace(view_channel=True, send_messages=True, send_messages_in_threads=True)
+        self.permissions = make_permissions()
         self.channel = SimpleNamespace(
             id=10, name="架空のチャンネル", guild=SimpleNamespace(me=object()), send=AsyncMock(),
             permissions_for=Mock(return_value=self.permissions),
@@ -181,7 +182,7 @@ class AutoTopicServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.channel.send.call_args.kwargs["allowed_mentions"].to_dict(), {"parse": []})
 
     async def test_forbidden_after_generation_prevents_repeated_api_calls(self):
-        self.channel.send.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="禁止"), "架空の権限変更")
+        self.channel.send.side_effect = discord.Forbidden(make_http_response(403, "禁止"), "架空の権限変更")
         await self.service.run_pending_checks()
         await self.service.run_pending_checks()
         self.assertIn(10, self.settings.auto_topic_posted_at)
@@ -189,7 +190,7 @@ class AutoTopicServiceTests(unittest.IsolatedAsyncioTestCase):
         self.channel.send.assert_awaited_once()
 
     async def test_temporary_send_failure_still_retries(self):
-        self.channel.send.side_effect = [discord.HTTPException(SimpleNamespace(status=503, reason="一時障害"), "架空の障害"), None]
+        self.channel.send.side_effect = [discord.HTTPException(make_http_response(503, "一時障害"), "架空の障害"), None]
         await self.service.run_pending_checks()
         self.assertNotIn(10, self.settings.auto_topic_posted_at)
         await self.service.run_pending_checks()
@@ -248,7 +249,7 @@ class AutoTopicServiceTests(unittest.IsolatedAsyncioTestCase):
 
     def prepare_topic_permission_case(self, permission):
         """通常チャンネルとスレッドの、変更可能なボット権限を用意する。"""
-        self.permissions = SimpleNamespace(view_channel=True, send_messages=True, send_messages_in_threads=True)
+        self.permissions = make_permissions()
         self.channel = Mock(spec=discord.Thread) if permission == "send_messages_in_threads" else SimpleNamespace()
         self.channel.id, self.channel.name = 10, "架空のチャンネル"
         self.channel.guild = SimpleNamespace(me=object())
@@ -432,7 +433,7 @@ class AnniversaryChannelTests(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def make_channel(channel_id: int) -> SimpleNamespace:
-        permissions = SimpleNamespace(view_channel=True, send_messages=True, send_messages_in_threads=True)
+        permissions = make_permissions()
         return SimpleNamespace(
             id=channel_id, name=f"架空のチャンネル{channel_id}", guild=SimpleNamespace(me=object()),
             send=AsyncMock(), permissions_for=Mock(return_value=permissions), permissions=permissions,
@@ -713,7 +714,7 @@ class AnniversaryChannelTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_forbidden_after_generation_stops_hourly_regeneration(self):
         self.channels[10].send.side_effect = discord.Forbidden(
-            SimpleNamespace(status=403, reason="禁止"), "架空の権限変更",
+            make_http_response(403, "禁止"), "架空の権限変更",
         )
         for _ in range(3):
             await self.celebrate()

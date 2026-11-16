@@ -19,6 +19,7 @@ from persona_bot.services import reminder_service
 from persona_bot.services.reminder_service import ReminderService
 import discord
 from persona_bot.utils import timeutil
+from tests.helpers.discord_mocks import make_http_response, make_permissions
 
 
 class ReminderCompatibilityTests(unittest.IsolatedAsyncioTestCase):
@@ -54,7 +55,7 @@ class ReminderCompatibilityTests(unittest.IsolatedAsyncioTestCase):
                 )
                 channel.edit = AsyncMock(return_value=channel)
                 if fails:
-                    channel.edit.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="禁止"), "架空の再開拒否")
+                    channel.edit.side_effect = discord.Forbidden(make_http_response(403, "禁止"), "架空の再開拒否")
                 calls = Mock()
                 calls.attach_mock(channel.edit, "edit")
                 calls.attach_mock(channel.send, "send")
@@ -100,7 +101,7 @@ class ReminderCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             ("text", True, True, True), ("thread", True, True, True), ("dm", True, True, True),
         ):
             with self.subTest(kind=kind, view=view, send=send, member=member):
-                permissions = SimpleNamespace(view_channel=view, send_messages=send, send_messages_in_threads=send)
+                permissions = make_permissions(view_channel=view, send_messages=send, send_messages_in_threads=send)
                 if kind == "thread":
                     permissions.send_messages = False
                 channel = Mock(spec=discord.Thread if kind == "thread" else discord.TextChannel,

@@ -23,9 +23,6 @@ EXAMPLE_PROFILES_PATH = BACKEND_DIR / "profiles.example.json"
 
 ENVIRONMENTS = ("development", "production")
 
-# サービス名に使ってよい文字（シェルに渡すため、記号を厳しく制限する）
-_SAFE_SERVICE_NAME = re.compile(r"[A-Za-z0-9@._][A-Za-z0-9@._-]*")
-
 # 見本（profiles.example.json）で「書き換えてください」の印にしている値。.env.example の YOUR_GEMINI_API_KEY と同じ流儀。
 # ★ 見本の仮の値のまま接続させないこと: 仮のホスト名を DNS が偶然引けると、知らないサーバーへつなぎに行ってしまう
 #   （ホスト鍵の照合でログイン前に止まるが、接続しに行った記録は相手に残る）。
@@ -122,7 +119,7 @@ def _parse_profile(raw: dict) -> Profile:
         raise ProfileError(f"プロファイル {profile_id} の environment は development か production にしてください。")
 
     service = raw.get("service", "bot")
-    if not isinstance(service, str) or not _SAFE_SERVICE_NAME.fullmatch(service):
+    if not isinstance(service, str) or not rc.SAFE_SERVICE_NAME.fullmatch(service):
         raise ProfileError(f"プロファイル {profile_id} の service に使えない文字が含まれています。")
 
     bot_dir = raw.get("bot_dir", "/home/ubuntu/Persona-Chat-in-Discord")

@@ -25,7 +25,7 @@ from persona_bot.config.constants import (
     AUTONOMOUS_OPENING_NOTICE,
     AUTONOMOUS_TIMEOUT_SECONDS,
 )
-from persona_bot.config.paths import load_persona_template
+from persona_bot.config.paths import load_persona_or_default, load_persona_template
 from persona_bot.core.app_state import AutonomousSession, GuildSettings, ResponseSettings
 from persona_bot.core.background import wait_for_cleanup
 from persona_bot.services.affinity_service import strip_affinity_tag
@@ -314,8 +314,7 @@ class AutonomousSpeechMixin:
 
     async def _load_persona(self, response_settings: ResponseSettings) -> str | None:
         """そのサーバーで選ばれているペルソナのプロンプトを読む（無ければ None）。"""
-        try:
-            return await load_persona_template(response_settings.prompt_file)
-        except FileNotFoundError:
-            logger.warning("自律行動: プロンプトファイルが見つかりません。", exc_info=True)
-            return None
+        return await load_persona_or_default(
+            response_settings.prompt_file, logger=logger, loader=load_persona_template,
+            message="自律行動: プロンプトファイルが見つかりません。",
+        )

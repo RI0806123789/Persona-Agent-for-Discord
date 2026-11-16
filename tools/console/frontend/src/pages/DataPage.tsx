@@ -7,6 +7,7 @@ import { Button, Card, Chip, ConnectedButtonGroup, InlineError, Notice, Stat, St
 import { formatBytes, formatNumber, formatPercent } from "../format";
 import { lastSevenDays } from "../data";
 import { DB_TABLE_SPECS, STATUS_LABELS, isViewableTable } from "../dbTables";
+import { prefersReducedMotion } from "../motionPreference";
 import { usePrivacy } from "../privacy";
 import type { DbSummary, Profile } from "../types";
 import { DbTableDetail } from "./DbTableDetail";
@@ -58,8 +59,7 @@ export function DataPage({
       setShownSelection({ connectionKey, table: next });
       // 開いた中身のカードが見えるところまで送る（描画の後に。動きを減らす設定ならすぐに移る）
       requestAnimationFrame(() => {
-        const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        document.getElementById("db-table-detail")?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+        document.getElementById("db-table-detail")?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
       });
     }
   };

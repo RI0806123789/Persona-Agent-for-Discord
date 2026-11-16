@@ -18,7 +18,7 @@ import { OperationsPage } from "./pages/OperationsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { PrivacyContext, collectSecrets, createPrivacy } from "./privacy";
 import { useConnectionScope, useConsolePolling, useDeployController, useServiceController } from "./controllers";
-import { unsetFieldsOf } from "./profiles";
+import { unsetFieldsOf, unsetFieldsText } from "./profiles";
 import { SEED_OPTIONS, applyTheme } from "./theme/theme";
 import { withViewTransition } from "./viewTransition";
 import type { ConnectionState, Insights, Operation, Profile, Sample, ServiceAction, StatusResponse } from "./types";
@@ -37,7 +37,7 @@ export default function App() {
 }
 
 
-function Console() {
+export function Console() {
   const notify = useToast();
   const now = useNow();
 
@@ -244,8 +244,8 @@ function Console() {
         // 見本（Git に含まれる）へ実際の接続先を書かせないよう、見本を読んでいるときはコピーから案内する
         detail:
           profilesSource === "profiles.json"
-            ? `backend/profiles.json の YOUR_ で始まる値（${unset.join("・")}）を書き換えてください。手順は tools/console/README.md にあります。`
-            : `backend/profiles.example.json を backend/profiles.json にコピーし、YOUR_ で始まる値（${unset.join("・")}）を書き換えてください。手順は tools/console/README.md にあります。`,
+            ? `backend/profiles.json の ${unsetFieldsText(unset)}を書き換えてください。手順は tools/console/README.md にあります。`
+            : `backend/profiles.example.json を backend/profiles.json にコピーし、${unsetFieldsText(unset)}を書き換えてください。手順は tools/console/README.md にあります。`,
       });
       return;
     }

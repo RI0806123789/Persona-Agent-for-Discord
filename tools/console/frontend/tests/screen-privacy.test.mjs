@@ -6,6 +6,7 @@ import * as React from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
+import { nodes } from "./helpers/tree.mjs";
 
 const source = async (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
 const sources = new Map();
@@ -301,8 +302,6 @@ function runtime() {
   };
   return {hooks, render(component, props) {index = 0; return component(props);}, setPrivacy(value) {activePrivacy = value;}};
 }
-const nodes = (tree) => Array.isArray(tree) ? tree.flatMap(nodes)
-  : tree && typeof tree === "object" ? [tree, ...nodes(tree.props?.children)] : [];
 function appHarness() {
   const rt = runtime(), dialogRuntime = runtime(), calls = [], notices = [];
   const jsx = (type, props) => ({type, props});
@@ -318,13 +317,13 @@ function appHarness() {
     "./api": {api, errorMessage: (error) => error.message, ApiError: Error},
     "./components/toast": {useToast: () => (notice) => notices.push(notice)},
     "./requestScope": load("requestScope.ts"), "./navigation": {PAGES: [{id: "overview"}], isPageId: () => true},
-    "./profiles": load("profiles.ts"), "./theme/theme": {SEED_OPTIONS: [{id: "test"}]},
+    "./profiles": load("profiles.ts"), "./status": load("status.ts"), "./deployPlan": load("deployPlan.ts"), "./theme/theme": {SEED_OPTIONS: [{id: "test"}]},
     "./components/Icon": {Icon: "svg"}};
   const resolve = (name) => modules[name] ?? {};
   modules["./controllers"] = compile(sources.get("controllers.ts"), resolve);
   modules["./confirmations"] = compile(sources.get("confirmations.tsx"), resolve);
   const controls = "requestAction, requestDeploy, confirm, confirmOpen, applyConnection, setPrivacyOn, privacy, setProfiles, notify";
-  const instrumented = sources.get("App.tsx").replace("function Console() {", "export function Console() {")
+  const instrumented = sources.get("App.tsx")
     .replace("  return (\n    <PrivacyContext.Provider", `  return {${controls}};\n  return (\n    <PrivacyContext.Provider`);
   assert.ok(instrumented.includes(`return {${controls}}`));
   const component = compile(instrumented, resolve).Console;
@@ -403,7 +402,7 @@ test("#216 接続変更後は確認を閉じ古いサービス・デプロイcal
   }
 });
 // 通知は原文で保持し、描画時の伏せ字状態で隠す（#217）。
-const {Snackbar} = compile(sources.get("components/toast.tsx").replace("function Snackbar(", "export function Snackbar("),
+const {Snackbar} = compile(sources.get("components/toast.tsx"),
   (name) => ({react: React, "react/jsx-runtime": jsxRuntime, "../privacy": privacy, "./Icon": {Icon: () => null}})[name] ?? {});
 test("#216 既存通知の伏せ字と実接続先のIDを維持する", () => {
   const h = appHarness(); h.render().setPrivacyOn(true); h.render();

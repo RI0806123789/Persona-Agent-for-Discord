@@ -63,7 +63,7 @@ export function ToastViewport() {
   );
 }
 
-function Snackbar({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
+export function Snackbar({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   const privacy = usePrivacy();
   const detail = redactError(toast.detail, toast.detailSafe, privacy);
   const [held, setHeld] = useState(false);

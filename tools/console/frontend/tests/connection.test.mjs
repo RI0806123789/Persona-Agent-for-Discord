@@ -1,29 +1,23 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import * as React from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import { renderToStaticMarkup } from "react-dom/server";
+import { compile, readSource as source } from "./helpers/compile.mjs";
+import { nodes } from "./helpers/tree.mjs";
 
-function compile(source, modules) {
-  const exports = {};
-  const output = ts.transpileModule(source, { compilerOptions: {
-    module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
-  } }).outputText;
-  new Function("require", "exports", output)((name) => modules[name] ?? {}, exports);
-  return exports;
-}
 
-const source = async (name) => (await readFile(new URL(`../src/${name}`, import.meta.url), "utf8")).replaceAll("\r\n", "\n");
 const scopes = compile(await source("requestScope.ts"), {});
+const statusModule = compile(await source("status.ts"));
+const deployPlan = compile(await source("deployPlan.ts"));
 const appSource = await source("App.tsx");
 const confirmationsSource = await source("confirmations.tsx");
 const controllerSource = await source("controllers.ts");
 const dataSource = await source("pages/DataPage.tsx");
 const privacySource = await source("privacy.ts");
 const displayPrivacy = compile(privacySource, {react: React});
-const {Snackbar} = compile((await source("components/toast.tsx")).replace("function Snackbar(", "export function Snackbar("), {
+const {Snackbar} = compile((await source("components/toast.tsx")), {
   react: React, "react/jsx-runtime": jsxRuntime, "../privacy": displayPrivacy, "./Icon": {Icon: () => null},
 });
 
@@ -85,7 +79,7 @@ function consoleHarness(api, renderTree = false) {
     "./components/toast": { useToast: () => (notice) => notices.push(notice), ToastViewport: "ToastViewport" },
     "./privacy": privacy, "./requestScope": scopes,
     "./navigation": { PAGES: [{ id: "overview" }], isPageId: () => true },
-    "./profiles": { unsetFieldsOf: () => [] },
+    "./profiles": { unsetFieldsOf: () => [] }, "./status": statusModule, "./deployPlan": deployPlan,
     "./theme/theme": { SEED_OPTIONS: [{ id: "test", hex: "#123456" }] },
     "./pages/OverviewPage": { OverviewPage: "OverviewPage" },
     "./pages/OperationsPage": { OperationsPage: "OperationsPage" },
@@ -93,7 +87,7 @@ function consoleHarness(api, renderTree = false) {
   modules["./controllers"] = compile(controllerSource, modules);
   modules["./confirmations"] = compile(confirmationsSource, modules);
   const controls = "busyAction, requestAction, confirmOpen, requestDeploy, runDeploy, confirm, applyConnection, refreshStatus, refreshInsights, refreshDeploy, handleConnect, handleDisconnect, runAction, status, insights, deploy, stateUnknown, statusError, insightsError, setSelectedProfileId, setProfiles, setPrivacyOn, setStoredPage, notify, privacy";
-  const exported = appSource.replace("function Console() {", "export function Console() {");
+  const exported = appSource;
   const instrumented = renderTree
     ? exported.replace("  return (\n    <PrivacyContext.Provider", "  const tree = (\n    <PrivacyContext.Provider")
       .replace("    </PrivacyContext.Provider>\n  );", `    </PrivacyContext.Provider>\n  );\n  return {${controls}, tree};`)
@@ -304,11 +298,6 @@ test("接続切替の最初の描画から、子のテーブル取得を明示�
   const detailSource = await source("pages/DbTableDetail.tsx");
   let child, childKey, Detail, detailTree;
   const onNames = () => {};
-  function nodes(node) {
-    if (Array.isArray(node)) return node.flatMap(nodes);
-    if (!node || typeof node !== "object") return [];
-    return [node, ...nodes(node.props?.children)];
-  }
   const render = () => parent.render(DataPage, { connected: true, connectionKey, refreshToken: 0, onNames });
   // Collapse の閉じる動きで子が残る場合も扱う。子のeffectを親より先に実行する。
   const commit = async (tree) => {
@@ -506,7 +495,7 @@ test("#217 保持した再試行通知は切替後も最新の選択先を使う
 test("ログが途切れたときのツールチップにも伏せ字を適用する", async () => {
   const privacy = { redact: (text) => text.replaceAll("FICTIONAL_HOST", "MASKED") };
   const privacyModule = compile(await source("privacy.ts"), {react: {createContext: (value) => value}});
-  const sourceText = (await source("pages/LogsPage.tsx")).replace("function StreamIndicator(", "export function StreamIndicator(");
+  const sourceText = (await source("pages/LogsPage.tsx"));
   const jsx = (type, props) => ({ type, props });
   const component = compile(sourceText, { "../privacy": {...privacyModule, usePrivacy: () => privacy },
     "react/jsx-runtime": { jsx, jsxs: jsx }, "../logs": { LEVEL_LABELS: {} } }).StreamIndicator;
@@ -582,7 +571,7 @@ test("状態不明で完了したデプロイは一度だけ通知・状態更�
   const notices = [];
   let fetches = 0, refreshes = 0, finished = false;
   const { useDeployController } = compile(controllerSource, {
-    react: runtime.hooks, "./hooks": hooks,
+    react: runtime.hooks, "./hooks": hooks, "./status": statusModule,
     "./api": { api: { deploy: async () => {
       fetches++;
       return { running: !finished, deploy: { profile_id: "A", status: finished ? "unknown" : "running", message: "架空の終了未確認" } };
@@ -639,8 +628,6 @@ test("別接続先へ移ってデプロイ記録を捨てても状態不明の�
     deploy: async () => ({ running: false, deploy: { profile_id: "A", status: "unknown" } }),
     service: (...args) => calls.push(args), startDeploy: (...args) => calls.push(args),
   }, true);
-  const nodes = (node) => Array.isArray(node) ? node.flatMap(nodes)
-    : node && typeof node === "object" ? [node, ...nodes(node.props?.children)] : [];
   harness.render().applyConnection(snapshot);
   await harness.render().refreshDeploy();
   assert.equal(harness.render().deploy.status, "unknown");

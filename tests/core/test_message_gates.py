@@ -1,6 +1,5 @@
 """受信時の関門の順序・画像だけの発言・違反警告・未対応添付の案内を検証する（#65）。"""
 
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -16,6 +15,7 @@ from persona_bot.config import constants
 from persona_bot.config.constants import BLACKLIST_MAX_VIOLATIONS
 from persona_bot.core.app_state import BotState
 from tests.helpers.message_handler_helpers import make_message_handler
+from tests.helpers.discord_mocks import make_spec_channel
 
 
 def close_coroutine(coro, **kwargs):
@@ -27,13 +27,7 @@ class MessageGateTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.state = BotState()
         self.state.get_guild(1).current_respond_mode = "all"
-        channel = Mock(spec=discord.TextChannel, id=10)
-
-        @asynccontextmanager
-        async def typing():
-            yield
-
-        channel.typing.side_effect = typing
+        channel = make_spec_channel(discord.TextChannel, 10)
         self.message = SimpleNamespace(
             author=SimpleNamespace(id=11, bot=False, display_name="架空の利用者"),
             guild=SimpleNamespace(id=1), channel=channel,

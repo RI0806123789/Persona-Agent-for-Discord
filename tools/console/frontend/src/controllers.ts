@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateA
 import { ApiError, api, errorMessage } from "./api";
 import { usePolling } from "./hooks";
 import { RequestScope } from "./requestScope";
+import { ACTION_LABELS } from "./status";
 import type { ToastInput } from "./components/toast";
 import type { ConnectionState, Insights, Sample, StatusResponse, DeployRecord, DeployStatus, ServiceAction } from "./types";
 
@@ -29,7 +30,6 @@ const DEPLOY_DONE: Record<Exclude<DeployStatus, "running">, { tone: "good" | "cr
   rollback_failed: { tone: "critical", title: "巻き戻しにも失敗しました。手動の対応が必要です" },
   unknown: { tone: "critical", title: "遠隔処理の終了を確認できず、状態不明です" },
 };
-const ACTION_LABELS: Record<ServiceAction, string> = { start: "起動", stop: "停止", restart: "再起動" };
 
 export function useDeployController(
   { requestScope, wasConnected, connectionChanging, connectionProfileId }: Scope & { connectionProfileId: RefObject<string | null> },

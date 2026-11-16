@@ -10,7 +10,6 @@ from typing import Any
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 
 from persona_bot.config.constants import (
@@ -27,7 +26,8 @@ from persona_bot.config.constants import (
     STATS_TOPIC_COUNT,
 )
 from persona_bot.core.background import run_in_thread, spawn, wait_for_cleanup
-from persona_bot.utils.graph_rendering import graph_font_context, save_figure_to_buffer, serialized_plot
+from persona_bot.utils.graph_rendering import plot_figure, save_figure_to_buffer, serialized_plot
+from persona_bot.utils.select_options import limit_keeping_selected
 from persona_bot.core.database import Database
 from persona_bot.services.prompting import build_stats_analysis_prompt
 from persona_bot.utils.storage import extract_json_object
@@ -346,12 +346,10 @@ class StatsService:
             if self._total_count(data) > 0 and not self._entry_opted_out(data)
         ]
         items.sort(key=lambda t: t[2], reverse=True)
-        selected = items[:STATS_MAX_USERS_IN_SELECT]
-        if current_user_id is not None and not any(uid == current_user_id for uid, _, _ in selected):
-            current = next((item for item in items if item[0] == current_user_id), None)
-            if current is not None:
-                selected = selected[:STATS_MAX_USERS_IN_SELECT - 1] + [current]
-        return selected
+        return limit_keeping_selected(
+            items, lambda item: current_user_id is not None and item[0] == current_user_id,
+            STATS_MAX_USERS_IN_SELECT,
+        )
 
     # ---- 話題・性格推定の LLM 解析 ---------------------------------------
 
@@ -515,8 +513,7 @@ class StatsService:
     def build_hourly_graph(self, entry: dict) -> io.BytesIO:
         """時間帯別の発言回数ヒストグラム（24時間）。"""
         hourly = normalize_hourly(entry.get("hourly"))
-        with plt.rc_context(graph_font_context()):
-            figure, axis = plt.subplots(figsize=(10, 5))
+        with plot_figure(figsize=(10, 5)) as (figure, axis):
             x = np.arange(STATS_HOURLY_BUCKETS)
             axis.bar(x, hourly, color="tab:blue")
             axis.set_xticks(x)
@@ -538,8 +535,7 @@ class StatsService:
         cleaned = cleaned[:STATS_TOPIC_COUNT][::-1]  # 横棒は下から上へ並ぶため反転
         labels = [c[0] for c in cleaned]
         weights = [c[1] for c in cleaned]
-        with plt.rc_context(graph_font_context()):
-            figure, axis = plt.subplots(figsize=(10, max(3, len(labels) * 0.6)))
+        with plot_figure(figsize=(10, max(3, len(labels) * 0.6))) as (figure, axis):
             axis.barh(range(len(labels)), weights, color="tab:green")
             axis.set_yticks(range(len(labels)))
             axis.set_yticklabels(labels)
@@ -561,8 +557,7 @@ class StatsService:
         # レーダーを閉じるため先頭要素を末尾に足す
         values_closed = values + values[:1]
         angles_closed = angles + angles[:1]
-        with plt.rc_context(graph_font_context()):
-            figure, axis = plt.subplots(figsize=(6, 6), subplot_kw={"polar": True})
+        with plot_figure(figsize=(6, 6), subplot_kw={"polar": True}) as (figure, axis):
             axis.plot(angles_closed, values_closed, color="tab:purple", marker="o")
             axis.fill(angles_closed, values_closed, color="tab:purple", alpha=0.25)
             axis.set_xticks(angles)
@@ -600,8 +595,7 @@ class StatsService:
         items = items[:top_n][::-1]  # 横棒は下から上へ並ぶため反転
         names = [i[0] for i in items]
         counts = [i[1] for i in items]
-        with plt.rc_context(graph_font_context()):
-            figure, axis = plt.subplots(figsize=(10, max(3, len(names) * 0.5)))
+        with plot_figure(figsize=(10, max(3, len(names) * 0.5))) as (figure, axis):
             axis.barh(range(len(names)), counts, color="tab:orange")
             axis.set_yticks(range(len(names)))
             axis.set_yticklabels(names)

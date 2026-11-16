@@ -1,23 +1,15 @@
 import assert from "node:assert/strict";
-import {readFile} from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import * as React from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import {renderToStaticMarkup} from "react-dom/server";
+import { compile, readSource as source } from "./helpers/compile.mjs";
+import { nodes } from "./helpers/tree.mjs";
 
-const source = async (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
-function compile(text, modules) {
-  const exports = {};
-  const output = ts.transpileModule(text, {compilerOptions: {
-    module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
-  }}).outputText;
-  new Function("require", "exports", output)((name) => modules[name] ?? {}, exports);
-  return exports;
-}
 const privacySource = await source("privacy.ts"), toastSource = await source("components/toast.tsx");
 const privacy = compile(privacySource, {react: React});
-const {Snackbar} = compile(toastSource.replace("function Snackbar(", "export function Snackbar("), {
+const {Snackbar} = compile(toastSource, {
   react: React, "react/jsx-runtime": jsxRuntime, "../privacy": privacy, "./Icon": {Icon: () => null},
 });
 const secret = "FICTIONAL_PRIVATE_LABEL", laterSecret = "FICTIONAL_LATER_BRANCH";
@@ -84,8 +76,6 @@ function stateRuntime() {
     dispose() {slots.forEach((slot) => slot?.cleanup?.());},
   };
 }
-const nodes = (tree) => Array.isArray(tree) ? tree.flatMap(nodes)
-  : tree && typeof tree === "object" ? [tree, ...nodes(tree.props?.children)] : [];
 function harness(t) {
   let active;
   const react = {createContext(value) {const context = {value}; context.Provider = {context}; return context;},

@@ -1,17 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { compile, readSource as source } from "./helpers/compile.mjs";
+import { nodes } from "./helpers/tree.mjs";
 
-const source = async (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
-function compile(text, modules = {}) {
-  const exports = {};
-  const output = ts.transpileModule(text, { compilerOptions: {
-    module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
-  } }).outputText;
-  new Function("require", "exports", output)((name) => modules[name] ?? {}, exports);
-  return exports;
-}
 let activePrivacy, cursor = 0, slots = [];
 const react = {
   createContext: (value) => ({value}), useContext: () => activePrivacy,
@@ -37,8 +28,6 @@ const {OverviewPage} = compile(await source("pages/OverviewPage.tsx"), modules);
 const {LogsPage} = compile(await source("pages/LogsPage.tsx"), modules);
 const {DeployCard} = compile(await source("pages/DeployCard.tsx"), modules);
 const row = (message, other = {}) => ({ts: 1, pid: 42, priority: 6, source: "python", message, ...other});
-const nodes = (node) => Array.isArray(node) ? node.flatMap(nodes)
-  : node && typeof node === "object" ? [node, ...nodes(node.props?.children)] : [];
 function mode(enabled) { activePrivacy = privacy.createPrivacy(enabled, ["FICTIONAL_HOST"]); }
 function recent(entries) {
   const tree = OverviewPage({connected: true, logs: entries, status: null, insights: null, samples: []});
