@@ -1,6 +1,9 @@
-import type { ServiceStatus } from "./types";
+import type { ServiceAction, ServiceStatus } from "./types";
 
 export type Tone = "good" | "warning" | "serious" | "critical" | "neutral" | "info";
+
+/** サービス操作（起動・停止・再起動）の表示名。確認ダイアログ・通知・操作履歴で共通に使う。 */
+export const ACTION_LABELS: Record<ServiceAction, string> = { start: "起動", stop: "停止", restart: "再起動" };
 
 export interface ToneLabel {
   tone: Tone;

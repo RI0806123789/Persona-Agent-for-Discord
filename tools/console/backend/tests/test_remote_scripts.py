@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import remote_commands as rc  # noqa: E402
-from remote_scripts import db_table, insights  # noqa: E402
+from remote_scripts import db_summary, db_table, insights  # noqa: E402
 from fake_ssh_server import FAKE_OPTED_OUT_USER, FAKE_USERS, make_fake_database  # noqa: E402
 
 FAKE_TOKEN = "fake-token-for-test-only"
@@ -705,8 +705,6 @@ class InsightsScriptTests(unittest.TestCase):
 
 class DbSummaryScriptTests(unittest.TestCase):
     def test_daily_feedback_uses_composite_index_and_keeps_mixed_timestamp_boundaries(self):
-        namespace = {"__name__": "test_db_summary"}
-        exec(compile(rc.DB_SUMMARY_SCRIPT, "db_summary.py", "exec"), namespace)
         plans = []
 
         class TracedConnection(sqlite3.Connection):
@@ -736,16 +734,21 @@ class DbSummaryScriptTests(unittest.TestCase):
             with patch.object(sqlite3, "connect", side_effect=lambda *args, **kwargs: connect(
                 *args, factory=TracedConnection, **kwargs,
             )):
-                data = namespace["collect"](str(path), str(root / "missing.json"))
+                data = db_summary.collect(str(path), str(root / "missing.json"))
             self.assertEqual(sum(day["good"] for day in data["feedback_by_day"]), 2)
             self.assertEqual(sum(day["bad"] for day in data["feedback_by_day"]), 0)
         self.assertTrue(any("SEARCH feedback USING INDEX idx_feedback_guild_created" in plan
                             and "created_at>?" in plan and "created_at<?" in plan for plan in plans), plans)
 
     def summarize(self, root):
-        completed = run_script(rc.DB_SUMMARY_SCRIPT, [str(root / "bot.db"), str(root / "blacklist.json")])
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        return json.loads(completed.stdout.strip().splitlines()[-1])
+        # スクリプトは import して直接呼ぶ（標準入力で送る経路は DbSummaryEntryPointTests が確かめる）。
+        return db_summary.collect(str(root / "bot.db"), str(root / "blacklist.json"))
+
+    def test_identifier_quoting_matches_the_table_reader(self):
+        # 遠隔へは1ファイルずつ送るため、2つのスクリプトは同じ実装を別々に持つ。食い違わないことを確かめる。
+        for name in ("plain", 'with"quote', '"', "日本語", "a b"):
+            with self.subTest(name=name):
+                self.assertEqual(db_summary.quote(name), db_table.quote(name))
 
     def test_missing_tables_keep_other_counts_and_never_read_conversation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -837,9 +840,7 @@ class DbSummaryScriptTests(unittest.TestCase):
             con.commit()
             con.close()
 
-            completed = run_script(rc.DB_SUMMARY_SCRIPT, [str(db_path), str(Path(temp) / "missing.json")])
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            data = json.loads(completed.stdout.strip().splitlines()[-1])
+            data = db_summary.collect(str(db_path), str(Path(temp) / "missing.json"))
 
         self.assertEqual(data["schema_version"], 8)
         self.assertEqual(data["reminders_by_status"], {"pending": 1, "done": 2})

@@ -1,20 +1,11 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
+import { compileTs, readSource as source } from "./helpers/compile.mjs";
 
-const source = async (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
-function compile(text, modules = {}) {
-  const exports = {};
-  const output = ts.transpileModule(text, { compilerOptions: {
-    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
-  } }).outputText;
-  new Function("require", "exports", output)((name) => modules[name] ?? {}, exports);
-  return exports;
-}
-const logs = compile(await source("logs.ts"));
-const logPrivacy = compile(await source("logPrivacy.ts"));
-const privacy = compile(await source("privacy.ts"), {
+const logs = compileTs(await source("logs.ts"));
+const logPrivacy = compileTs(await source("logPrivacy.ts"));
+const privacy = compileTs(await source("privacy.ts"), {
   react: { createContext: (value) => value }, "./logPrivacy": logPrivacy,
 });
 const hooksSource = await source("hooks.ts");
@@ -66,7 +57,7 @@ function harness(t, { throws = false } = {}) {
       }
     },
   };
-  const exports = compile(hooksSource, {
+  const exports = compileTs(hooksSource, {
     react,
     "./api": { logStreamUrl: () => "ws://console.invalid/logs" },
     "./logs": logs, "./logPrivacy": logPrivacy,

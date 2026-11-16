@@ -1,20 +1,10 @@
 import assert from "node:assert/strict";
-import {readFile} from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
 import * as React from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import {renderToStaticMarkup} from "react-dom/server";
+import { compile, readSource as source } from "./helpers/compile.mjs";
 
-const source = async (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
-function compile(text, modules = {}) {
-  const exports = {};
-  const output = ts.transpileModule(text, {compilerOptions: {
-    module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
-  }}).outputText;
-  new Function("require", "exports", output)((name) => modules[name] ?? {}, exports);
-  return exports;
-}
 const logPrivacy = compile(await source("logPrivacy.ts"));
 const privacy = compile(await source("privacy.ts"), {react: React, "./logPrivacy": logPrivacy});
 const logs = compile(await source("logs.ts"));
@@ -39,9 +29,9 @@ const ui = {Card: wrap, Button: wrap, InlineError: wrap, IconButton: () => null,
 const modules = {react: React, "react/jsx-runtime": jsxRuntime, "../privacy": privacy, "../logs": logs, "../logPresentation": presentation,
   "../components/ui": ui, "../components/Icon": {Icon: () => null},
   "../components/expressive": {WavyProgress: () => null, LoadingIndicator: () => null},
-  "../format": {formatClock: () => "架空の時刻"}};
-const {RecentLogs} = compile((await source("pages/OverviewPage.tsx")).replace("function RecentLogs(", "export function RecentLogs("), modules);
-const {StepItem} = compile((await source("pages/DeployCard.tsx")).replace("function StepItem(", "export function StepItem("), modules);
+  "../format": {formatClock: () => "架空の時刻"}, "../deployPlan": compile(await source("deployPlan.ts"))};
+const {RecentLogs} = compile((await source("pages/OverviewPage.tsx")), modules);
+const {StepItem} = compile((await source("pages/DeployCard.tsx")), modules);
 const logsSource = await source("pages/LogsPage.tsx");
 function html(component, props, enabled, insights = null) {
   return renderToStaticMarkup(React.createElement(privacy.PrivacyContext.Provider, {value: current(enabled, insights)},

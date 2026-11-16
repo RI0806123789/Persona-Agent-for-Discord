@@ -1,5 +1,5 @@
 import { Button, EmptyState } from "../components/ui";
-import { unsetFieldsOf } from "../profiles";
+import { unsetFieldsOf, unsetFieldsText } from "../profiles";
 import { usePrivacy } from "../privacy";
 import type { Profile } from "../types";
 
@@ -12,7 +12,7 @@ export function NotConnected({ profile, connecting, onConnect }: { profile: Prof
         <p className="body-medium">
           {unsetFieldsOf(profile).length > 0 && profile ? (
             <>
-              <strong>{privacy.mask(profile.label)}</strong> は見本の値のままです。backend/profiles.json（無ければ profiles.example.json をコピーして作る）の YOUR_ で始まる値（{unsetFieldsOf(profile).join("・")}）を書き換えてから接続してください。
+              <strong>{privacy.mask(profile.label)}</strong> は見本の値のままです。backend/profiles.json（無ければ profiles.example.json をコピーして作る）の {unsetFieldsText(unsetFieldsOf(profile))}を書き換えてから接続してください。
             </>
           ) : profile ? (
             <>

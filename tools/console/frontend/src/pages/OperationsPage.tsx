@@ -4,7 +4,7 @@ import { Icon, type IconName } from "../components/Icon";
 import { Button, Card, EmptyState, StatusChip } from "../components/ui";
 import { formatDateTime } from "../format";
 import { usePrivacy } from "../privacy";
-import { canStopService, serviceTone } from "../status";
+import { ACTION_LABELS, canStopService, serviceTone } from "../status";
 import type { DeployRecord, GitInfo, Operation, Profile, ServiceAction, ServiceStatus } from "../types";
 import { DeployCard } from "./DeployCard";
 import { NotConnected } from "./shared";
@@ -15,7 +15,6 @@ const ACTIONS: { action: ServiceAction; title: string; description: string; icon
   { action: "start", title: "起動", description: "止まっているボットを起動します。", icon: "play", variant: "tonal" },
 ];
 
-const ACTION_LABELS: Record<ServiceAction, string> = { start: "起動", stop: "停止", restart: "再起動" };
 
 const SAFETY: { icon: IconName; text: ReactNode }[] = [
   { icon: "shield", text: <>実行できるのは <code>start / stop / restart</code> とデプロイの決まった手順だけ。画面から任意のコマンドは送れません（バックエンドのホワイトリスト）。</> },

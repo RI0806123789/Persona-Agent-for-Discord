@@ -36,7 +36,8 @@ MAX_LOG_LINES = 1000
 
 # systemd が「値なし」を表すときに使う数値（2^64 - 1）
 _SYSTEMD_UNSET = 18446744073709551615
-_SAFE_NAME = re.compile(r"[A-Za-z0-9@._][A-Za-z0-9@._-]*")
+# サービス名に使ってよい文字（シェルに渡すため、記号を厳しく制限する）。profiles.py の検証と共有する。
+SAFE_SERVICE_NAME = re.compile(r"[A-Za-z0-9@._][A-Za-z0-9@._-]*")
 
 # 疎通確認（何もしないコマンド。往復時間の計測に使う）
 PING_COMMAND = "true"
@@ -55,7 +56,7 @@ RESOURCES_COMMAND = (
 
 
 def _check_safe_name(value: str) -> str:
-    if not _SAFE_NAME.fullmatch(value):
+    if not SAFE_SERVICE_NAME.fullmatch(value):
         raise ValueError(f"使えない文字を含む名前です: {value!r}")
     return value
 

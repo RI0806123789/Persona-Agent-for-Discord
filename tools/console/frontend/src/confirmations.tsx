@@ -1,9 +1,10 @@
 // 確認内容は描画時の伏せ字設定を使う。
 import { Icon } from "./components/Icon";
 import type { ConfirmRequest } from "./components/overlays";
+import { DEPLOY_PLAN } from "./deployPlan";
+import { ACTION_LABELS } from "./status";
 import type { Profile, ServiceAction } from "./types";
 
-const ACTION_LABELS: Record<ServiceAction, string> = { start: "起動", stop: "停止", restart: "再起動" };
 const ACTION_EFFECTS: Record<ServiceAction, string> = {
   start: "ボットを起動します。ログイン成功のログが出れば復帰です。",
   stop: "ボットを止めます。Discord では応答しなくなり、自分で起動するまで戻りません。",
@@ -20,11 +21,9 @@ export function deployConfirmation(profile: Profile, onConfirm: () => void): Con
         <>
           <p>次の順に進め、ステップごとに結果を確かめてから次へ進みます。</p>
           <ol className="dialog-steps">
-            <li>事前確認（ブランチ・未コミットの変更・GitHub の最新）</li>
-            <li>git pull（origin/{privacy.mask(branch)} を早送りで取り込む）</li>
-            <li>pip install -r requirements.txt（requirements.txt か constraints.txt が変わったときだけ）</li>
-            <li>sudo systemctl restart {privacy.redact(profile.service)}</li>
-            <li>ヘルスチェック（「ログイン成功」のログが出るまで）</li>
+            {DEPLOY_PLAN.map((step) => (
+              <li key={step.title}>{step.confirmText({ branch: privacy.mask(branch), service: privacy.redact(profile.service) })}</li>
+            ))}
           </ol>
           <p>途中で失敗したら、自動で前の版へ戻します（bot.db は戻しません）。再起動の間、Discord で応答しなくなります。</p>
           <p className="dialog-target">

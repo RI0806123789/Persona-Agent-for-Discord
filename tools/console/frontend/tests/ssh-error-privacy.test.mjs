@@ -1,24 +1,15 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as jsxRuntime from "react/jsx-runtime";
+import { compile, readSource as source } from "./helpers/compile.mjs";
 
-const source = async (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
-function compile(text, modules = {}, fileName = "module.tsx") {
-  const exports = {};
-  const output = ts.transpileModule(text, {fileName, compilerOptions: {
-    module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
-  }}).outputText;
-  new Function("require", "exports", output)((name) => modules[name] ?? {}, exports);
-  return exports;
-}
 const client = compile(await source("api.ts"), {}, "module.ts");
 const privacy = compile(await source("privacy.ts"), {react: React});
 const connectionSource = await source("pages/ConnectionPage.tsx");
-const toast = compile((await source("components/toast.tsx")).replace("function Snackbar(", "export function Snackbar("), {
+const toast = compile((await source("components/toast.tsx")), {
   react: React, "react/jsx-runtime": jsxRuntime, "../privacy": privacy, "./Icon": {Icon: () => null},
 });
 const owner = "LOCAL_OWNER";

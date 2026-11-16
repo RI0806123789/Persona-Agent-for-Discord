@@ -7,6 +7,7 @@ import { Button, Card, Chip, StatusChip } from "../components/ui";
 import { formatDateTime } from "../format";
 import { redactText, usePrivacy } from "../privacy";
 import type { Tone } from "../status";
+import { DEPLOY_PLAN } from "../deployPlan";
 import type { DeployRecord, DeployStatus, DeployStep, DeployStepStatus, GitInfo, Profile } from "../types";
 
 const STEP_STATUS: Record<DeployStepStatus, { label: string; tone: Tone; icon: IconName }> = {
@@ -26,15 +27,6 @@ const RESULT: Record<DeployStatus, { label: string; tone: Tone; icon: IconName }
   rollback_failed: { label: "巻き戻しにも失敗", tone: "critical", icon: "error" },
   unknown: { label: "状態不明（終了未確認）", tone: "critical", icon: "error" },
 };
-
-// まだ一度もデプロイしていないときに見せる、これから行うこと
-const PLANNED = [
-  { title: "事前確認", detail: "ブランチ・未コミットの変更・GitHub の最新を確かめる" },
-  { title: "git pull", detail: "最新を早送りで取り込む" },
-  { title: "pip install -r requirements.txt", detail: "requirements.txt か constraints.txt が変わったときだけ、依存関係を入れ直す" },
-  { title: "sudo systemctl restart", detail: "新しいコードで起動し、PID が変わったことを確かめる" },
-  { title: "ヘルスチェック", detail: "「ログイン成功」のログが出て、落ちずに動いていることを確かめる" },
-];
 
 function formatSeconds(seconds: number): string {
   if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)} 秒`;
@@ -105,7 +97,7 @@ export function DeployCard({
       {!deploy && (
         <>
           <ol className="deploy-steps is-planned">
-            {PLANNED.map((step, index) => (
+            {DEPLOY_PLAN.map((step, index) => (
               <li key={step.title} className="deploy-step is-pending">
                 <span className="deploy-step-icon step-number label-large" aria-hidden="true">
                   {index + 1}
@@ -189,7 +181,7 @@ export function DeployCard({
   );
 }
 
-function StepItem({ step, index, now }: { step: DeployStep; index: number; now: number }) {
+export function StepItem({ step, index, now }: { step: DeployStep; index: number; now: number }) {
   const privacy = usePrivacy();
   const status = STEP_STATUS[step.status];
   const duration = stepDuration(step, now);

@@ -145,7 +145,7 @@ export function LogsPage({
   );
 }
 
-function StreamIndicator({ stream }: { stream: LogStream }) {
+export function StreamIndicator({ stream }: { stream: LogStream }) {
   const privacy = usePrivacy();
   if (stream.paused && stream.status === "live") {
     return <StatusChip tone="warning" icon="pause" label={stream.pendingCount ? `一時停止中（新着 ${stream.pendingCount}）` : "一時停止中"} />;

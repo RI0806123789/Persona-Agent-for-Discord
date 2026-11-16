@@ -120,7 +120,7 @@ test("範囲外の日時が1行あっても、同じページのほかの行は�
   };
   const read = (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
   const tables = compileCjs(source, {});
-  const detailSource = (await read("pages/DbTableDetail.tsx")).replace("function RowFields(", "export function RowFields(");
+  const detailSource = (await read("pages/DbTableDetail.tsx"));
   const { RowFields } = compileCjs(detailSource, {
     react: React, "react/jsx-runtime": jsxRuntime,
     "../api": { api: {}, errorMessage: String },
