@@ -79,87 +79,8 @@ def discord_guild_id(guild):
     return int(text)
 
 
-class InsightsCollector:
-    """収集に必要な入力と状態を保持する。生成だけではファイル・DB・ネットワークに触れない。"""
-
-    def __init__(self, bot_dir, service, journal_sudo=False):
-        self.bot_dir = Path(bot_dir)
-        self.service = service
-        self.journal_sudo = journal_sudo
-        self._reset()
-
-    def _reset(self):
-        # 回帰テストではネットワークに出ないよう、接続先を環境変数で差し替える。
-        self.api_base = os.environ.get("PBC_DISCORD_API_BASE", DEFAULT_API_BASE)
-        self.deadline = time.monotonic() + INSIGHTS_TIMEOUT_SECONDS
-        self.result = {"errors": []}
-        self.work_dir = None
-        self.constants = {}
-        self.choices_tree = None
-        self.personas_source = None
-        self.persona_constants = {}
-        self.persona_value_prefix = "../prompts/"
-        self.prompt_template_file_name = "00_prompt_format.txt"
-        self.builtin_persona_name = "標準（組み込み）"
-        self.select_value_max_length = 100
-        self.persona_catalog = None
-        self.legacy_personas = {}
-        self.models = {}
-        self.modes = {}
-        self.auto_topic_intervals = {}
-        self.settings_columns = set()
-        self.token = None
-
-    def collect(self):
-        self._reset()
-        self.work_dir = self.working_dir()
-        self.constants = self.read_constants(self.find_source("constants.py", "persona_bot/config/constants.py"))
-        choices_path = self.find_source("choices.py", "persona_bot/config/choices.py")
-        self.choices_tree = self.parse_file(choices_path) if choices_path else None
-        self.personas_source = self.find_source("persona_bot/config/personas.py")
-        self.persona_constants = self.read_constants(self.personas_source)
-        self.persona_value_prefix = text_constant(self.constants, "PERSONA_VALUE_PREFIX", "../prompts/")
-        self.prompt_template_file_name = text_constant(self.constants, "PROMPT_TEMPLATE_FILE_NAME", "00_prompt_format.txt")
-        self.builtin_persona_name = text_constant(self.persona_constants, "BUILTIN_PERSONA_DISPLAY_NAME", "標準（組み込み）")
-        select_limit = self.constants.get("DISCORD_SELECT_VALUE_MAX_LENGTH")
-        self.select_value_max_length = (
-            select_limit if isinstance(select_limit, int) and not isinstance(select_limit, bool) and select_limit > 0 else 100
-        )
-        self.persona_catalog = self.load_persona_catalog() if self.personas_source else None
-        self.legacy_personas = self.choice_names("PERSONA_CHOICES")
-        self.models = self.choice_names("MODEL_CHOICES")
-        self.modes = self.choice_names("RESPOND_MODE_CHOICES")
-        self.auto_topic_intervals = self.choice_names("AUTO_TOPIC_INTERVAL_CHOICES")
-        settings_rows = self.load_guild_settings()
-        self.token = self.read_token()
-        self.result["source_dir"] = self.work_dir.name if self.work_dir else None
-        self.result["version"] = self.deployed_version()
-        self.result["autonomous_supported"] = "autonomous_enabled" in self.settings_columns
-        # ペルソナを prompts/ のファイル構成から推定したか（現行版で prompts/ を読めたとき）
-        self.result["persona_estimated"] = self.persona_catalog is not None
-        self.result["discord"] = self.collect_discord(settings_rows)
-        self.result["dm_settings"] = self.describe_settings(settings_rows.get(0, {}))
-        self.result["activity"] = self.collect_activity()
-        self.result["generated_at"] = time.time()
-        return self.result
-
-    def note(self, message):
-        if message not in self.result["errors"]:
-            self.result["errors"].append(message)
-
-    def working_dir(self):
-        """systemd の WorkingDirectory（版によって src/ や index/）を調べる。"""
-        try:
-            value = subprocess.run(
-                ["systemctl", "show", self.service, "-p", "WorkingDirectory", "--value"],
-                capture_output=True, text=True, timeout=5,
-            ).stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            value = ""
-        for candidate in (value, str(self.bot_dir / "src"), str(self.bot_dir / "index")):
-            if candidate and Path(candidate).is_dir():
-                return Path(candidate)
-        return None
+class _SourceReader:
+    """ボットのソース（constants / choices / personas / リリースノート / README）を ast と文字列で読む。状態は InsightsCollector が持つ。"""
 
     def find_source(self, *relative_paths):
         if self.work_dir is None:
@@ -327,6 +248,10 @@ class InsightsCollector:
             pass
         return None
 
+
+class _SettingsReader:
+    """bot.db の guild_settings を読み取り専用で読み、表示用の設定へ整える。状態は InsightsCollector が持つ。"""
+
     def load_guild_settings(self):
         rows = {}
         db_path = self.bot_dir / "data" / "memory" / "bot.db"
@@ -423,6 +348,10 @@ class InsightsCollector:
             **channels,
             "saved": bool(row),
         }
+
+
+class _DiscordReader:
+    """サーバー上の .env のトークンで Discord API を読む（参加サーバー・ボイス接続・ボット名）。状態は InsightsCollector が持つ。"""
 
     def read_token(self):
         token = os.environ.get("TOKEN_DISCORD")
@@ -589,6 +518,10 @@ class InsightsCollector:
         return {"ok": list_error is None, "partial": list_error is not None, "error": str(list_error) if list_error else None,
                 "api_rtt_ms": rtt_ms, "bot_user": username, "guilds": summaries}
 
+
+class _ActivityReader:
+    """journald から直近24時間の活動（会話・トークン・再接続・例外）を数える。状態は InsightsCollector が持つ。"""
+
     def journal(self, arguments):
         """取得成功なら行の一覧（0件を含む）、実行・権限・期限の失敗なら None を返す。"""
         command = ["journalctl", "-u", self.service, "--no-pager", "-o", "json"] + arguments
@@ -678,6 +611,93 @@ class InsightsCollector:
                 activity["last_conversation_at"] = latest[0][0]
         activity["autonomous_events"] = activity["autonomous_events"][-10:]
         return activity
+
+
+class InsightsCollector(_SourceReader, _SettingsReader, _DiscordReader, _ActivityReader):
+    """収集に必要な入力と状態を保持し、読み取り役を順に呼んで1つの結果にまとめる。
+
+    生成だけではファイル・DB・ネットワークに触れない。遠隔へは1ファイルで送るため、責務ごとの
+    クラスは同じファイルの中に置き、メソッド名・属性（self.result など）は分割前と同じにしている。
+    """
+
+    def __init__(self, bot_dir, service, journal_sudo=False):
+        self.bot_dir = Path(bot_dir)
+        self.service = service
+        self.journal_sudo = journal_sudo
+        self._reset()
+
+    def _reset(self):
+        # 回帰テストではネットワークに出ないよう、接続先を環境変数で差し替える。
+        self.api_base = os.environ.get("PBC_DISCORD_API_BASE", DEFAULT_API_BASE)
+        self.deadline = time.monotonic() + INSIGHTS_TIMEOUT_SECONDS
+        self.result = {"errors": []}
+        self.work_dir = None
+        self.constants = {}
+        self.choices_tree = None
+        self.personas_source = None
+        self.persona_constants = {}
+        self.persona_value_prefix = "../prompts/"
+        self.prompt_template_file_name = "00_prompt_format.txt"
+        self.builtin_persona_name = "標準（組み込み）"
+        self.select_value_max_length = 100
+        self.persona_catalog = None
+        self.legacy_personas = {}
+        self.models = {}
+        self.modes = {}
+        self.auto_topic_intervals = {}
+        self.settings_columns = set()
+        self.token = None
+
+    def collect(self):
+        self._reset()
+        self.work_dir = self.working_dir()
+        self.constants = self.read_constants(self.find_source("constants.py", "persona_bot/config/constants.py"))
+        choices_path = self.find_source("choices.py", "persona_bot/config/choices.py")
+        self.choices_tree = self.parse_file(choices_path) if choices_path else None
+        self.personas_source = self.find_source("persona_bot/config/personas.py")
+        self.persona_constants = self.read_constants(self.personas_source)
+        self.persona_value_prefix = text_constant(self.constants, "PERSONA_VALUE_PREFIX", "../prompts/")
+        self.prompt_template_file_name = text_constant(self.constants, "PROMPT_TEMPLATE_FILE_NAME", "00_prompt_format.txt")
+        self.builtin_persona_name = text_constant(self.persona_constants, "BUILTIN_PERSONA_DISPLAY_NAME", "標準（組み込み）")
+        select_limit = self.constants.get("DISCORD_SELECT_VALUE_MAX_LENGTH")
+        self.select_value_max_length = (
+            select_limit if isinstance(select_limit, int) and not isinstance(select_limit, bool) and select_limit > 0 else 100
+        )
+        self.persona_catalog = self.load_persona_catalog() if self.personas_source else None
+        self.legacy_personas = self.choice_names("PERSONA_CHOICES")
+        self.models = self.choice_names("MODEL_CHOICES")
+        self.modes = self.choice_names("RESPOND_MODE_CHOICES")
+        self.auto_topic_intervals = self.choice_names("AUTO_TOPIC_INTERVAL_CHOICES")
+        settings_rows = self.load_guild_settings()
+        self.token = self.read_token()
+        self.result["source_dir"] = self.work_dir.name if self.work_dir else None
+        self.result["version"] = self.deployed_version()
+        self.result["autonomous_supported"] = "autonomous_enabled" in self.settings_columns
+        # ペルソナを prompts/ のファイル構成から推定したか（現行版で prompts/ を読めたとき）
+        self.result["persona_estimated"] = self.persona_catalog is not None
+        self.result["discord"] = self.collect_discord(settings_rows)
+        self.result["dm_settings"] = self.describe_settings(settings_rows.get(0, {}))
+        self.result["activity"] = self.collect_activity()
+        self.result["generated_at"] = time.time()
+        return self.result
+
+    def note(self, message):
+        if message not in self.result["errors"]:
+            self.result["errors"].append(message)
+
+    def working_dir(self):
+        """systemd の WorkingDirectory（版によって src/ や index/）を調べる。"""
+        try:
+            value = subprocess.run(
+                ["systemctl", "show", self.service, "-p", "WorkingDirectory", "--value"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            value = ""
+        for candidate in (value, str(self.bot_dir / "src"), str(self.bot_dir / "index")):
+            if candidate and Path(candidate).is_dir():
+                return Path(candidate)
+        return None
 
 
 def collect(bot_dir, service, journal_sudo=False):

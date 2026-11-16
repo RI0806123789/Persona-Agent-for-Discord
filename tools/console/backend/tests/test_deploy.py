@@ -26,8 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tests" / "helpers"
 import fake_ssh_server  # noqa: E402
 import remote_commands as rc  # noqa: E402
 from deploy import DeployManager, DeployRecord, DeployRunner, new_record  # noqa: E402
-from fake_ssh_server import logging_line, start_fake_server  # noqa: E402
-from profiles import Profile  # noqa: E402
+from fake_ssh_server import logging_line  # noqa: E402
+from ssh_fixtures import FakeSshEnvironment  # noqa: E402
 from network_guard import block_network  # noqa: E402
 from ssh_session import CommandResult, SshError, SshSession  # noqa: E402
 
@@ -39,36 +39,17 @@ class DeployTest(unittest.IsolatedAsyncioTestCase):
         block_network(self)
 
     async def asyncSetUp(self) -> None:
-        self.key_dir = Path(tempfile.mkdtemp(prefix="pbc-deploy-"))
         # 実際の時間を待たないよう、再起動や起動ログの待ち時間を小さくする
-        self.acceptor, self.bot, port, self.live_task = await start_fake_server(
-            "127.0.0.1", 0, self.key_dir, live_interval=(30, 60), delay_scale=0.05
+        self.env = await FakeSshEnvironment.start(
+            live_interval=(30, 60), delay_scale=0.05, label="test", environment="production",
         )
+        self.addAsyncCleanup(self.env.close)
+        self.key_dir, self.bot, self.profile = self.env.key_dir, self.env.bot, self.env.profile
+        self.acceptor, self.live_task = self.env.acceptor, self.env.live_task
         self.repo = self.bot.repo
-        self.profile = Profile(
-            id="test",
-            label="test",
-            environment="production",
-            host="127.0.0.1",
-            port=port,
-            username="ubuntu",
-            key_path=str(self.key_dir / "client_key"),
-            known_hosts=str(self.key_dir / "known_hosts"),
-            use_ssh_config=False,
-            service="bot",
-            bot_dir="/home/ubuntu/Persona-Chat-in-Discord",
-            journal_sudo=False,
-            note="",
-        )
         self.session = SshSession()
+        self.addAsyncCleanup(self.session.disconnect)
         await self.session.connect(self.profile)
-
-    async def asyncTearDown(self) -> None:
-        await self.session.disconnect()
-        self.live_task.cancel()
-        self.acceptor.close()
-        await self.acceptor.wait_closed()
-        shutil.rmtree(self.key_dir, ignore_errors=True)
 
     async def deploy(self) -> DeployRecord:
         record = new_record(1, self.profile)

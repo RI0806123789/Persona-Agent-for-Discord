@@ -16,8 +16,7 @@ import app
 import profiles
 import remote_commands as rc
 from deploy import DeployManager, DeployRunner, new_record
-from fake_ssh_server import start_fake_server
-from profiles import Profile
+from ssh_fixtures import FakeSshEnvironment
 from ssh_session import CommandResult, CommandStateUnknownError, NotConnectedError, SshError, SshSession
 
 
@@ -71,30 +70,22 @@ class ProfileEncodingApiTests(unittest.IsolatedAsyncioTestCase):
 class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.acceptor, self.bot, port, self.live = await start_fake_server(
-            "127.0.0.1", 0, Path(self.temp.name), live_interval=(0.05, 0.1)
+        self.addCleanup(self.temp.cleanup)
+        self.env = await FakeSshEnvironment.start(
+            key_dir=Path(self.temp.name), live_interval=(0.05, 0.1), label="検証",
+            username="tester", bot_dir="/srv/test-bot",
         )
-        self.profile = Profile(
-            id="test", label="検証", environment="development", host="127.0.0.1", port=port,
-            username="tester", key_path=str(Path(self.temp.name) / "client_key"),
-            known_hosts=str(Path(self.temp.name) / "known_hosts"), use_ssh_config=False,
-            service="bot", bot_dir="/srv/test-bot", journal_sudo=False, note="",
-        )
+        self.addAsyncCleanup(self.env.close)
+        self.acceptor, self.bot, self.live = self.env.acceptor, self.env.bot, self.env.live_task
+        self.profile = self.env.profile
         self.session = SshSession()
         self.patch = mock.patch.object(app, "session", self.session)
         self.patch.start()
+        self.addCleanup(self.patch.stop)
         app._insights_cache.clear()
         app._insights_lock = asyncio.Lock()
+        self.addAsyncCleanup(self.session.disconnect)
         await self.session.connect(self.profile)
-
-    async def asyncTearDown(self):
-        await self.session.disconnect()
-        self.patch.stop()
-        self.live.cancel()
-        await asyncio.gather(self.live, return_exceptions=True)
-        self.acceptor.close()
-        await self.acceptor.wait_closed()
-        self.temp.cleanup()
 
     async def test_http_rejects_missing_header_and_foreign_host(self):
         for path in ("/api/profiles", "/api/status", "/api/insights", "/api/history"):
