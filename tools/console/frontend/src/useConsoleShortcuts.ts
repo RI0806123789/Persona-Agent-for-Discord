@@ -55,7 +55,7 @@ export function useConsoleShortcuts({
       return;
     }
 
-    if (modalRailOpen && !goPending && !/^[1-6jk]$/.test(event.key)) return;
+    if (modalRailOpen && !goPending && !/^[1-6jk\[]$/.test(event.key)) return;
 
     if (goPending) {
       cancelGo();

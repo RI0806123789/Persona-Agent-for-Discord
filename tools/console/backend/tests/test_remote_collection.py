@@ -14,7 +14,8 @@ import unittest
 from unittest.mock import patch
 
 from remote_scripts import db_table, insights
-from tests.test_remote_scripts import make_fake_bot, run_script
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_remote_scripts import make_fake_bot, run_script
 
 
 class RemoteCollectionTests(unittest.TestCase):
