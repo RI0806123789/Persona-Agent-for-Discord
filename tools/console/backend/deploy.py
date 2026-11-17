@@ -402,7 +402,7 @@ class DeployRunner:
         result = await self._run(
             step, rc.service_control_command(self.profile.service, "restart"), label="再起動", timeout=RESTART_TIMEOUT
         )
-        needs_password = "password is required" in result.stderr or "a terminal is required" in result.stderr
+        needs_password = rc.needs_sudo_password(result.stderr)
         self._check(
             step,
             "systemctl restart が成功（終了コード 0）",

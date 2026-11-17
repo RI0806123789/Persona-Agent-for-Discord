@@ -1,5 +1,5 @@
 // Material 3 Expressive の基本部品。見た目は styles.css の .m3-* クラスが担う。
-import { useEffect, useState, type ButtonHTMLAttributes, type PointerEvent, type ReactNode, type Ref } from "react";
+import { Children, cloneElement, isValidElement, useEffect, useState, type ButtonHTMLAttributes, type PointerEvent, type ReactNode, type Ref } from "react";
 import { formatClock } from "../format";
 import { usePrivacy } from "../privacy";
 import type { Tone } from "../status";
@@ -305,10 +305,17 @@ export function Stat({ label, value, hint, mono = false }: { label: string; valu
   );
 }
 
-/** 文字列の部分だけを伏せ字モードで伏せる（エラー文の中のホスト名などを隠すため）。 */
+/**
+ * 文字列の部分を伏せ字モードで伏せる（エラー文の中のホスト名などを隠すため）。
+ * 配列と、`<code>` のような子要素の中の文字列にも再帰して掛ける。`Children.map` は
+ * 子に key を付け直すので、配列を返しても key の警告が出ない。
+ */
 function redactNode(node: ReactNode, redact: (text: string) => string): ReactNode {
   if (typeof node === "string") return redact(node);
-  if (Array.isArray(node)) return node.map((child) => redactNode(child, redact));
+  if (Array.isArray(node)) return Children.map(node, (child) => redactNode(child, redact));
+  if (isValidElement<{ children?: ReactNode }>(node) && node.props.children != null) {
+    return cloneElement(node, undefined, redactNode(node.props.children, redact));
+  }
   return node;
 }
 

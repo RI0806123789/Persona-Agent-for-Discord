@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from persona_bot.config.constants import STATS_HOURLY_BUCKETS
 from persona_bot.core.database import Database
+from persona_bot.core.db_rows import _json_loads_or
 
 
 class NullableJsonValuesTests(unittest.TestCase):
@@ -107,7 +108,7 @@ class NullableJsonValuesTests(unittest.TestCase):
 
     def test_statistics_missing_opt_out_uses_same_default_for_import_and_saves(self) -> None:
         for default in (False, True):
-            with self.subTest(default=default), patch("persona_bot.core.database.STATS_OPT_OUT_DEFAULT", default):
+            with self.subTest(default=default), patch("persona_bot.core.db_rows.STATS_OPT_OUT_DEFAULT", default):
                 path = self.root / "user_stats.json"
                 path.write_text(json.dumps({f"legacy-{default}": {}}), encoding="utf-8")
                 self.db.initialize()
@@ -124,7 +125,7 @@ class NullableJsonValuesTests(unittest.TestCase):
         self.assertEqual(_user_stats_row_params("1", {"opt_out": None, "stats_opt_out": True})[-1], 1)
         self.assertEqual(_user_stats_row_params("1", {"opt_out": False, "stats_opt_out": True})[-1], 0)
         for default in (False, True):
-            with self.subTest(default=default), patch("persona_bot.core.database.STATS_OPT_OUT_DEFAULT", default):
+            with self.subTest(default=default), patch("persona_bot.core.db_rows.STATS_OPT_OUT_DEFAULT", default):
                 self.assertEqual(_user_stats_row_params("1", {"opt_out": None})[-1], int(default))
                 self.assertEqual(
                     _user_stats_row_params("1", {"opt_out": None, "stats_opt_out": None})[-1], int(default),
@@ -168,6 +169,35 @@ class NullableJsonValuesTests(unittest.TestCase):
             with self.subTest(task=task):
                 self.db.queue_upsert_task(task)
                 self.assert_queue_defaults()
+
+
+class JsonLoadsOrTests(unittest.TestCase):
+    """JSON 列の読み取り。壊れた値と型違いは default に戻し、想定外の例外は隠さない（#468）。"""
+
+    def test_broken_or_empty_values_fall_back_to_default(self) -> None:
+        for text in (None, "", "{壊れた", "[1, 2", b"\xff\xfe"):
+            with self.subTest(text=text):
+                self.assertEqual(_json_loads_or(text, "既定"), "既定")
+
+    def test_deeply_nested_json_falls_back_instead_of_raising(self) -> None:
+        self.assertEqual(_json_loads_or("[" * 100000, "既定"), "既定")
+
+    def test_expected_type_rejects_null_and_other_types(self) -> None:
+        self.assertEqual(_json_loads_or("[1, 2]", [], list), [1, 2])
+        for text in ("null", '"文字列"', "3", '{"a": 1}'):
+            with self.subTest(text=text):
+                self.assertEqual(_json_loads_or(text, [], list), [])
+        self.assertEqual(_json_loads_or('{"a": 1}', None, dict), {"a": 1})
+
+    def test_without_expected_type_any_json_value_is_kept(self) -> None:
+        # プロフィールの値のように、型が決まっていない列
+        self.assertEqual(_json_loads_or('"文字列"', None), "文字列")
+        self.assertEqual(_json_loads_or("[1]", None), [1])
+
+    def test_unexpected_errors_are_not_swallowed(self) -> None:
+        with patch("persona_bot.core.db_rows.json.loads", side_effect=KeyError("想定外")):
+            with self.assertRaises(KeyError):
+                _json_loads_or("{}", None)
 
 
 if __name__ == "__main__":

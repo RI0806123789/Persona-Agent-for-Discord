@@ -22,6 +22,8 @@ PROFILES_PATH = BACKEND_DIR / "profiles.json"
 EXAMPLE_PROFILES_PATH = BACKEND_DIR / "profiles.example.json"
 
 ENVIRONMENTS = ("development", "production")
+# bot_dir を省略したときの既定（見本 profiles.example.json の書き方と揃える）。
+DEFAULT_BOT_DIR = "/home/ubuntu/Persona-Agent-for-Discord"
 
 # 見本（profiles.example.json）で「書き換えてください」の印にしている値。.env.example の YOUR_GEMINI_API_KEY と同じ流儀。
 # ★ 見本の仮の値のまま接続させないこと: 仮のホスト名を DNS が偶然引けると、知らないサーバーへつなぎに行ってしまう
@@ -99,6 +101,16 @@ def _optional_str(raw: dict, key: str) -> str | None:
     return value
 
 
+def _text_field(raw: dict, key: str, default: str) -> str:
+    """表示用の文字列項目。省略・null・空は default にし、文字列以外（数値・配列など）は誤りとして止める。"""
+    value = raw.get(key)
+    if value is None or value == "":
+        return default
+    if not isinstance(value, str):
+        raise ProfileError(f"{key} は文字列で書いてください。")
+    return value
+
+
 def _parse_profile(raw: dict) -> Profile:
     if not isinstance(raw, dict):
         raise ProfileError("プロファイルは { ... } の形で書いてください。")
@@ -122,7 +134,7 @@ def _parse_profile(raw: dict) -> Profile:
     if not isinstance(service, str) or not rc.SAFE_SERVICE_NAME.fullmatch(service):
         raise ProfileError(f"プロファイル {profile_id} の service に使えない文字が含まれています。")
 
-    bot_dir = raw.get("bot_dir", "/home/ubuntu/Persona-Chat-in-Discord")
+    bot_dir = raw.get("bot_dir", DEFAULT_BOT_DIR)
     if not isinstance(bot_dir, str) or not bot_dir.startswith("/") or "\x00" in bot_dir:
         raise ProfileError(f"プロファイル {profile_id} の bot_dir はサーバー上の絶対パスで書いてください。")
 
@@ -143,7 +155,7 @@ def _parse_profile(raw: dict) -> Profile:
 
     return Profile(
         id=profile_id,
-        label=str(raw.get("label") or profile_id),
+        label=_text_field(raw, "label", profile_id),
         environment=environment,
         host=host,
         port=port,
@@ -154,7 +166,7 @@ def _parse_profile(raw: dict) -> Profile:
         service=service,
         bot_dir=bot_dir.rstrip("/") or "/",
         journal_sudo=bool(raw.get("journal_sudo", False)),
-        note=str(raw.get("note") or ""),
+        note=_text_field(raw, "note", ""),
         deploy_branch=deploy_branch,
         python=python,
     )

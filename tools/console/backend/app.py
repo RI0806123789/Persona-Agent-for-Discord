@@ -164,7 +164,7 @@ async def _connect(body: ConnectRequest) -> dict:
     generation = session.generation
     try:
         result = await session.run(rc.SERVER_INFO_COMMAND, label="サーバー情報")
-        if generation == session.generation and session.connected and result.exit_status == 0:
+        if _connection_unchanged(generation) and result.exit_status == 0:
             session.server_info = rc.parse_server_info(result.stdout)
     except SshError:
         pass  # サーバー情報が取れなくても接続自体は成功扱いにする
@@ -198,7 +198,7 @@ async def get_status() -> dict:
         session.run(rc.git_command(profile.bot_dir), label="Git"),
         return_exceptions=True,
     )
-    if generation != session.generation or not session.connected:
+    if not _connection_unchanged(generation):
         raise NotConnectedError("状態の取得中に SSH 接続が変わりました。接続先を確認して更新してください。")
     if isinstance(ping, BaseException):
         raise ping  # 疎通確認すら失敗 = 接続が使えない
@@ -254,7 +254,7 @@ async def get_logs(lines: Annotated[int, Query(ge=1, le=rc.MAX_LOG_LINES)] = 200
     generation = session.generation
     command = rc.journal_command(profile.service, lines=lines, follow=False, use_sudo=profile.journal_sudo)
     result = await session.run(command, label="ログ取得")
-    if generation != session.generation:
+    if not _connection_unchanged(generation, require_connected=False):
         raise NotConnectedError("ログの取得中に SSH 接続が変わりました。接続先を確認して更新してください。")
     entries = [entry for line in result.stdout.splitlines() if (entry := rc.parse_journal_line(line))]
     if result.exit_status != 0 and not entries:
@@ -276,7 +276,7 @@ async def stream_logs(websocket: WebSocket, lines: Annotated[int, Query(ge=1, le
         generation = session.generation
         command = rc.journal_command(profile.service, lines=lines, follow=True, use_sudo=profile.journal_sudo)
         process = await session.open_process(command, label="ログ追跡（ライブ）")
-        if generation != session.generation:
+        if not _connection_unchanged(generation, require_connected=False):
             process.close()
             with suppress(asyncio.TimeoutError, asyncssh.Error, OSError):
                 await asyncio.wait_for(process.wait_closed(), timeout=5)
@@ -295,7 +295,7 @@ async def stream_logs(websocket: WebSocket, lines: Annotated[int, Query(ge=1, le
         """SSH → 画面 へ流し続ける。"""
         try:
             async for line in process.stdout:
-                if generation != session.generation:
+                if not _connection_unchanged(generation, require_connected=False):
                     return
                 entry = rc.parse_journal_line(line)
                 if entry:
@@ -392,7 +392,7 @@ async def _control_service(action: str, body: ServiceTarget | None) -> dict:
     ok = result.exit_status == 0
     if ok:
         message = f"{profile.service} を{label}しました。"
-    elif "password is required" in result.stderr or "a terminal is required" in result.stderr:
+    elif rc.needs_sudo_password(result.stderr):
         message = _sudo_password_message(profile.username, profile.service)
     else:
         message = f"{label}に失敗しました: {_last_line(result.stderr) or f'終了コード {result.exit_status}'}"
@@ -511,11 +511,21 @@ def _invalidate_insights() -> None:
     _insights_cache.clear()
 
 
+def _connection_unchanged(generation: int, *, require_connected: bool = True) -> bool:
+    """コマンドを送った時点の接続のまま（世代が同じで、必要なら接続中）か（#461）。
+
+    世代は接続し直し・切断のたびに進む。切断だけで世代が進まない経路を見逃さないため、
+    結果を使う API は `require_connected` を既定のまま（接続中の確認つき）にする。
+    ログの取得・追跡は、接続の有無ではなく「取り始めた接続のままか」だけを見る。
+    """
+    return generation == session.generation and (not require_connected or session.connected)
+
+
 async def _read_json_command(command: str, *, generation: int, changed: str, failed: str,
                              malformed: str, require_connected: bool = True, validate=None, **options) -> dict:
     """接続先の世代を確認し、遠隔スクリプトの最終行を読み取る。"""
     result = await session.run(command, **options)
-    if generation != session.generation or (require_connected and not session.connected):
+    if not _connection_unchanged(generation, require_connected=require_connected):
         raise NotConnectedError(changed)
     if result.exit_status != 0:
         raise SshError(failed)

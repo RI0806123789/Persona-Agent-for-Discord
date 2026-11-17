@@ -18,7 +18,7 @@ from persona_bot.services.auto_topic_service import AutoTopicService
 from persona_bot.services.autonomous_service import AutonomousService
 from persona_bot.core import commands
 from persona_bot.services import content_moderator
-from persona_bot.utils import discord_helpers, select_options
+from persona_bot.utils import discord_helpers, discord_send, select_options
 from persona_bot.utils.discord_helpers import (
     REPLY_ALLOWED_MENTIONS, build_history_text, fetch_channel_history_text, is_administrator, send_long_message,
     send_long_reply, split_message,
@@ -130,7 +130,7 @@ class LongMessageTests(unittest.IsolatedAsyncioTestCase):
                 channel = make_channel()
                 message = make_message(channel=channel, reply=AsyncMock(return_value=first))
                 valid = [chunk for chunk in chunks if chunk.strip()]
-                with patch.object(discord_helpers, "split_message", return_value=chunks):
+                with patch.object(discord_send, "split_message", return_value=chunks):
                     result = await send_long_reply(message, "架空の本文", suppress_embeds=True)
                     if valid:
                         self.assertIs(result, first)

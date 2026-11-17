@@ -78,6 +78,17 @@ class CommandBuildTest(unittest.TestCase):
                 rc.db_table_command("/srv/bot", table, 0, 50)
 
 
+class NeedsSudoPasswordTest(unittest.TestCase):
+    def test_detects_both_sudo_refusals(self):
+        self.assertTrue(rc.needs_sudo_password("sudo: a password is required"))
+        self.assertTrue(rc.needs_sudo_password("sudo: a terminal is required to read the password"))
+
+    def test_other_errors_are_not_password_requests(self):
+        for stderr in ("", "Failed to restart bot.service: Unit not found.", "permission denied"):
+            with self.subTest(stderr=stderr):
+                self.assertFalse(rc.needs_sudo_password(stderr))
+
+
 class ParseTest(unittest.TestCase):
     def test_parse_service_show_active(self):
         text = (

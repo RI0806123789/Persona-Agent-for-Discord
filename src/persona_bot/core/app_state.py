@@ -419,14 +419,24 @@ class BotState:
                 self.guild_settings[guild_id] = settings
             return settings
 
-    def forget_guild(self, guild_id: int) -> None:
-        """退出したサーバーの一時設定と、待機中の古い読込結果を無効にする。"""
-        settings = self.guild_settings.pop(guild_id, None)
+    def invalidate_guild(self, guild_id: int) -> None:
+        """退出したサーバーの設定と、待機中の読込を無効にする。キャッシュからは外さない（#468）。
+
+        退出の停止処理が設定を参照し終わるまで残しておくときに使う。外すのは `forget_guild`。
+        ★ 読込中の古い結果は辞書からも外す。ローカル変数が強参照を持つ間は弱参照の辞書にも残り続け、
+        無効なまま停止の待機中に居座ってしまう（待機中に来た新しい読込要求が、無効な読込を掴んで失敗する）。
+        """
+        settings = self.guild_settings.get(guild_id)
         if settings is not None:
             settings._active = False
         loading = self._guild_loads.pop(guild_id, None)
         if loading is not None:
             loading.valid = False
+
+    def forget_guild(self, guild_id: int) -> None:
+        """退出したサーバーの一時設定と、待機中の古い読込結果を無効にして、キャッシュから外す。"""
+        self.invalidate_guild(guild_id)
+        self.guild_settings.pop(guild_id, None)
 
     def restore_from_database(self, db: Any) -> None:
         """Database を紐づけ、保存済みの設定と記念日の投稿記録をメモリへ復元する。

@@ -10,7 +10,7 @@ import discord
 from persona_bot.core.background import ShutdownTimeoutError, TaskOwner, run_in_thread, spawn, task_scope, wait_for_task
 from persona_bot.config.constants import BACKGROUND_SHUTDOWN_TIMEOUT_SECONDS
 from persona_bot.services.genai_client import close_genai_client
-from persona_bot.utils.discord_helpers import REPLY_ALLOWED_MENTIONS
+from persona_bot.utils.discord_send import REPLY_ALLOWED_MENTIONS
 
 
 logger = logging.getLogger(__name__)

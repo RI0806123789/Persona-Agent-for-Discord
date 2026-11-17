@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from persona_bot.services import affinity_service
 from persona_bot.services.affinity_service import AffinityService
 from persona_bot.core.background import spawn
-from persona_bot.core import database
+from persona_bot.core import database, db_rows
 from persona_bot.core.database import Database
 
 
@@ -100,7 +100,7 @@ class AffinityPersistenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_database_defaults_match_between_upsert_full_save_and_legacy_import(self) -> None:
         legacy = self.path.parent / "fictional-affinity.json"
         legacy.write_text('{"legacy-user": {}}', encoding="utf-8")
-        with patch.object(database, "AFFINITY_NEUTRAL", 40):
+        with patch.object(db_rows, "AFFINITY_NEUTRAL", 40):
             self.db.affinity_save_all({"explicit-user": {}})
             self.db.affinity_upsert("new-user", {})
             self.db._legacy.import_affinity_json(legacy)
@@ -118,7 +118,7 @@ class AffinityPersistenceTests(unittest.IsolatedAsyncioTestCase):
                 entry = dict.fromkeys(("affinity", "valence", "arousal", "last_interaction"), value)
                 legacy = self.path.parent / "fictional-affinity.json"
                 legacy.write_text(json.dumps({"legacy-user": entry}), encoding="utf-8")
-                with patch.object(database, "AFFINITY_NEUTRAL", 40):
+                with patch.object(db_rows, "AFFINITY_NEUTRAL", 40):
                     self.db.affinity_save_all({"explicit-user": entry})
                     self.db.affinity_upsert("new-user", entry)
                     self.db._legacy.import_affinity_json(legacy)
