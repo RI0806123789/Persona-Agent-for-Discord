@@ -171,13 +171,23 @@ class SshSession:
         async with self._lock:
             await self._close_current()
 
-    async def _close_current(self) -> None:
+    def _reset_connection_state(self) -> asyncssh.SSHClientConnection | None:
+        """接続に結びつく状態をまとめて消し、世代を進めて、切り離した接続を返す（#461）。
+
+        自分で閉じるとき（`_close_current`）と、外から切れたとき（`_handle_connection_lost`）で共有する。
+        接続に結びつく項目を増やしたら、ここに足す（片側だけ消し忘れないため）。
+        `last_error` 系は経路ごとに値が違うので、呼び出し側が決める。
+        """
         self.generation += 1
         conn, self._conn = self._conn, None
         self.profile = None
         self.connected_at = None
         self.fingerprint = None
         self.server_info = None
+        return conn
+
+    async def _close_current(self) -> None:
+        conn = self._reset_connection_state()
         self.last_error = None
         self.last_error_safe = None
         if conn is None:
@@ -244,12 +254,7 @@ class SshSession:
     def _handle_connection_lost(self, conn: asyncssh.SSHClientConnection | None, exc: Exception | None) -> None:
         if conn is None or conn is not self._conn:
             return  # 自分で閉じた接続、または古い接続
-        self._conn = None
-        self.generation += 1
-        self.profile = None
-        self.connected_at = None
-        self.fingerprint = None
-        self.server_info = None
+        self._reset_connection_state()
         reason = f"（{exc}）" if exc else ""
         self.last_error = f"SSH 接続が切れました{reason}。もう一度接続してください。"
         # 切断理由（exc）には接続先のホスト名・IP アドレス・ローカルのパスなど、画面が秘密として

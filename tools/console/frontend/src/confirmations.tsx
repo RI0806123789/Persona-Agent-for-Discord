@@ -47,7 +47,7 @@ export function deployConfirmation(profile: Profile, onConfirm: () => void): Con
 export function serviceConfirmation(profile: Profile, action: ServiceAction, onConfirm: () => void): ConfirmRequest {
   const isProduction = profile.environment === "production";
   return {
-        title: `${profile.service} を${ACTION_LABELS[action]}しますか？`,
+        title: (privacy) => `${privacy.redact(profile.service)} を${ACTION_LABELS[action]}しますか？`,
         icon: action === "stop" ? "stop" : action === "start" ? "play" : "restart",
         body: (privacy) => (
           <>

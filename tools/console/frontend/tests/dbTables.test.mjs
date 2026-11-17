@@ -27,7 +27,10 @@ test("文書の送信中を進行中として表示する", () => {
 });
 
 test("ボットが保存するキューとリマインダーの状態を表示できる", async () => {
-  const database = await readFile(new URL("../../../../src/persona_bot/core/database.py", import.meta.url), "utf8");
+  // テーブルごとの SQL は database.py から db_*.py へ分かれている（#468）ので、まとめて読む。
+  const coreFiles = ["database", "db_queue", "db_reminders", "db_rows"];
+  const database = (await Promise.all(coreFiles.map((name) =>
+    readFile(new URL(`../../../../src/persona_bot/core/${name}.py`, import.meta.url), "utf8")))).join("\n");
   const documents = await readFile(new URL("../../../../src/persona_bot/services/document_service.py", import.meta.url), "utf8");
   const active = /_QUEUE_ACTIVE_STATUSES\s*=\s*\(([^)]+)\)/.exec(database);
   const terminal = /_TERMINAL_STATUSES\s*=\s*\{([^}]+)\}/.exec(documents);

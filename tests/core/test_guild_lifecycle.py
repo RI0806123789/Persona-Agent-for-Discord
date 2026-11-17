@@ -13,6 +13,27 @@ from persona_bot.core.app_state import BotState, _GuildSettingsLoad
 from persona_bot.core.guild_lifecycle import prepare_guild_join, remove_guild_state
 
 
+class InvalidateGuildTests(unittest.TestCase):
+    def test_invalidate_keeps_the_settings_cached_but_inactive_and_drops_the_load(self):
+        state = BotState()
+        settings = state.get_guild(1)
+        loading = _GuildSettingsLoad()
+        state._guild_loads[1] = loading
+        state.invalidate_guild(1)
+        self.assertIs(state.guild_settings[1], settings)
+        self.assertFalse(settings.is_active)
+        self.assertFalse(loading.valid)
+        self.assertNotIn(1, state._guild_loads)
+
+    def test_forget_also_removes_the_settings_and_is_safe_for_unknown_guilds(self):
+        state = BotState()
+        settings = state.get_guild(1)
+        state.forget_guild(1)
+        state.forget_guild(999)
+        self.assertNotIn(1, state.guild_settings)
+        self.assertFalse(settings.is_active)
+
+
 class GuildRemoveTests(unittest.IsolatedAsyncioTestCase):
     async def test_settings_are_inactive_before_stop_completes(self):
         state = BotState()

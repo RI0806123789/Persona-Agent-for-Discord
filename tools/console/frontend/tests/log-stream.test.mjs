@@ -8,7 +8,7 @@ const logPrivacy = compileTs(await source("logPrivacy.ts"));
 const privacy = compileTs(await source("privacy.ts"), {
   react: { createContext: (value) => value }, "./logPrivacy": logPrivacy,
 });
-const hooksSource = await source("hooks.ts");
+const hooksSource = await source("useLogStream.ts");
 
 // Reactの状態とEffect、WebSocket、時計だけを置き換え、実際のフックのイベント処理を実行する。
 function harness(t, { throws = false } = {}) {

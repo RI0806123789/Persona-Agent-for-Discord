@@ -3,7 +3,7 @@ import { WavyProgress } from "../components/expressive";
 import { Icon } from "../components/Icon";
 import { Button, ConnectedButtonGroup, IconButton, InlineError, StatusChip, type GroupOption } from "../components/ui";
 import { formatClock } from "../format";
-import type { LogStream } from "../hooks";
+import type { LogStream } from "../useLogStream";
 import { LEVEL_LABELS, type LogLevel } from "../logs";
 import { prepareLogEntries } from "../logPresentation";
 import { redactError, usePrivacy } from "../privacy";

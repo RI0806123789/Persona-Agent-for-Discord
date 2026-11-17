@@ -484,3 +484,11 @@ def parse_commit_list(text: str) -> list[dict]:
 def parse_server_info(text: str) -> dict:
     lines = text.splitlines() + ["", "", ""]
     return {"hostname": lines[0].strip(), "kernel": lines[1].strip(), "os": lines[2].strip()}
+
+
+def needs_sudo_password(stderr: str) -> bool:
+    """`sudo -n` が、パスワードか端末を求めて断られたことを示す標準エラーか（#468）。
+
+    systemctl の操作とデプロイの再起動で、同じ文言の判定を共有する（文言を片側だけ直さないため）。
+    """
+    return "password is required" in stderr or "a terminal is required" in stderr

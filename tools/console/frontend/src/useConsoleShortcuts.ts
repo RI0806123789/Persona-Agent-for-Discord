@@ -102,7 +102,7 @@ export function useConsoleShortcuts({
         focusTimer.current = window.setTimeout(() => filterInputRef.current?.focus(), 60);
         break;
       case "p":
-        if (connected) if (page === "logs") setPaused(!paused);
+        if (connected && page === "logs") setPaused(!paused);
         break;
       case "[":
         toggleRail();

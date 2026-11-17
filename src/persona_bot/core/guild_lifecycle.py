@@ -27,14 +27,8 @@ async def remove_guild_state(
     removal = object()
     state.guild_removals[guild_id] = removal
     settings = state.guild_settings.get(guild_id)
-    if settings is not None:
-        settings._active = False
-    # ★ 読込中の古い結果は無効にして、辞書からも外す。ローカル変数が強参照を持つ間は
-    # 弱参照の辞書にも残り続け、無効なまま停止の待機中に居座ってしまう（待機中に
-    # 来た新しい読込要求が、無効な読込を掴んで失敗する）。
-    loading = state._guild_loads.pop(guild_id, None)
-    if loading is not None:
-        loading.valid = False
+    # 設定と読込中の結果を無効にする（キャッシュからは、停止処理が参照し終わってから外す）。
+    state.invalidate_guild(guild_id)
 
     def is_current() -> bool:
         # 開始時に未ロード（None）なら、待機中に停止処理自身が get_guild で作った設定も

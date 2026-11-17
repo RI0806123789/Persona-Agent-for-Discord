@@ -123,6 +123,30 @@ class ProfileValidationTests(unittest.TestCase):
                     profiles._parse_profile(_raw_profile(**override))
 
 
+class DisplayTextTests(unittest.TestCase):
+    def test_label_and_note_must_be_strings(self):
+        for key in ("label", "note"):
+            for value in (123, ["配列"], {"a": 1}, True):
+                with self.subTest(key=key, value=value):
+                    with self.assertRaises(profiles.ProfileError):
+                        profiles._parse_profile(_raw_profile(**{key: value}))
+
+    def test_missing_null_or_empty_label_and_note_use_the_defaults(self):
+        for value in (None, ""):
+            parsed = profiles._parse_profile(_raw_profile(label=value, note=value))
+            self.assertEqual(parsed.label, "prod")
+            self.assertEqual(parsed.note, "")
+
+    def test_default_bot_dir_matches_the_example_file(self):
+        raw = _raw_profile()
+        del raw["bot_dir"]
+        parsed = profiles._parse_profile(raw)
+        self.assertEqual(parsed.bot_dir, profiles.DEFAULT_BOT_DIR)
+        example = json.loads(profiles.EXAMPLE_PROFILES_PATH.read_text(encoding="utf-8-sig"))
+        folders = {Path(entry["bot_dir"]).name for entry in example["profiles"] if "bot_dir" in entry}
+        self.assertEqual(folders, {Path(profiles.DEFAULT_BOT_DIR).name})
+
+
 class UnsetFieldsTests(unittest.TestCase):
     def test_real_values_are_configured(self) -> None:
         self.assertEqual(profiles._parse_profile(_raw_profile()).unset_fields, [])

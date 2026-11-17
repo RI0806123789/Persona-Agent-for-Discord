@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tests.helpers.discord_mocks import make_channel as make_text_channel, make_guild as make_server
-from persona_bot.utils import discord_helpers
+from persona_bot.utils import discord_channels
 from persona_bot.utils.discord_helpers import pick_announcement_channel, post_welcome_message
 
 
@@ -51,7 +51,7 @@ class AnnouncementChannelTests(unittest.TestCase):
 
 class WelcomeMessageSettingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        quiet = patch("persona_bot.utils.discord_helpers.logger")
+        quiet = patch("persona_bot.utils.discord_channels.logger")
         quiet.start()
         self.addCleanup(quiet.stop)
 
@@ -59,8 +59,8 @@ class WelcomeMessageSettingTests(unittest.IsolatedAsyncioTestCase):
         # #74: 無効なら送信せず、投稿先も探さず、投稿済みにも数えない。
         guild = make_guild()
         posted: set[int] = set()
-        with patch.object(discord_helpers, "WELCOME_MESSAGE_ENABLED", False), \
-                patch.object(discord_helpers, "pick_announcement_channel") as pick:
+        with patch.object(discord_channels, "WELCOME_MESSAGE_ENABLED", False), \
+                patch.object(discord_channels, "pick_announcement_channel") as pick:
             self.assertFalse(await post_welcome_message(guild, "架空の案内", posted))
         pick.assert_not_called()
         guild.system_channel.send.assert_not_awaited()
@@ -69,7 +69,7 @@ class WelcomeMessageSettingTests(unittest.IsolatedAsyncioTestCase):
     async def test_enabled_setting_posts_once_without_mentions(self) -> None:
         guild = make_guild()
         posted: set[int] = set()
-        with patch.object(discord_helpers, "WELCOME_MESSAGE_ENABLED", True):
+        with patch.object(discord_channels, "WELCOME_MESSAGE_ENABLED", True):
             self.assertTrue(await post_welcome_message(guild, "架空の案内", posted))
             # 同じサーバーへの2回目（イベントの重複）は投稿しない。
             self.assertFalse(await post_welcome_message(guild, "架空の案内", posted))

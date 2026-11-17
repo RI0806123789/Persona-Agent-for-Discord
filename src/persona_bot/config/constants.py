@@ -56,7 +56,7 @@ ENV_FILE_PATH = PROJECT_ROOT / ".env"
 DATA_DIR = PROJECT_ROOT / "data"
 MEMORY_DIR = DATA_DIR / "memory"
 # SQLite データベース本体。親密度・統計・文書キュー・一時ログ・プロフィール・
-# サーバー設定・記念日の投稿記録・リマインダー・フィードバックの9テーブルを格納する。
+# サーバー設定・記念日の投稿記録・リマインダー・フィードバック・旧データの取り込み記録の10テーブルを格納する。
 # profile.json は起動時の手書き追加用、projects.json は自由形式JSONとして保持する。
 DATABASE_PATH = MEMORY_DIR / "bot.db"
 PROFILE_MEMORY_PATH = MEMORY_DIR / "profile.json"

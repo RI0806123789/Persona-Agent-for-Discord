@@ -58,9 +58,13 @@ class SchemaVersionContractTests(unittest.TestCase):
         ]
         self.assertEqual(versions, [database.SCHEMA_VERSION])
 
-    def test_console_reads_the_queue_and_reminder_state_names_from_database_py(self) -> None:
-        # 管理コンソールの画面テスト（dbTables.test.mjs）が database.py の本文を正規表現で読む箇所。
-        text = (CORE / "database.py").read_text(encoding="utf-8-sig")
+    def test_console_reads_the_queue_and_reminder_state_names_from_db_modules(self) -> None:
+        # 管理コンソールの画面テスト（dbTables.test.mjs）が db_*.py の本文を正規表現で読む箇所。
+        # 読む対象のファイル名はそのテストと同じ（database.py・db_queue.py・db_reminders.py・db_rows.py）。
+        text = "\n".join(
+            (CORE / f"{name}.py").read_text(encoding="utf-8-sig")
+            for name in ("database", "db_queue", "db_reminders", "db_rows")
+        )
         self.assertRegex(text, r"_QUEUE_ACTIVE_STATUSES\s*=\s*\(([^)]+)\)")
         self.assertRegex(text, r"DELETE FROM reminders WHERE status IN \(([^)]+)\)")
 
