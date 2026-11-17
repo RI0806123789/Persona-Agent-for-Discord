@@ -236,14 +236,12 @@ def _constraint_lines() -> list[tuple[str, str, str]]:
     """constraints.txt の行を (正規化した名前, 版, 環境マーカー) にする。コメントと空行は飛ばす。"""
     rows = []
     for raw in _read(CONSTRAINTS_PATH).splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        requirement, _, marker = line.partition(";")
-        match = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s]+)", requirement.strip())
-        if match is None:
-            raise AssertionError(f"constraints.txt に「名前==版」でない行があります: {line}")
-        rows.append((merge_constraints.normalize_name(match.group(1)), match.group(2), marker.strip()))
+        try:
+            row = merge_constraints.parse_constraint_line(raw)
+        except merge_constraints.ConstraintsError as error:
+            raise AssertionError(f"constraints.txt: {error}") from error
+        if row is not None:
+            rows.append(row)
     return rows
 
 

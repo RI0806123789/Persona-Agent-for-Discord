@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import discord
 
@@ -25,15 +25,32 @@ from persona_bot.core.background import spawn
 from persona_bot.services.content_moderator import VERDICT_SAFE, VERDICT_UNSAFE
 from persona_bot.services.violation_notice import record_violation_notice
 from persona_bot.services.voice_conversation_state import _Utterance
+from persona_bot.utils.discord_helpers import NO_MENTIONS
+
+if TYPE_CHECKING:
+    from persona_bot.services.voice_conversation import VoiceConversationService
+    from persona_bot.services.voice_conversation_state import ConsentState
 
 logger = logging.getLogger("persona_bot.services.voice_conversation")
 
-_NO_MENTIONS = discord.AllowedMentions.none()
 _NOTICE_INPUT_VIOLATION = "不適切な発言が検出されたため、応答を停止しました。"
 
 
 class VoiceModerationMixin:
     """入力・出力の AI モデレーション、違反の記録と通知、記憶・親密度への反映。"""
+
+    if TYPE_CHECKING:
+        # ホスト（`VoiceConversation`）が持つ属性・メソッドの宣言。型検査のためだけにあり、
+        # 実行時には何も定義しない（ホスト側の定義が使われる）。ホストの定義を変えたら揃えること。
+        _service: VoiceConversationService
+        guild: discord.Guild
+        notice_channel: Any
+        consent: ConsentState
+        _stopped: bool
+        _now: Callable[[], float]
+
+        def _update_gate(self) -> None: ...
+        def _discard_response(self, utterance: _Utterance, reason: str, *, fade: bool = False) -> None: ...
 
     def _reject_input(self, utterance: _Utterance, reason: str) -> None:
         self._discard_response(utterance, reason)
@@ -127,7 +144,7 @@ class VoiceModerationMixin:
         # 通知してよいのは対象の本人だけ（AllowedMentions の既定は @everyone・ロールも許可するため明示する）。
         mentions = (
             discord.AllowedMentions(everyone=False, roles=False, users=[member], replied_user=False)
-            if member is not None else _NO_MENTIONS
+            if member is not None else NO_MENTIONS
         )
         content = f"{member.mention} {text}" if member is not None else text
         try:

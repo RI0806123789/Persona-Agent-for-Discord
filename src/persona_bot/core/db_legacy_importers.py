@@ -182,6 +182,10 @@ class LegacyRowParams:
     affinity: Callable[[Any, dict[str, Any]], tuple[Any, ...]]
     user_stats: Callable[[Any, dict[str, Any]], tuple[Any, ...]]
     queue: Callable[[dict[str, Any]], tuple[Any, ...]]
+    # 上の変換結果を書く INSERT 文（`INSERT OR IGNORE`。列名の一覧から作られた `database.py` の定義）。
+    affinity_sql: str
+    user_stats_sql: str
+    queue_sql: str
 
 
 class LegacyDataImporter:
@@ -290,36 +294,19 @@ class LegacyDataImporter:
         with self._lock, self._conn:
             for user_id, entry in entries:
                 # 既に DB にあるユーザーは上書きしない（DB 側を正とする）
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO affinity"
-                    " (user_id, affinity, valence, arousal, last_interaction)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    self._row_params.affinity(user_id, entry),
-                )
+                self._conn.execute(self._row_params.affinity_sql, self._row_params.affinity(user_id, entry))
 
     def import_user_stats_json(self, path: Path) -> None:
         entries = load_legacy_user_entries(path)
         with self._lock, self._conn:
             for user_id, entry in entries:
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO user_stats"
-                    " (user_id, user_name, total_count, hourly, first_seen, last_seen,"
-                    "  recent_samples, analysis, stats_opt_out)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    self._row_params.user_stats(user_id, entry),
-                )
+                self._conn.execute(self._row_params.user_stats_sql, self._row_params.user_stats(user_id, entry))
 
     def import_queue_json(self, path: Path) -> None:
         tasks = load_legacy_queue_tasks(path)
         with self._lock, self._conn:
             for task in tasks:
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO queue_tasks"
-                    " (task_id, status, channel_id, message_id, author_id, question,"
-                    "  attachment_count, created_at, updated_at, finished_at, error)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    self._row_params.queue(task),
-                )
+                self._conn.execute(self._row_params.queue_sql, self._row_params.queue(task))
 
     def import_pending_log_txt(self, path: Path) -> None:
         """旧 pending_log.txt（[時刻] User: … / [時刻] Bot: … 形式）を行単位で復元する。"""

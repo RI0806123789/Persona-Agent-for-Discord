@@ -47,7 +47,7 @@ class DocumentTemporaryFileTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def process(self):
-        return await self.service._process_attachment(self.attachment, "test-user", "test-model")
+        return await self.service._process_attachment(self.attachment, "test-model")
 
     def assert_no_files(self) -> None:
         self.assertEqual(list(self.root.iterdir()), [])

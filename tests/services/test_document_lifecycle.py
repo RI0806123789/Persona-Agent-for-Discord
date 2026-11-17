@@ -57,7 +57,7 @@ class DocumentLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.service._fetch_message_from_task = AsyncMock(return_value=self.message)
         self.models = []
 
-        async def attachment(item, user_id, model):
+        async def attachment(item, model):
             self.models.append(model)
             return {"document_name": item.filename, "summary": f"架空の要約 {item.filename}"}
 
@@ -200,12 +200,11 @@ class DocumentLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 with patch.object(self.memory, "append_pending_log", AsyncMock()) as append:
                     await self.service._process_task(self.task)
                 self.assertEqual(append.await_args.args[0], "22")
-                self.assertTrue(all(call.args[1] == "22" for call in self.service._process_attachment.await_args_list))
                 self.assertIn("fictional-0.txt", self.gemini.generate.await_args.args[0])
 
     async def test_setting_change_during_first_attachment_keeps_initial_settings(self) -> None:
-        async def change(item, user_id, model):
-            summary = await self.attachment(item, user_id, model)
+        async def change(item, model):
+            summary = await self.attachment(item, model)
             self.settings.current_model_name = "new-model"
             self.settings.current_prompt_file = "../prompts/prompt_maid.txt"
             self.settings.grounding_enabled = False

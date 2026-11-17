@@ -31,7 +31,7 @@ from persona_bot.utils.select_options import limit_keeping_selected
 from persona_bot.core.database import Database
 from persona_bot.services.prompting import build_stats_analysis_prompt
 from persona_bot.utils.storage import extract_json_object
-from persona_bot.utils.timeutil import parse_iso_datetime, resolve_timezone, timezone_label, utc_now_iso
+from persona_bot.utils.timeutil import as_utc, parse_iso_datetime, resolve_timezone, timezone_label, utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -188,9 +188,7 @@ class StatsService:
 
     def _to_local_hour(self, when: datetime) -> int:
         """発言時刻（UTC aware 想定）を集計用タイムゾーンの「時」に変換する。"""
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
-        return when.astimezone(self._tz).hour
+        return as_utc(when).astimezone(self._tz).hour
 
     async def record(self, user_id: str, user_name: str, text: str, when: datetime) -> bool:
         """1件を集計・保存し、成否を返す。失敗してもチャット本体は止めない。"""
@@ -361,9 +359,7 @@ class StatsService:
             when = parse_iso_datetime(computed_at)
         except ValueError:
             return False
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
-        elapsed_hours = (datetime.now(timezone.utc) - when).total_seconds() / 3600.0
+        elapsed_hours = (datetime.now(timezone.utc) - as_utc(when)).total_seconds() / 3600.0
         return elapsed_hours < STATS_ANALYSIS_TTL_HOURS
 
     @staticmethod

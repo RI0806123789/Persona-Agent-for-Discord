@@ -278,11 +278,7 @@ class FeedbackService:
             rating = _rating_of(payload.emoji)
             if rating is None:
                 return
-            # ギルドのリアクションでは member が来る（DM では None）。
-            # 他のボットの自動リアクションはノイズなので数えない。
-            member = payload.member
-            if member is not None and member.bot:
-                return
+            # ボット（自分と他のボット）の自動リアクションは _resolve_vote_target が弾いている。
 
             message_id = int(payload.message_id)
             user_id = str(payload.user_id)

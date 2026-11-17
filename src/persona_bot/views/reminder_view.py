@@ -4,7 +4,7 @@ from discord import ui
 from persona_bot.config.constants import DISCORD_SELECT_MAX_OPTIONS, REMINDER_PANEL_MAX_LENGTH
 from persona_bot.services.reminder_service import ReminderService, ReminderStorageError
 from persona_bot.views.view_parts import (
-    begin_panel_operation, edit_panel_message, BackButton,
+    begin_current_panel_operation, edit_panel_message, BackButton,
     HubFactory, PanelView, select_option_text,
 )
 
@@ -59,13 +59,9 @@ class ReminderCancelSelect(ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view: "ReminderView" = self.view  # type: ignore[assignment]
-        operation = begin_panel_operation(view, interaction)
-        if operation is not None and not operation.is_current():
-            # 閉じた・別の画面へ移ったパネルの選択では、取り消しを実行しない。
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
+        # 閉じた・別の画面へ移ったパネルの選択では、取り消しを実行しない。
+        if not await begin_current_panel_operation(view, interaction, defer=True):
             return
-        await interaction.response.defer(ephemeral=True)
         reminder_id = int(self.values[0])
 
         # 取り消しは SQL 側でも user_id で絞るため、他人のものは取り消せない

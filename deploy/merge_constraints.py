@@ -91,6 +91,22 @@ def parse_freeze(text: str, *, source: str) -> dict[str, str]:
     return pins
 
 
+def parse_constraint_line(raw: str) -> tuple[str, str, str] | None:
+    """constraints.txt の1行を (正規化した名前, 版, 環境マーカー) にする。コメントと空行は None。
+
+    マーカーが無ければ空文字。「名前==版」の形でない行は ConstraintsError にする。
+    生成結果の読み戻し（テスト）と、ここで作る行の書式を同じ定義にそろえるために置いている。
+    """
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        return None
+    requirement, _, marker = line.partition(";")
+    match = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)", requirement.strip())
+    if match is None:
+        raise ConstraintsError(f"「名前==版」でない行があります: {line}")
+    return normalize_name(match.group(1)), match.group(2), marker.strip()
+
+
 def direct_dependency_names(requirements_text: str) -> set[str]:
     """requirements.txt に書いた直接依存の名前（正規化済み）。-c などの指定とコメントは飛ばす。"""
     names = set()

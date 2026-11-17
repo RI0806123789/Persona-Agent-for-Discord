@@ -124,9 +124,9 @@ function ServiceHero({
         </div>
       </div>
 
-      {tone.hint && <InlineError>{privacy.redact(tone.hint)}</InlineError>}
-      {statusError && <InlineError>{privacy.redact(statusError)}</InlineError>}
-      {status?.service_error && <InlineError>{privacy.redact(status.service_error)}</InlineError>}
+      {tone.hint && <InlineError>{tone.hint}</InlineError>}
+      {statusError && <InlineError>{statusError}</InlineError>}
+      {status?.service_error && <InlineError>{status.service_error}</InlineError>}
 
       <div className="stat-row">
         <Stat label="PID" value={service?.main_pid ?? "—"} mono />
@@ -200,7 +200,6 @@ function SshCard({ connection, samples, now }: { connection: ConnectionState | n
 }
 
 function ResourceCards({ status, samples }: { status: StatusResponse | null; samples: Sample[] }) {
-  const privacy = usePrivacy();
   const resources = status?.resources ?? null;
   const memoryRatio = ratioOf(resources?.memory?.used, resources?.memory?.total);
   const diskRatio = ratioOf(resources?.disk?.used, resources?.disk?.total);
@@ -253,7 +252,7 @@ function ResourceCards({ status, samples }: { status: StatusResponse | null; sam
       <Card title="サーバー稼働時間" icon="clock" source="ssh" className="span-3">
         <span className="headline-large">{formatDuration(resources?.uptime_seconds)}</span>
         <span className="body-small muted">OS の再起動からの経過時間</span>
-        {status?.resources_error && <InlineError>{privacy.redact(status.resources_error)}</InlineError>}
+        {status?.resources_error && <InlineError>{status.resources_error}</InlineError>}
       </Card>
     </>
   );
@@ -278,7 +277,7 @@ function BotInsightsCard({
     return (
       <Card title="ボットの中の状態" icon="bot" source="ssh" className="span-12">
         {error ? (
-          <InlineError>{privacy.redact(error)}</InlineError>
+          <InlineError>{error}</InlineError>
         ) : (
           <div className="loading-row">
             <LoadingIndicator size={40} />
@@ -309,7 +308,7 @@ function BotInsightsCard({
         </Button>
       }
     >
-      {!discord.ok && <InlineError>Discord API: {privacy.redact(discord.error)}</InlineError>}
+      {!discord.ok && <InlineError>Discord API: {discord.error}</InlineError>}
       <div className="insight-grid">
         <Stat
           label="ボット"
@@ -358,7 +357,7 @@ function BotInsightsCard({
           Discord API・bot.db・journald から取得（{fetchedAt ? formatRelative(fetchedAt * 1000, now) : "—"}、60秒ごとに更新）
         </span>
       </div>
-      {insights.errors.length > 0 && <Notice icon="alert">{privacy.redact(insights.errors.join(" / "))}</Notice>}
+      {insights.errors.length > 0 && <Notice icon="alert">{insights.errors.join(" / ")}</Notice>}
     </Card>
   );
 }
@@ -382,7 +381,7 @@ function GitCard({ status, now }: { status: StatusResponse | null; now: number }
           </span>
         </>
       ) : status?.git_error ? (
-        <InlineError>{privacy.redact(status.git_error)}</InlineError>
+        <InlineError>{status.git_error}</InlineError>
       ) : (
         <LoadingIndicator size={36} />
       )}

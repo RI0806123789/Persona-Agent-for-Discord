@@ -136,8 +136,7 @@ class AutonomousChannelConfirmButton(ui.Button):
         # 開始に失敗し続けたときの待ち時間（最長4時間）も解除する。使える配信先へ
         # 指定し直したのに何時間も動かないのでは、直したか確かめようがないため
         # （💬 自発会話 パネルの確定と同じ）。
-        view.guild_settings.autonomous_start_retry_at = None
-        view.guild_settings.autonomous_start_failures = 0
+        view.guild_settings.reset_autonomous_retry()
         await view.guild_settings.persist()
         if not await view.ensure_settings_current(interaction):
             return

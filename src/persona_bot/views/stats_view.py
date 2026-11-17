@@ -7,10 +7,10 @@ from persona_bot.utils.select_options import limit_keeping_selected
 from persona_bot.services.feedback_service import FeedbackService, get_default_service
 from persona_bot.services.stats_service import StatsService
 from persona_bot.views.view_parts import (
-    begin_panel_operation, confirm_panel_permission, edit_panel_message, panel_operation_is_current,
+    ADMIN_ONLY_NOTICE, begin_panel_operation, confirm_panel_permission, edit_panel_message, panel_operation_is_current,
     report_panel_failure, send_panel_result,
     BackButton, HubFactory, PanelView,
-    select_option_text, send_graph_ephemeral,
+    defer_and_render_graph, select_option_text, send_graph_ephemeral,
 )
 
 
@@ -85,7 +85,7 @@ class RunStatsButton(ui.Button):
         # 一般ユーザーは自分のデータに固定する（他人のデータは管理者専用）。
         target_id = view.temp_target_id if view.is_admin else view.viewer_id
         if target_id != view.viewer_id and not is_administrator(interaction.user):
-            await interaction.response.send_message("この機能はサーバー管理者のみ利用できます。", ephemeral=True)
+            await interaction.response.send_message(ADMIN_ONLY_NOTICE, ephemeral=True)
             return
 
         begin_panel_operation(view, interaction)
@@ -112,7 +112,7 @@ class RunStatsButton(ui.Button):
             if not panel_operation_is_current(view, interaction):
                 return
             if not await confirm_panel_permission(
-                interaction, allowed, notice="この機能はサーバー管理者のみ利用できます。",
+                interaction, allowed, notice=ADMIN_ONLY_NOTICE,
             ):
                 return
             # 途中の生成失敗でも、それまでに作成したFileをfinallyで回収する。
@@ -147,7 +147,7 @@ class RankingButton(ui.Button):
 
         if not is_administrator(interaction.user):
             await interaction.response.send_message(
-                "この機能はサーバー管理者のみ利用できます。", ephemeral=True
+                ADMIN_ONLY_NOTICE, ephemeral=True
             )
             return
         if not view.try_begin_aggregation("ranking"):
@@ -160,13 +160,8 @@ class RankingButton(ui.Button):
 
     @staticmethod
     async def _show_ranking(view: "StatsView", interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        buffer = None
-        try:
-            buffer = await view.stats.build_ranking_graph()
-        except Exception as error:
-            logger.error("グラフ生成中にエラーが発生しました。", exc_info=error)
-            await interaction.followup.send("エラー: グラフの生成に失敗しました。", ephemeral=True)
+        rendered, buffer = await defer_and_render_graph(interaction, view.stats.build_ranking_graph)
+        if not rendered:
             return
         # 描画の待機中にロールが外されうるので、送る直前に最新の Member で確かめる。
         # 拒否・取得失敗・キャンセルのどれでも、作った画像のバッファを回収する。
@@ -177,7 +172,7 @@ class RankingButton(ui.Button):
             if not allowed and buffer is not None:
                 buffer.close()
         if not await confirm_panel_permission(
-            interaction, allowed, notice="この機能はサーバー管理者のみ利用できます。", followup=True,
+            interaction, allowed, notice=ADMIN_ONLY_NOTICE, followup=True,
         ):
             return
         if buffer is None:
@@ -210,7 +205,7 @@ class FeedbackButton(ui.Button):
         # （RankingButton と同じ二重チェック。権限はサーバー側の値で判断する）。
         if not is_administrator(interaction.user):
             await interaction.response.send_message(
-                "この機能はサーバー管理者のみ利用できます。", ephemeral=True
+                ADMIN_ONLY_NOTICE, ephemeral=True
             )
             return
 
@@ -245,7 +240,7 @@ class FeedbackButton(ui.Button):
             # 集計の待機中に権限を失った場合も、管理者用の結果を送らない。
             if not await confirm_panel_permission(
                 interaction, await is_current_administrator(interaction),
-                notice="この機能はサーバー管理者のみ利用できます。", followup=True,
+                notice=ADMIN_ONLY_NOTICE, followup=True,
             ):
                 return
             for chunk in split_message(summary) or ["表示できるフィードバックの集計がありません。"]:

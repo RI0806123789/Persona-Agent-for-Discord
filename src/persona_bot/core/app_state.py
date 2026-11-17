@@ -136,6 +136,15 @@ class GuildSettings:
     autonomous_start_retry_at: datetime | None = None
     autonomous_start_failures: int = 0
 
+    def reset_autonomous_retry(self) -> None:
+        """配信の開始に失敗し続けたときの待ち時間と失敗回数を消す（#453）。
+
+        開始に成功したとき、および管理者がパネルで設定を確定したとき（権限や配信先を直したのに
+        何時間も動かないのでは、直したか確かめようがないため）に呼ぶ。2つの属性は必ず一緒に戻す。
+        """
+        self.autonomous_start_failures = 0
+        self.autonomous_start_retry_at = None
+
     # --- 記念日・誕生日の自動お祝い ---
     # "{user_id}:{label}" → 最後にお祝いを投稿した日付（"YYYY-MM-DD"）。
     # 同じ記念日に同じサーバーで二重投稿しないための記録。DB にも保存され、

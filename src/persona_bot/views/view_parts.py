@@ -17,6 +17,43 @@ from persona_bot.utils.discord_helpers import is_administrator, is_current_admin
 logger = logging.getLogger(__name__)
 
 
+async def begin_current_panel_operation(view, interaction, *, defer: bool = False) -> bool:
+    """パネルの操作を開始し、そのパネルがまだ有効かを返す（#453）。
+
+    すでに閉じた・別の画面へ移ったパネルの操作なら、応答だけを保留して False を返す
+    （呼び出し側は何も実行せずに戻ること）。有効なら True を返し、`defer=True` のときは
+    その場で応答（本人だけに見えるエフェメラル）も保留する。
+    ★ 世代の確保は最初の `await` より前に行う（後から始まった操作が先に世代を取れるように）。
+    """
+    operation = begin_panel_operation(view, interaction)
+    if operation is not None and not operation.is_current():
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+        return False
+    if defer:
+        await interaction.response.defer(ephemeral=True)
+    return True
+
+
+async def defer_and_render_graph(
+    interaction: discord.Interaction, render: Callable[[], Coroutine[Any, Any, Any]],
+    *, failure_log: str = "グラフ生成中にエラーが発生しました。",
+    failure_notice: str = "エラー: グラフの生成に失敗しました。",
+) -> tuple[bool, Any]:
+    """応答を保留してグラフを生成する。`(成功したか, 生成結果)` を返す（#453）。
+
+    生成結果は画像のバッファか、描画できるデータが無いときの None。失敗したときはログに残し、
+    本人だけに失敗を伝えて `(False, None)` を返す（呼び出し側は何も送らずに戻ること）。
+    """
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        return True, await render()
+    except Exception as error:
+        logger.error(failure_log, exc_info=error)
+        await interaction.followup.send(failure_notice, ephemeral=True)
+        return False, None
+
+
 async def authorize_panel_operation(view, interaction, *, allowed, recheck, notice: str) -> bool:
     """押下時と待機後の権限を確かめ、拒否時は適切な応答を返す。"""
     if not allowed:
@@ -205,6 +242,8 @@ async def bind_panel_message(
 
 
 PANEL_BUSY_NOTICE = "処理中です。結果が届くまでお待ちください。"
+# 管理者専用の操作を、管理者でない人が押したときの案内（統計・キャラ設定で共有）。
+ADMIN_ONLY_NOTICE = "この機能はサーバー管理者のみ利用できます。"
 
 
 class OwnedView(ui.View):
@@ -312,10 +351,7 @@ class PanelView(OwnedView):
 
     async def update_preview(self, interaction: discord.Interaction, update: Callable[[], None]) -> None:
         """最新の操作だけが一時状態とプレビューを更新する。"""
-        operation = begin_panel_operation(self, interaction)
-        if operation is not None and not operation.is_current():
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
+        if not await begin_current_panel_operation(self, interaction):
             return
         update()
         self.refresh_items()

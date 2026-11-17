@@ -390,6 +390,10 @@ REPLY_ALLOWED_MENTIONS = discord.AllowedMentions(
     everyone=False, users=False, roles=False, replied_user=True,
 )
 
+# ボットが自分から投稿する文面（独り言・案内・同意パネルなど）では、通知を一切飛ばさない。
+# 各モジュールで作り直さず、この1つを共有する（#453）。
+NO_MENTIONS = discord.AllowedMentions.none()
+
 
 async def send_long_reply(
     message: discord.Message,

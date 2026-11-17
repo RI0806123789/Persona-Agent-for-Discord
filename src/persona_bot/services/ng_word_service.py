@@ -10,6 +10,7 @@ import unicodedata
 from pathlib import Path
 
 from persona_bot.config.constants import NG_WORD_PATH, NG_WORD_PRIVATE_PATH
+from persona_bot.utils.normalization import fold_kana
 
 logger = logging.getLogger(__name__)
 
@@ -27,21 +28,6 @@ def _is_ignored_character(character: str) -> bool:
     )
 
 
-def _fold_kana(text: str) -> str:
-    """全半角を揃えた後のカタカナを、対応するひらがなへ統一する。"""
-    folded: list[str] = []
-    for character in text.casefold():
-        codepoint = ord(character)
-        if 0x30A1 <= codepoint <= 0x30F6 or codepoint in {0x30FD, 0x30FE}:
-            folded.append(chr(codepoint - 0x60))
-        elif 0x30F7 <= codepoint <= 0x30FA:
-            # ヷ〜ヺには合成済みのひらがながないので、基底文字と結合濁点に分ける。
-            folded.append("わゐゑを"[codepoint - 0x30F7] + "\u3099")
-        else:
-            folded.append(character)
-    return "".join(folded)
-
-
 def _normalize_for_matching(text: str) -> tuple[str, list[tuple[int, int]]]:
     """照合文と、各文字が由来する元本文の区間を返す。
 
@@ -55,7 +41,7 @@ def _normalize_for_matching(text: str) -> tuple[str, list[tuple[int, int]]]:
     start = end = 0
 
     def append_pending(normalized: str) -> None:
-        folded = _fold_kana(normalized)
+        folded = fold_kana(normalized)
         normalized_parts.append(folded)
         source_spans.extend([(start, end)] * len(folded))
 

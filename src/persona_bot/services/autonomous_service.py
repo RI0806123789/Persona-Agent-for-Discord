@@ -71,11 +71,11 @@ from persona_bot.config.constants import (
     AUTONOMOUS_TALK_INTERVAL_MINUTES,
 )
 from persona_bot.services.content_moderator import ContentModerator
-from persona_bot.utils.discord_helpers import can_bot_send_messages, send_long_message
+from persona_bot.utils.discord_helpers import NO_MENTIONS, can_bot_send_messages, send_long_message
 from persona_bot.services.gemini_service import GeminiService
 from persona_bot.services.ng_word_service import NgWordFilter
 # 発話（第一声・独り言）とコメントへの応答は autonomous_speech.py（#415）。
-from persona_bot.services.autonomous_speech import _NO_MENTIONS, AutonomousSpeechMixin
+from persona_bot.services.autonomous_speech import AutonomousSpeechMixin
 from persona_bot.utils.usage_graph import UsageTracker
 
 logger = logging.getLogger(__name__)
@@ -528,8 +528,7 @@ class AutonomousService(AutonomousSpeechMixin):
             return
 
         # ここまで来たら開始成功。失敗の記録は消して、次回は待たずに出られるようにする。
-        guild_settings.autonomous_start_failures = 0
-        guild_settings.autonomous_start_retry_at = None
+        guild_settings.reset_autonomous_retry()
         guild_settings.autonomous_session = session
         kind = "ステージ" if is_stage else "ボイスチャンネル"
         logger.info("自律行動: %sで配信を開始しました。", kind)
@@ -660,7 +659,7 @@ class AutonomousService(AutonomousSpeechMixin):
             # 終了案内の送信だけは呼出元と一緒にキャンセルし、後片付けへ進む。
             if notice and channel is not None:
                 try:
-                    await send_long_message(channel, notice, allowed_mentions=_NO_MENTIONS)
+                    await send_long_message(channel, notice, allowed_mentions=NO_MENTIONS)
                 except discord.HTTPException as error:
                     logger.error("自律行動: 締めの投稿に失敗しました。", exc_info=error)
                 except Exception as error:

@@ -118,7 +118,7 @@ def _read_key(name: str) -> str:
     return value
 
 
-def _report_missing(missing: list, env_status: str, env_path: Path) -> None:
+def _report_missing(missing: list[str], env_status: str) -> None:
     """キーが足りないことを日本語で案内する（例外の送出は呼び出し側で行う）。"""
     # 移行スクリプト等から単独で呼んでも、既定のWARNING閾値で対処方法まで表示する。
     # この1行は「キーが無いときの合図」として仕様で決まっている文言のため、
@@ -160,7 +160,7 @@ def load_settings() -> Settings:
             missing.append(name)
 
     if missing:
-        _report_missing(missing, env_status, ENV_FILE_PATH)
+        _report_missing(missing, env_status)
         # bot.py のトップレベルから呼ばれるので、ここで投げればボットは起動しない。
         raise SettingsError(f"APIキーが未設定です: {', '.join(missing)}")
 

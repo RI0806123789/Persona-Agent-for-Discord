@@ -39,7 +39,7 @@ from persona_bot.core.database import Database
 from persona_bot.core.background import run_in_thread
 from persona_bot.utils.discord_helpers import can_bot_send_messages, send_long_message
 from persona_bot.services.ng_word_service import NgWordFilter
-from persona_bot.utils.timeutil import parse_iso_datetime, format_weekday, resolve_timezone, utc_now
+from persona_bot.utils.timeutil import as_utc, parse_iso_datetime, format_weekday, resolve_timezone, utc_now
 from persona_bot.utils.normalization import normalize_recurrence
 
 logger = logging.getLogger(__name__)
@@ -75,9 +75,7 @@ def _format_local(iso_utc: str, tz: Any) -> str:
         dt = parse_iso_datetime(iso_utc)
     except ValueError:
         return iso_utc
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    local = dt.astimezone(tz)
+    local = as_utc(dt).astimezone(tz)
     # strftime の %-m / %#m はプラットフォーム依存のため、数値は自前で埋め込む。
     # 曜日名は timeutil の唯一のテーブルから取る（登録時にプロンプトへ埋める
     # 曜日表記と同じ情報源にして、表記が食い違わないようにするため）。
@@ -105,9 +103,7 @@ def _to_local_naive(iso_utc: str, tz: Any) -> datetime | None:
         dt = parse_iso_datetime(str(iso_utc))
     except (TypeError, ValueError):
         return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(tz).replace(tzinfo=None)
+    return as_utc(dt).astimezone(tz).replace(tzinfo=None)
 
 
 def _local_to_utc(local_naive: datetime, tz: Any) -> datetime:
@@ -190,8 +186,7 @@ def next_occurrence(
     # アンカーが読めない行は今回の予定時刻を基準にする（繰り返しを止めない）。
     anchor_local = _to_local_naive(anchor, tz) or current_local
 
-    if after.tzinfo is None:
-        after = after.replace(tzinfo=timezone.utc)
+    after = as_utc(after)
 
     if kind == "monthly":
         # 反復の起点はアンカーではなく「今回の予定時刻の月」にする。
@@ -446,9 +441,7 @@ class ReminderService:
             remind_at = parse_iso_datetime(str(record.get("remind_at", "")))
         except ValueError:
             return False
-        if remind_at.tzinfo is None:
-            remind_at = remind_at.replace(tzinfo=timezone.utc)
-        return remind_at < stale_before
+        return as_utc(remind_at) < stale_before
 
     async def _notify(self, record: dict[str, Any]) -> None:
         """1件分の通知を、依頼されたチャンネルへ投稿する。"""

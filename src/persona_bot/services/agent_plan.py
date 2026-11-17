@@ -20,7 +20,7 @@ from persona_bot.config.constants import (
     AGENT_TASK_MAX_CHARS,
     AGENT_TRIGGER_PATTERN,
 )
-from persona_bot.utils.normalization import normalize_extracted_text
+from persona_bot.utils.normalization import normalize_bool_flag, normalize_extracted_text
 
 _TRIGGER = re.compile(AGENT_TRIGGER_PATTERN, re.IGNORECASE)
 
@@ -49,18 +49,6 @@ def requests_subagent(text: str) -> bool:
     return AGENT_ENABLED and bool(text) and _TRIGGER.search(text) is not None
 
 
-def _normalize_flag(value: Any) -> bool | None:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "yes", "1"}:
-            return True
-        if normalized in {"false", "no", "0"}:
-            return False
-    return None
-
-
 def normalize_agent_plan(value: Any) -> AgentPlan | None:
     """モデルが返す agent を検証する。読めない値は None（委任の判定なし）にする。
 
@@ -70,7 +58,7 @@ def normalize_agent_plan(value: Any) -> AgentPlan | None:
     """
     if not isinstance(value, dict):
         return None
-    delegate = _normalize_flag(value.get("delegate"))
+    delegate = normalize_bool_flag(value.get("delegate"))
     if delegate is None:
         return None
     if not delegate:

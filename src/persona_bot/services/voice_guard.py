@@ -32,12 +32,13 @@ discord.py の接続復旧も同じチャンネルへつなぎ直す。いずれ
 
 from __future__ import annotations
 
-import logging
 import asyncio
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from weakref import WeakValueDictionary
 
 import discord
 
@@ -49,7 +50,7 @@ from persona_bot.config.constants import (
     VOICE_MOVE_GUARD_SETTLE_SECONDS,
     VOICE_MOVE_GUARD_WINDOW_SECONDS,
 )
-from persona_bot.core.background import spawn
+from persona_bot.core.background import spawn, wait_for_cleanup
 from persona_bot.services.autonomous_stage import enable_stage_speaker
 from persona_bot.utils.voice_permissions import missing_voice_permissions
 
@@ -83,6 +84,34 @@ def _stop_playback(voice_client: Any) -> None:
         logger.error("ボイス接続の保護: 再生の停止に失敗しました。", exc_info=error)
 
 
+async def release_and_disconnect(
+    voice_guard: VoiceGuard | None, guild_id: int, voice_client: Any, *,
+    label: str, failure_message: str, log: logging.Logger = logger,
+    stop: Callable[[], Awaitable[None]] | None = None,
+) -> bool:
+    """保護の解除 →（あれば）`stop` → 強制切断 を、この順序でまとめて行う。
+
+    ボイス接続を自分から切る処理は、すべてここを通すこと（解除や停止の漏れを片側だけ直さないため）。
+
+    - 保護を先に解くのは、戻している最中の保護処理が、切る予定の接続を元のチャンネルへ
+      動かしたり、退出後に入り直したりしないため。
+    - `stop`（音声会話の停止など）は同意パネルの編集などで待たされるので、保護の解除の後、
+      切断の前に行う（切断済みの接続を会話の受信・再生が触らないように）。
+    - 切断の失敗は `failure_message` を `log` へ警告で残して False を返す（例外は外へ出さない。
+      キャンセルは伝播する）。`stop` の例外は呼出元へそのまま伝える。
+    """
+    if voice_guard is not None:
+        voice_guard.release(guild_id)
+    if stop is not None:
+        await stop()
+    try:
+        await wait_for_cleanup(voice_client.disconnect(force=True), label=label)
+    except Exception:
+        log.warning(failure_message, exc_info=True)
+        return False
+    return True
+
+
 class VoiceGuard:
     """ボット自身の予期しないボイスチャンネル移動を検知し、接続先を守る。"""
 
@@ -90,7 +119,8 @@ class VoiceGuard:
         self._client = client
         self._autonomous = autonomous
         self._homes: dict[int, _HomeChannel] = {}
-        self._locks: dict[int, asyncio.Lock] = {}
+        # 保護中の処理が持つ間だけ生きる弱参照にする（過去のサーバーのロックを溜めない）。
+        self._locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
 
     # ------------------------------------------------------------------
     # 意図した接続先の登録
@@ -166,7 +196,9 @@ class VoiceGuard:
         サーバーごとのロックで直列化し、ロックを取ってから状態を取り直す。短い間に
         続けて移された場合も、2件目以降は「既に戻っている」と判断して何もしない。
         """
-        lock = self._locks.setdefault(guild_id, asyncio.Lock())
+        lock = self._locks.get(guild_id)
+        if lock is None:
+            lock = self._locks[guild_id] = asyncio.Lock()
         async with lock:
             voice_client = await self._settled_voice_client(guild_id)
             guild = self._client.get_guild(guild_id)
@@ -290,7 +322,10 @@ class VoiceGuard:
             return
         # 照合から解除・切断開始までは待機を挟まない。
         self.release(guild.id)
-        logger.warning("ボイス接続の保護: 保護の継続条件を満たさないため、移動先のチャンネルから退出します。")
+        logger.warning(
+            "ボイス接続の保護: 保護の継続条件を満たさないため、移動先のチャンネルから退出します（%s）。",
+            reason,
+        )
         try:
             await voice_client.disconnect(force=True)
         except Exception as error:

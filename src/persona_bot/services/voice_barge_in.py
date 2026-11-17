@@ -30,6 +30,7 @@ from persona_bot.config.constants import (
     LIVE_ECHO_TEXT_WINDOW_SECONDS,
     LIVE_TRANSCRIPT_MAX_CHARS,
 )
+from persona_bot.utils.normalization import fold_kana
 
 # 判定の結果。
 INTERRUPTION_SPEECH = "speech"   # 意味のある発言（割り込みとして確定してよい）
@@ -40,19 +41,13 @@ INTERRUPTION_ECHO = "echo"       # ボット自身の発話の回り込み
 _LONG_VOWEL = re.compile(r"[ー〜~]+")
 # 語の区切り（空白・句読点・記号）。「ー」はかなの一部として残る（\w に含まれる）。
 _SEPARATOR = re.compile(r"[\W_]+")
-_KATAKANA_START, _KATAKANA_END = 0x30A1, 0x30F6
-_KANA_OFFSET = 0x60
 # 回り込みの照合で過去の発話を覚えておく件数の上限（時間でも区切る）。
 _RECENT_MAX_ITEMS = 256
 
 
 def normalize_speech_text(text: str) -> str:
     """表記ゆれを吸収する（NFKC・小文字化・カタカナをひらがなへ・伸ばし棒の重なりを1つに）。"""
-    text = unicodedata.normalize("NFKC", text).casefold()
-    text = "".join(
-        chr(ord(char) - _KANA_OFFSET) if _KATAKANA_START <= ord(char) <= _KATAKANA_END else char
-        for char in text
-    )
+    text = fold_kana(unicodedata.normalize("NFKC", text))
     return _LONG_VOWEL.sub("ー", text)
 
 
