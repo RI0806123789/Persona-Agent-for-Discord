@@ -12,9 +12,11 @@
   管理コンソール側（`privacy.ts` など）が参照するため、ロガー名は変えない。
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import discord
 
@@ -36,6 +38,7 @@ from persona_bot.services.prompting import (
     build_autonomous_reply_prompt,
 )
 from persona_bot.utils.discord_helpers import (
+    NO_MENTIONS,
     channel_display_name,
     close_image_attachments,
     fetch_channel_history_text,
@@ -44,16 +47,33 @@ from persona_bot.utils.discord_helpers import (
     send_long_reply,
 )
 
+if TYPE_CHECKING:
+    from persona_bot.services.content_moderator import ContentModerator
+    from persona_bot.services.gemini_service import GeminiService
+    from persona_bot.services.ng_word_service import NgWordFilter
+    from persona_bot.utils.usage_graph import UsageTracker
+
 logger = logging.getLogger("persona_bot.services.autonomous_service")
 
-# ボットが自分から投稿する文面では通知を一切飛ばさない。独り言は誰かへの返信では
-# ないため、メンションらしき文字列が混じっても通知爆撃にしないための保険。
-# （コメントへの応答だけは reply でコメント主に通知する。）
-_NO_MENTIONS = discord.AllowedMentions.none()
+# 独り言は誰かへの返信ではないため、`NO_MENTIONS`（通知を一切飛ばさない）で投稿し、メンションらしき
+# 文字列が混じっても通知爆撃にしない。（コメントへの応答だけは reply でコメント主に通知する。）
 
 
 class AutonomousSpeechMixin:
     """第一声・独り言・コメント応答の生成、検閲、投稿、読み上げ。"""
+
+    if TYPE_CHECKING:
+        # ホスト（`AutonomousService`）が持つ属性・メソッドの宣言。型検査のためだけにあり、
+        # 実行時には何も定義しない（ホスト側の定義が使われる）。ホストの定義を変えたら揃えること。
+        _client: discord.Client
+        _gemini: GeminiService
+        _moderator: ContentModerator
+        _ng_filter: NgWordFilter
+        _usage: UsageTracker
+        _is_blocked: Callable[[int], bool] | None
+
+        def _claim_comment_slot(self, session: AutonomousSession) -> bool: ...
+        async def stop_session(self, guild_id: int, *, reason: str, notice: str | None = None) -> bool: ...
 
     async def handle_comment(
         self,
@@ -235,7 +255,7 @@ class AutonomousSpeechMixin:
                 body = f"{AUTONOMOUS_OPENING_NOTICE}\n{speech}" if opening and speech else (
                     AUTONOMOUS_OPENING_NOTICE if opening else speech
                 )
-                await send_long_message(channel, body, allowed_mentions=_NO_MENTIONS)
+                await send_long_message(channel, body, allowed_mentions=NO_MENTIONS)
             except Exception as error:
                 logger.error("自律行動: %sの送信に失敗しました。", label, exc_info=error)
                 await self._stop_failed_speech(guild, guild_settings, session)

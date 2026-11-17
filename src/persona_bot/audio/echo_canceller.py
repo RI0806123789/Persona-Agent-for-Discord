@@ -210,8 +210,6 @@ class EchoResult:
     pcm: bytes
     # 発話の強さ（VAD に使う実効値）。回り込み・残ったエコーと判定したら 0。
     level: float
-    # 参照信号が鳴っていた（回り込みがありうる）区間か。
-    echo_possible: bool
 
 
 @dataclass(frozen=True)
@@ -275,7 +273,7 @@ class EchoCanceller:
         samples = np.frombuffer(pcm[: len(pcm) - len(pcm) % 2], dtype=np.int16).astype(np.float32)
         count = samples.size
         if count == 0:
-            return EchoResult(pcm, 0.0, False)
+            return EchoResult(pcm, 0.0)
         end = self._place(count, rtp_timestamp, arrival)
         start = end - count
         self._mic.write(start, samples)
@@ -285,14 +283,14 @@ class EchoCanceller:
             self._since_estimate = 0
             self._estimate_delay(end)
         if self._delay is None:
-            # 遅延が分からない間は取り除けない。回り込みの可能性だけを伝える（後段が文字起こしで確かめる）。
-            return EchoResult(pcm, raw_level, self._reference.has_sound_after(start - _MAX_DELAY - _TAPS))
+            # 遅延が分からない間は取り除けない。そのまま通す（回り込みは後段が文字起こしで確かめる）。
+            return EchoResult(pcm, raw_level)
         lead = max(0, self._delay - _PRE)
         if not self._reference.has_sound_after(start - lead - _PARTITIONS * BLOCK):
-            return EchoResult(pcm, raw_level, False)
+            return EchoResult(pcm, raw_level)
         if count % BLOCK:
             # Discord の音声は 20ms 単位。端数のフレームは取り除かずに通す（判定は後段に任せる）。
-            return EchoResult(pcm, raw_level, True)
+            return EchoResult(pcm, raw_level)
         cleaned = np.empty(count, dtype=np.float32)
         level = 0.0
         for offset in range(0, count, BLOCK):
@@ -300,7 +298,7 @@ class EchoCanceller:
             cleaned[offset:offset + BLOCK] = residual
             level = max(level, block_level)
         output = np.clip(np.rint(cleaned), PCM_INT16_MIN, PCM_INT16_MAX).astype(np.int16).tobytes()
-        return EchoResult(output, level, True)
+        return EchoResult(output, level)
 
     # ------------------------------------------------------------------
     # 受信音声の時間軸

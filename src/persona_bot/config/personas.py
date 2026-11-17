@@ -310,13 +310,13 @@ def _build_persona(file_name: str, entry: Any) -> Persona:
     return Persona(
         value=persona_value(file_name),
         name=display or Path(file_name).stem,
-        voice=MappingProxyType(_build_voice(file_name, entry.get("voice"))),
-        agent_lines=MappingProxyType(_build_agent_lines(file_name, entry.get("agent"))),
-        agent_avatar_url=_build_agent_avatar_url(file_name, entry.get("agent")),
+        voice=MappingProxyType(_build_voice(entry.get("voice"))),
+        agent_lines=MappingProxyType(_build_agent_lines(entry.get("agent"))),
+        agent_avatar_url=_build_agent_avatar_url(entry.get("agent")),
     )
 
 
-def _build_voice(file_name: str, voice: Any) -> dict[str, Any]:
+def _build_voice(voice: Any) -> dict[str, Any]:
     profile = dict(VOICE_PROFILE_FALLBACK)
     if voice is None or not _expect_object(voice, "「<設定値>」の voice ", "既定の声を使います。"):
         return profile
@@ -354,7 +354,7 @@ def _build_voice(file_name: str, voice: Any) -> dict[str, Any]:
     return profile
 
 
-def _build_agent_lines(file_name: str, agent: Any) -> dict[str, str]:
+def _build_agent_lines(agent: Any) -> dict[str, str]:
     """サブエージェントの進捗の定型文を点検する（案A。LLM を呼ばない。#170）。
 
     差し込みの書き間違い（{stpe} や閉じ忘れの {）は表示のたびに例外になるため、
@@ -380,7 +380,7 @@ def _build_agent_lines(file_name: str, agent: Any) -> dict[str, str]:
     return lines
 
 
-def _build_agent_avatar_url(file_name: str, agent: Any) -> str | None:
+def _build_agent_avatar_url(agent: Any) -> str | None:
     """作業スレッドで子が使うアイコンの URL を点検する（#267）。
 
     Discord が画像を取りに行く URL なので https:// で始まる1行だけを受け付ける。

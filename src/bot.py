@@ -233,7 +233,7 @@ async def on_guild_join(guild: discord.Guild) -> None:
     try:
         welcome_text = build_welcome_text(resolve_bot_name(client.user))
         await post_welcome_message(guild, welcome_text, state.welcomed_guild_ids)
-    except Exception as error:
+    except Exception:
         logger.error("ウェルカムメッセージの処理エラー。", exc_info=True)
 
 
@@ -260,11 +260,11 @@ async def on_voice_state_update(
     """
     try:
         voice_guard.handle_voice_state_update(member, before, after)
-    except Exception as error:
+    except Exception:
         logger.error("ボイス接続の保護の処理エラー。", exc_info=True)
     try:
         voice_conversation.handle_voice_state_update(member, before, after)
-    except Exception as error:
+    except Exception:
         logger.error("音声会話の参加者の更新エラー。", exc_info=True)
 
 

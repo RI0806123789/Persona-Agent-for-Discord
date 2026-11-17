@@ -4,7 +4,6 @@ import asyncio
 import copy
 import json
 import re
-from datetime import datetime, timezone
 from typing import Any
 
 from persona_bot.core.app_state import BotState
@@ -30,7 +29,7 @@ from persona_bot.core.database import Database
 from persona_bot.services.genai_client import generate_content, generate_json_content
 from persona_bot.utils.anniversaries import parse_anniversary
 from persona_bot.utils.normalization import normalize_memory_category
-from persona_bot.utils.timeutil import parse_iso_datetime, utc_now_iso
+from persona_bot.utils.timeutil import as_utc, parse_iso_datetime, utc_now, utc_now_iso
 from persona_bot.services.prompting import build_memory_compaction_prompt, build_router_prompt
 from persona_bot.utils.storage import (
     read_json_response,
@@ -248,7 +247,7 @@ class MemoryService:
         return documents
 
     async def append_pending_log(self, user_id: str, question: str, response_text: str) -> None:
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        timestamp = utc_now().strftime("%Y-%m-%d %H:%M:%S UTC")
         async with self.io_lock:
             await run_in_thread(
                 self._db.pending_append, user_id, timestamp, question, response_text
@@ -594,13 +593,11 @@ class MemoryService:
         # 他の利用者の会話で待機を延ばさない。再起動後も、その利用者の最新ログから判断する。
         try:
             stamp = str(last_activity or "").replace(" UTC", "+00:00")
-            last = parse_iso_datetime(stamp)
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=timezone.utc)
+            last = as_utc(parse_iso_datetime(stamp))
         except ValueError:
             # 旧形式など時刻不明のログも永久に残さず、次の巡回で圧縮する。
             return True
-        elapsed_seconds = (datetime.now(timezone.utc) - last).total_seconds()
+        elapsed_seconds = (utc_now() - last).total_seconds()
         return elapsed_seconds >= MEMORY_FLUSH_IDLE_SECONDS
 
     async def _compact_memory(

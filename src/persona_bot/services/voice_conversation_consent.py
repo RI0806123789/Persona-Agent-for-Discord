@@ -11,20 +11,43 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import discord
 
 from persona_bot.config.constants import LIVE_CONSENT_PANEL_UPDATE_SECONDS
 from persona_bot.core.background import spawn, wait_for_cleanup
+from persona_bot.utils.discord_helpers import NO_MENTIONS
+
+if TYPE_CHECKING:
+    from persona_bot.services.live_session import LiveSession
+    from persona_bot.services.voice_conversation_state import ConsentState, _SpeakerState, _Utterance
 
 logger = logging.getLogger("persona_bot.services.voice_conversation")
-
-_NO_MENTIONS = discord.AllowedMentions.none()
 
 
 class VoiceConsentMixin:
     """同意（音声処理・記憶・親密度）の付与と撤回、同意パネルの更新と終了表示。"""
+
+    if TYPE_CHECKING:
+        # ホスト（`VoiceConversation`）が持つ属性・メソッドの宣言。型検査のためだけにあり、
+        # 実行時には何も定義しない（ホスト側の定義が使われる）。ホストの定義を変えたら揃えること。
+        consent: ConsentState
+        panel_message: Any
+        panel_view: Any
+        _live: LiveSession
+        _speaker_state: _SpeakerState
+        _current: _Utterance | None
+        _stopped: bool
+        _now: Callable[[], float]
+        _panel_update_task: asyncio.Task[Any] | None
+        _panel_updated_at: float
+
+        def _update_gate(self) -> None: ...
+        def _pause(self) -> None: ...
+        def _end_activity(self, *, discard: bool = False) -> None: ...
+        def _remove_reservation(self, user_id: int) -> None: ...
+        def _discard_response(self, utterance: _Utterance, reason: str, *, fade: bool = False) -> None: ...
 
     def grant_voice(self, user_id: int) -> None:
         self.consent.voice.add(user_id)
@@ -95,9 +118,9 @@ class VoiceConsentMixin:
 
         try:
             if view is ...:
-                await message.edit(content=build_consent_panel_text(self), allowed_mentions=_NO_MENTIONS)
+                await message.edit(content=build_consent_panel_text(self), allowed_mentions=NO_MENTIONS)
             else:
-                await message.edit(content=build_consent_panel_text(self), view=view, allowed_mentions=_NO_MENTIONS)
+                await message.edit(content=build_consent_panel_text(self), view=view, allowed_mentions=NO_MENTIONS)
         except discord.DiscordException as error:
             logger.warning("音声会話: 同意パネルを更新できませんでした。", exc_info=error)
 

@@ -36,7 +36,7 @@ import miniaudio
 import numpy as np
 from gtts import gTTS
 
-from persona_bot.audio.playback import get_audio_player as _get_audio_player, get_playback_controller
+from persona_bot.audio.playback import get_playback_controller
 from persona_bot.core.background import run_in_thread, spawn
 from persona_bot.config.constants import (
     EDGE_TTS_VOICE_FEMALE,

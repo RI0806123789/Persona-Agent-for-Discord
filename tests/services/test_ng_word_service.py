@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from persona_bot.services import ng_word_service
 from persona_bot.services.ng_word_service import NgWordFilter
+from persona_bot.utils.normalization import fold_kana
 
 
 class NgWordFileTestCase(unittest.TestCase):
@@ -191,7 +192,7 @@ class NgWordNormalizationTests(NgWordFileTestCase):
         for text in examples:
             with self.subTest(text=repr(text)):
                 cleaned = "".join(character for character in text if not ng_word_service._is_ignored_character(character))
-                expected = ng_word_service._fold_kana(unicodedata.normalize("NFKC", cleaned))
+                expected = fold_kana(unicodedata.normalize("NFKC", cleaned))
                 normalized, spans = ng_word_service._normalize_for_matching(text)
                 self.assertEqual(normalized, expected)
                 self.assertEqual(len(normalized), len(spans))

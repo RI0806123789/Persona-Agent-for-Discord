@@ -16,7 +16,8 @@ from typing import Any
 from persona_bot.config.constants import (
     AGENT_EXPECTED_OUTPUT_MAX_CHARS, AGENT_MAX_STEPS, AGENT_ROLE_MAX_CHARS,
     AGENT_STEP_NAME_MAX_CHARS, AGENT_TASK_MAX_CHARS, LIVE_EMOTION_DELTA_MAX, MODERATION_MODEL_NAME,
-    MODERATION_NG_WORD_SAMPLE_LIMIT, MODERATION_TIMEOUT_SECONDS, REMINDER_MAX_MESSAGE_LENGTH,
+    MEMORY_ROUTE_CATEGORIES, MODERATION_NG_WORD_SAMPLE_LIMIT, MODERATION_TIMEOUT_SECONDS,
+    REMINDER_MAX_MESSAGE_LENGTH,
     REMINDER_RECURRENCE_VALUES, REMINDER_TIMEZONE,
 )
 from persona_bot.services.agent_plan import AgentPlan, normalize_agent_plan
@@ -25,7 +26,7 @@ from persona_bot.services.genai_client import generate_content, generate_json_co
 from persona_bot.utils.storage import read_json_response
 from persona_bot.utils.timeutil import format_weekday, resolve_timezone, timezone_label
 from persona_bot.utils.normalization import (
-    normalize_extracted_text, normalize_memory_category, normalize_recurrence,
+    normalize_bool_flag, normalize_extracted_text, normalize_memory_category, normalize_recurrence,
 )
 
 logger = logging.getLogger(__name__)
@@ -201,17 +202,10 @@ def _normalize_safe_flag(value: Any) -> bool:
     JSON上は bool が期待されるが、"false" / "no" / 0 などで返るケースがある。
     判定できない値は安全側（True）に倒す。
     """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"false", "no", "0", "unsafe", "ng"}:
-            return False
-        if normalized in {"true", "yes", "1", "safe", "ok"}:
-            return True
-    return True
+    flag = normalize_bool_flag(
+        value, true_words=frozenset({"safe", "ok"}), false_words=frozenset({"unsafe", "ng"}), accept_numbers=True,
+    )
+    return True if flag is None else flag
 
 
 def _build_prompt(
@@ -258,7 +252,7 @@ def _response_schema(
         required.extend(["valence_change", "arousal_change"])
     if route:
         properties.update({
-            "category": {"type": "STRING", "enum": ["profile", "projects", "none"]},
+            "category": {"type": "STRING", "enum": list(MEMORY_ROUTE_CATEGORIES)},
             "reminder": {"type": "OBJECT", "nullable": True, "properties": {
                 "at": {"type": "STRING"},
                 "message": {"type": "STRING", "max_length": REMINDER_MAX_MESSAGE_LENGTH},
@@ -327,7 +321,7 @@ class ContentModerator:
         self._tz = resolve_timezone(REMINDER_TIMEZONE, purpose="リマインダーの日時解釈")
 
     async def _judge(
-        self, prompt: tuple[str, str], direction: str, *,
+        self, prompt: tuple[str, str], *,
         route: bool = False, include_agent: bool = False,
     ) -> tuple[bool, str, dict[str, Any] | None]:
         """モデレーション判定を Gemini に1回問い合わせ、結果を正規化して返す。
@@ -419,7 +413,7 @@ class ContentModerator:
         ng_words = self._ng_filter.words if direction != "Bot応答" else []
         prompt = _build_prompt(text, direction, ng_words)
 
-        is_safe, reason, _parsed = await self._judge(prompt, direction)
+        is_safe, reason, _parsed = await self._judge(prompt)
         return is_safe, reason
 
     async def judge_voice_input(self, text: str) -> str:
@@ -524,7 +518,7 @@ class ContentModerator:
         )
 
         is_safe, reason, parsed = await self._judge(
-            prompt, "ユーザー入力", route=True, include_agent=agent_history is not None,
+            prompt, route=True, include_agent=agent_history is not None,
         )
         if parsed is None or parsed.get("safe") is not True:
             # JSON が読めなかった場合。安全判定は _judge の結果に従い、

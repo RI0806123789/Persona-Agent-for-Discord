@@ -16,6 +16,7 @@ from persona_bot.core.app_state import AutonomousSession, BotState
 from persona_bot.core.background import spawn
 from persona_bot.services import autonomous_service, autonomous_stage
 from persona_bot.services.autonomous_service import AutonomousService
+from persona_bot.utils import discord_helpers
 
 
 class AutonomousSessionPermissionTests(unittest.IsolatedAsyncioTestCase):
@@ -111,7 +112,7 @@ class AutonomousSessionPermissionTests(unittest.IsolatedAsyncioTestCase):
         self.assert_stopped_without_generation()
         self.notice.assert_awaited_once_with(
             self.channel, constants.AUTONOMOUS_CLOSING_NOTICE_PERMISSIONS,
-            allowed_mentions=autonomous_service._NO_MENTIONS,
+            allowed_mentions=discord_helpers.NO_MENTIONS,
         )
 
     async def test_stage_moved_to_audience_stops_and_closes_owned_instance(self) -> None:

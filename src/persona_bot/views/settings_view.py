@@ -25,7 +25,7 @@ from persona_bot.utils.discord_helpers import (
 )
 from persona_bot.views.autonomous_channel_view import AutonomousChannelView
 from persona_bot.views.view_parts import (
-    authorize_administrator_operation, confirm_administrator_operation, begin_panel_operation, edit_panel_message, BackButton,
+    ADMIN_ONLY_NOTICE, authorize_administrator_operation, begin_current_panel_operation, confirm_administrator_operation, edit_panel_message, BackButton,
     HubFactory, PanelView, select_option_text, swap_panel,
 )
 
@@ -220,10 +220,7 @@ class ResetButton(ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view: SettingsView = self.view  # type: ignore[assignment]
-        operation = begin_panel_operation(view, interaction)
-        if operation is not None and not operation.is_current():
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
+        if not await begin_current_panel_operation(view, interaction):
             return
 
         channel = interaction.channel
@@ -261,7 +258,7 @@ class OpenAutonomousChannelButton(ui.Button):
         # ボタンは管理者にしか出さないが、押した時点の権限でも確かめる（DM には配信先が無い）。
         guild = interaction.guild
         if not await authorize_administrator_operation(
-            view, interaction, notice="この機能はサーバー管理者のみ利用できます。",
+            view, interaction, notice=ADMIN_ONLY_NOTICE,
         ):
             return
         async def make_settings(back_interaction: discord.Interaction) -> SettingsView:

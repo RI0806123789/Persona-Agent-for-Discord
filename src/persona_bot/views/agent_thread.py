@@ -49,13 +49,12 @@ from persona_bot.config.constants import (
 )
 from persona_bot.services.agent_plan import AgentPlan
 from persona_bot.services.agent_service import AgentReport, render_agent_line
-from persona_bot.utils.discord_helpers import format_grounding_sources, split_message
+from persona_bot.utils.discord_helpers import NO_MENTIONS, format_grounding_sources, split_message
 from persona_bot.views.agent_view import AgentProgress, AgentProgressBase
 
 
 logger = logging.getLogger(__name__)
 
-_NO_MENTIONS = discord.AllowedMentions.none()
 # スレッドを作り、親子がやりとりするのに要るボットの権限（チャンネル単位で確かめる）。
 _THREAD_PERMISSIONS = ("view_channel", "create_public_threads", "send_messages_in_threads", "manage_webhooks")
 # Discord の名前の制約。Webhook 名は "discord" / "clyde" を含められず、利用者名と同じく
@@ -264,9 +263,9 @@ async def _notify_archive_failure(thread: discord.Thread, source: discord.Messag
         parent = getattr(thread, "parent", None)
         if getattr(source.channel, "id", None) == thread.id and parent is not None:
             # 再開したスレッドの中で受けた追加の依頼は、スレッドの親（メインのチャンネル）へ伝える
-            await parent.send(f"{notice}\n対象: {thread.mention}", allowed_mentions=_NO_MENTIONS)
+            await parent.send(f"{notice}\n対象: {thread.mention}", allowed_mentions=NO_MENTIONS)
         else:
-            await source.reply(notice, allowed_mentions=_NO_MENTIONS)
+            await source.reply(notice, allowed_mentions=NO_MENTIONS)
     except discord.DiscordException as error:
         logger.warning("サブエージェント: 作業スレッドを閉じられなかった旨を送れませんでした。", exc_info=error)
 
@@ -275,7 +274,7 @@ async def send_reopen_confirmation(message: discord.Message, entry: WorkThreadEn
     """再開した作業スレッドで、追加の依頼があるかを確かめる（LLM を呼ばない定型文。#408）。"""
     try:
         await message.reply(
-            render_agent_line(entry.lines, "reopened", role=entry.role), allowed_mentions=_NO_MENTIONS,
+            render_agent_line(entry.lines, "reopened", role=entry.role), allowed_mentions=NO_MENTIONS,
         )
     except discord.DiscordException as error:
         logger.warning("サブエージェント: 再開した作業スレッドへ確認を送れませんでした。", exc_info=error)
@@ -365,7 +364,7 @@ class AgentThreadProgress(AgentProgressBase):
         """親の名義で委託内容を伝え、中止ボタンを付ける。送れなければ False。"""
         try:
             self._handoff = await self._thread.send(
-                build_handoff_text(self._lines, self._plan), view=self._view, allowed_mentions=_NO_MENTIONS,
+                build_handoff_text(self._lines, self._plan), view=self._view, allowed_mentions=NO_MENTIONS,
             )
         except discord.DiscordException as error:
             # 作ったスレッドは残る（消すには別の権限が要り、利用者の目にも触れた後のため）。
@@ -392,7 +391,7 @@ class AgentThreadProgress(AgentProgressBase):
         if key != "done":
             # 人格役の返信が来ないので、依頼したチャンネルでも結果を伝える
             try:
-                await self._source.reply(status, allowed_mentions=_NO_MENTIONS)
+                await self._source.reply(status, allowed_mentions=NO_MENTIONS)
             except discord.DiscordException as error:
                 logger.warning("サブエージェント: 終了の案内を送れませんでした。", exc_info=error)
 
@@ -406,7 +405,7 @@ class AgentThreadProgress(AgentProgressBase):
 
     async def _parent_send(self, content: str) -> None:
         try:
-            await self._thread.send(content, allowed_mentions=_NO_MENTIONS)
+            await self._thread.send(content, allowed_mentions=NO_MENTIONS)
         except discord.DiscordException as error:
             logger.error("サブエージェント: 作業スレッドへ投稿できませんでした。", exc_info=error)
 
@@ -424,7 +423,7 @@ class AgentThreadProgress(AgentProgressBase):
                         username=self._child_name,
                         avatar_url=self._avatar_url,
                         thread=self._thread,
-                        allowed_mentions=_NO_MENTIONS,
+                        allowed_mentions=NO_MENTIONS,
                         suppress_embeds=suppress_embeds,
                         wait=True,
                     )

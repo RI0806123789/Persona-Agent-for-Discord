@@ -23,7 +23,7 @@ from persona_bot.views.unblock_view import UnblockView
 from persona_bot.utils.usage_graph import UsageTracker
 from persona_bot.views.view_parts import (
     authorize_administrator_operation, authorize_panel_operation, begin_panel_operation, edit_panel_message,
-    PANEL_BUSY_NOTICE, PanelView, send_graph_ephemeral, swap_panel,
+    PANEL_BUSY_NOTICE, PanelView, defer_and_render_graph, send_graph_ephemeral, swap_panel,
 )
 
 
@@ -97,13 +97,8 @@ class GraphButton(ui.Button):
             await interaction.response.send_message(PANEL_BUSY_NOTICE, ephemeral=True)
             return
         try:
-            await interaction.response.defer(ephemeral=True, thinking=True)
-            buffer = None
-            try:
-                buffer = await hub.usage.build_graph_buffer()
-            except Exception as error:
-                logger.error("グラフ生成中にエラーが発生しました。", exc_info=error)
-                await interaction.followup.send("エラー: グラフの生成に失敗しました。", ephemeral=True)
+            rendered, buffer = await defer_and_render_graph(interaction, hub.usage.build_graph_buffer)
+            if not rendered:
                 return
             # ハブは残したまま、グラフを新しいエフェメラルメッセージとして送る。
             await send_graph_ephemeral(

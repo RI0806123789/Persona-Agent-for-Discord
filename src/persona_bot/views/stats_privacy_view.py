@@ -4,7 +4,7 @@ from discord import ui
 from persona_bot.config.constants import STATS_RECENT_SAMPLES_MAX
 from persona_bot.services.stats_service import StatsService
 from persona_bot.views.view_parts import (
-    begin_panel_operation, edit_panel_message, BackButton,
+    begin_current_panel_operation, edit_panel_message, BackButton,
     HubFactory, PanelView,
 )
 
@@ -64,13 +64,9 @@ class StatsPrivacyConfirmButton(ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view: "StatsPrivacyView" = self.view  # type: ignore[assignment]
-        operation = begin_panel_operation(view, interaction)
-        if operation is not None and not operation.is_current():
-            # 閉じた・別の画面へ移ったパネルの確定では、設定を保存しない。
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
+        # 閉じた・別の画面へ移ったパネルの確定では、設定を保存しない。
+        if not await begin_current_panel_operation(view, interaction, defer=True):
             return
-        await interaction.response.defer(ephemeral=True)
 
         opted_out = not view.temp_collect_enabled
         saved = await view.stats.set_opt_out(view.viewer_id, view.viewer_name, opted_out)
@@ -102,10 +98,7 @@ class StatsDataDeleteButton(ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view: "StatsPrivacyView" = self.view  # type: ignore[assignment]
-        operation = begin_panel_operation(view, interaction)
-        if operation is not None and not operation.is_current():
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True)
+        if not await begin_current_panel_operation(view, interaction):
             return
 
         if not view.delete_confirmed:

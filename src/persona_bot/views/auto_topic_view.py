@@ -183,8 +183,7 @@ class AutoTopicConfirmButton(ui.Button):
         # 配信の開始に失敗し続けていると、次に試すまでの待ち時間（最長4時間）が
         # 設定されている。権限を直してからこのパネルで確定したのに何時間も動かない
         # のでは直したか確かめようがないため、確定操作でその待ち時間を解除する。
-        view.guild_settings.autonomous_start_retry_at = None
-        view.guild_settings.autonomous_start_failures = 0
+        view.guild_settings.reset_autonomous_retry()
 
         await view.guild_settings.persist()
         if not await view.ensure_settings_current(interaction):

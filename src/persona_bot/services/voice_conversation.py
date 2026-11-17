@@ -77,7 +77,8 @@ from persona_bot.services.voice_conversation_moderation import VoiceModerationMi
 from persona_bot.services.voice_conversation_state import (
     _INPUT_BYTES_PER_MS, ConsentState, _Participant, _SpeakerState, _TranscriptState, _Utterance,
 )
-from persona_bot.utils.discord_helpers import can_bot_send_messages
+from persona_bot.services.voice_guard import release_and_disconnect
+from persona_bot.utils.discord_helpers import NO_MENTIONS, can_bot_send_messages
 
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,6 @@ _PLAYBACK_STALL_FRAMES = int(LIVE_PLAYBACK_STALL_SECONDS * 50)
 # 割り込みを確定したときに絞り切るまでのフレーム数（20ms 単位）。
 _FADE_FRAMES = max(1, LIVE_BARGE_IN_FADE_MS // 20)
 
-_NO_MENTIONS = discord.AllowedMentions.none()
 
 # 利用者に見せる案内（接続の結果・終了の理由）。
 NOTICE_LIVE_UNAVAILABLE = (
@@ -1150,7 +1150,7 @@ class VoiceConversationService:
         view = VoiceConsentView(conversation, is_blocked=self.is_blocked)
         try:
             conversation.panel_message = await channel.send(
-                build_consent_panel_text(conversation), view=view, allowed_mentions=_NO_MENTIONS,
+                build_consent_panel_text(conversation), view=view, allowed_mentions=NO_MENTIONS,
             )
         except discord.DiscordException as error:
             view.stop()
@@ -1192,12 +1192,10 @@ class VoiceConversationService:
             return
         guild = current.guild
         if disconnect and guild.voice_client is voice_client and voice_client.is_connected():
-            if self.voice_guard is not None:
-                self.voice_guard.release(guild_id)
-            try:
-                await wait_for_cleanup(voice_client.disconnect(force=True), label="音声会話の終了時の切断")
-            except Exception:
-                logger.warning("音声会話: 終了時の切断に失敗しました。", exc_info=True)
+            await release_and_disconnect(
+                self.voice_guard, guild_id, voice_client, label="音声会話の終了時の切断",
+                failure_message="音声会話: 終了時の切断に失敗しました。", log=logger,
+            )
 
     async def stop_all(self) -> None:
         # まだ _sessions に登録されていない開始待ちも無効にする。

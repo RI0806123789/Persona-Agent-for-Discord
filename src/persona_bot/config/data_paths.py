@@ -4,10 +4,14 @@ from pathlib import Path
 
 from persona_bot.config.constants import PROJECT_ROOT
 
+# 旧配置（ルート直下）のデータフォルダ名。deploy/migrate_data_directory.py の LEGACY_DIRECTORY_NAMES と
+# 同じ値にすること（一致は tests/deploy/test_shared_constants.py が確かめる）。
+LEGACY_DIRECTORY_NAMES = ("memory", "ng")
+
 
 def ensure_data_directory_ready(project_root: Path = PROJECT_ROOT) -> None:
     """旧配置にデータがあれば、何も変更せず移行手順を案内する。"""
-    for name in ("memory", "ng"):
+    for name in LEGACY_DIRECTORY_NAMES:
         legacy = project_root / name
         if legacy.is_symlink() or (legacy.exists() and not legacy.is_dir()):
             raise RuntimeError(

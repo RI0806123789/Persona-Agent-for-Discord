@@ -99,8 +99,37 @@ _QUEUE_COLUMNS = (
     "finished_at",
     "error",
 )
+# affinity・user_stats の列名一覧。INSERT 文と同順の保存パラメータ（`_*_row_params`）の列順と揃える。
+_AFFINITY_COLUMNS = ("user_id", "affinity", "valence", "arousal", "last_interaction")
+_USER_STATS_COLUMNS = (
+    "user_id",
+    "user_name",
+    "total_count",
+    "hourly",
+    "first_seen",
+    "last_seen",
+    "recent_samples",
+    "analysis",
+    "stats_opt_out",
+)
 # まだ終わっていない（受付の上限に数える）文書タスクのステータス。
 _QUEUE_ACTIVE_STATUSES = ("pending", "processing", "sending")
+
+
+def _insert_sql(table: str, columns: tuple[str, ...], *, verb: str = "INSERT", upsert_key: str | None = None) -> str:
+    """全列の INSERT 文を列名の一覧から作る（列を足すとき、定義を1か所だけ直せば済むように）。
+
+    verb は "INSERT" / "INSERT OR IGNORE" / "INSERT OR REPLACE"。upsert_key を渡すと、そのキーの衝突時に
+    残りの全列を `excluded` の値で更新する。列名・テーブル名はこのモジュールの定数だけを渡すこと
+    （SQL 文へ直接埋め込むため）。
+    """
+    names = ", ".join(columns)
+    placeholders = ", ".join("?" for _ in columns)
+    sql = f"{verb} INTO {table} ({names}) VALUES ({placeholders})"
+    if upsert_key is not None:
+        updates = ", ".join(f"{column} = excluded.{column}" for column in columns if column != upsert_key)
+        sql += f" ON CONFLICT({upsert_key}) DO UPDATE SET {updates}"
+    return sql
 
 
 def _json_loads_or(text: Any, default: Any) -> Any:
@@ -116,8 +145,8 @@ def _json_loads_or(text: Any, default: Any) -> Any:
 def _user_stats_row_params(user_id: Any, entry: dict[str, Any]) -> tuple[Any, ...]:
     """user_stats の9列を旧JSON取り込み・通常保存・全件置換で同じ値へ変換する。
 
-    列順は user_id, user_name, total_count, hourly, first_seen, last_seen,
-    recent_samples, analysis, stats_opt_out。列追加時はこの関数と両方のINSERT文を揃える。
+    列順は `_USER_STATS_COLUMNS`（user_id, user_name, total_count, hourly, first_seen, last_seen,
+    recent_samples, analysis, stats_opt_out）。列追加時は `_USER_STATS_COLUMNS` とこの関数を揃える。
     収集停止は通常の opt_out を優先し、旧JSONの stats_opt_out も引き継ぐ。
     """
     analysis = entry.get("analysis")
@@ -144,8 +173,8 @@ def _user_stats_row_params(user_id: Any, entry: dict[str, Any]) -> tuple[Any, ..
 def _queue_row_params(task: dict[str, Any]) -> tuple[Any, ...]:
     """queue_tasks 1行分の保存パラメータ。通常の追加（_insert_queue_task）と旧 queue.json の取り込みで共有する。
 
-    列順は task_id, status, channel_id, message_id, author_id, question, attachment_count,
-    created_at, updated_at, finished_at, error。列を足すときはこの関数と2つの INSERT 文を揃える。
+    列順は `_QUEUE_COLUMNS`（task_id, status, channel_id, message_id, author_id, question, attachment_count,
+    created_at, updated_at, finished_at, error）。列を足すときは `_QUEUE_COLUMNS` とこの関数を揃える。
     欠けた値・None は既定値（status は pending、数値は 0、文字列は空）にし、finished_at・error は
     そのまま（未終了・成功は None）。
     """
@@ -165,10 +194,10 @@ def _queue_row_params(task: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _affinity_row_params(user_id: Any, entry: dict[str, Any]) -> tuple[str, Any, Any, Any, Any]:
-    """affinity テーブル1行分の保存パラメータ（列順は user_id, affinity, valence, arousal, last_interaction）。
+    """affinity テーブル1行分の保存パラメータ（列順は `_AFFINITY_COLUMNS`）。
 
     旧 JSON の取り込み・1行の保存・全件置換の3か所で同じ既定値を使うため、ここに集約する。
-    列を足すときはこの関数と3か所の INSERT 文の列を合わせて直すこと。
+    列を足すときは `_AFFINITY_COLUMNS` とこの関数を揃える（INSERT 文は列名の一覧から作る）。
     None・欠けた値は中立値（最終会話時刻は 0.0）とし、感情値は有効範囲に収める。
     """
     def value_or(key: str, default: Any) -> Any:
@@ -225,6 +254,9 @@ class Database:
             owner_id=lambda: self._legacy_owner_id,
             row_params=LegacyRowParams(
                 affinity=_affinity_row_params, user_stats=_user_stats_row_params, queue=_queue_row_params,
+                affinity_sql=_insert_sql("affinity", _AFFINITY_COLUMNS, verb="INSERT OR IGNORE"),
+                user_stats_sql=_insert_sql("user_stats", _USER_STATS_COLUMNS, verb="INSERT OR IGNORE"),
+                queue_sql=_insert_sql("queue_tasks", _QUEUE_COLUMNS, verb="INSERT OR IGNORE"),
             ),
             profile_merge=lambda user_id, profile: self.profile_merge(user_id, profile),
             write_json=lambda path, data: write_json_file(path, data),
@@ -646,17 +678,25 @@ class Database:
         record["status"] = "canceled"
         return record
 
+    def _prune_keep_newest(self, delete_sql: str, keep_count: int) -> None:
+        """「新しい方から keep_count 件だけ残して削除する」DELETE 文を実行する（3つの prune で共有）。
+
+        delete_sql は、残す件数を表す `LIMIT ?` をちょうど1つだけ持つこと。件数は 0 以上へ丸める
+        （SQLite の `LIMIT -1` は無制限の意味になり、負数を渡すと全件が残ってしまうため）。
+        """
+        with self._lock, self._conn:
+            self._conn.execute(delete_sql, (max(0, int(keep_count)),))
+
     def reminder_prune_finished(self, max_keep: int) -> None:
         """通知済み・取り消し済みのレコードを新しい方から max_keep 件だけ残して削除する。"""
-        with self._lock, self._conn:
-            self._conn.execute(
-                "DELETE FROM reminders WHERE status IN ('done', 'canceled')"
-                " AND reminder_id NOT IN ("
-                "   SELECT reminder_id FROM reminders WHERE status IN ('done', 'canceled')"
-                "   ORDER BY reminder_id DESC LIMIT ?"
-                ")",
-                (int(max_keep),),
-            )
+        self._prune_keep_newest(
+            "DELETE FROM reminders WHERE status IN ('done', 'canceled')"
+            " AND reminder_id NOT IN ("
+            "   SELECT reminder_id FROM reminders WHERE status IN ('done', 'canceled')"
+            "   ORDER BY reminder_id DESC LIMIT ?"
+            ")",
+            max_keep,
+        )
 
     # ---- feedback（ボット返信への 👍/👎 評価） --------------------------------
 
@@ -751,14 +791,13 @@ class Database:
         (message_id, user_id) の複合キーで NOT IN に使いづらいため、
         SQLite が全行に持つ暗黙の rowid で絞り込む。
         """
-        with self._lock, self._conn:
-            self._conn.execute(
-                "DELETE FROM feedback WHERE rowid NOT IN ("
-                "   SELECT rowid FROM feedback"
-                "   ORDER BY created_at DESC, message_id DESC LIMIT ?"
-                ")",
-                (int(max_keep),),
-            )
+        self._prune_keep_newest(
+            "DELETE FROM feedback WHERE rowid NOT IN ("
+            "   SELECT rowid FROM feedback"
+            "   ORDER BY created_at DESC, message_id DESC LIMIT ?"
+            ")",
+            max_keep,
+        )
 
     # ---- affinity（親密度・感情） --------------------------------------------
 
@@ -780,12 +819,7 @@ class Database:
         """対象ユーザー1行だけを保存し、他ユーザーの行やrowidは変更しない。"""
         with self._lock, self._conn:
             self._conn.execute(
-                "INSERT INTO affinity"
-                " (user_id, affinity, valence, arousal, last_interaction)"
-                " VALUES (?, ?, ?, ?, ?)"
-                " ON CONFLICT(user_id) DO UPDATE SET"
-                " affinity=excluded.affinity, valence=excluded.valence,"
-                " arousal=excluded.arousal, last_interaction=excluded.last_interaction",
+                _insert_sql("affinity", _AFFINITY_COLUMNS, upsert_key="user_id"),
                 _affinity_row_params(user_id, entry),
             )
 
@@ -795,10 +829,7 @@ class Database:
             self._conn.execute("DELETE FROM affinity")
             for user_id, entry in cache.items():
                 self._conn.execute(
-                    "INSERT INTO affinity"
-                    " (user_id, affinity, valence, arousal, last_interaction)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    _affinity_row_params(user_id, entry),
+                    _insert_sql("affinity", _AFFINITY_COLUMNS), _affinity_row_params(user_id, entry),
                 )
 
     # ---- user_stats（会話統計） ----------------------------------------------
@@ -842,15 +873,7 @@ class Database:
     def _stats_upsert_user(self, user_id: str, entry: dict[str, Any]) -> None:
         """呼び出し側がDBロックとトランザクションを保持した状態で使う。"""
         self._conn.execute(
-            "INSERT INTO user_stats"
-            " (user_id, user_name, total_count, hourly, first_seen, last_seen,"
-            "  recent_samples, analysis, stats_opt_out)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT(user_id) DO UPDATE SET"
-            " user_name = excluded.user_name, total_count = excluded.total_count,"
-            " hourly = excluded.hourly, first_seen = excluded.first_seen,"
-            " last_seen = excluded.last_seen, recent_samples = excluded.recent_samples,"
-            " analysis = excluded.analysis, stats_opt_out = excluded.stats_opt_out",
+            _insert_sql("user_stats", _USER_STATS_COLUMNS, upsert_key="user_id"),
             _user_stats_row_params(user_id, entry),
         )
 
@@ -886,11 +909,7 @@ class Database:
     def _insert_queue_task(self, task: dict[str, Any]) -> None:
         """タスクを1行書く。呼び出し側がロックとトランザクションを持つこと。"""
         self._conn.execute(
-            "INSERT OR REPLACE INTO queue_tasks"
-            " (task_id, status, channel_id, message_id, author_id, question,"
-            "  attachment_count, created_at, updated_at, finished_at, error)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            _queue_row_params(task),
+            _insert_sql("queue_tasks", _QUEUE_COLUMNS, verb="INSERT OR REPLACE"), _queue_row_params(task),
         )
 
     def queue_update_task(self, task_id: str, updates: dict[str, Any], updated_at: str) -> None:
@@ -948,18 +967,17 @@ class Database:
 
     def queue_prune_finished(self, keep_count: int) -> None:
         """完了/失敗タスクを新しい順に keep_count 件だけ残し、それ以前を削除する。"""
-        with self._lock, self._conn:
-            self._conn.execute(
-                """DELETE FROM queue_tasks
-                   WHERE status IN ('completed', 'failed')
-                     AND task_id NOT IN (
-                         SELECT task_id FROM queue_tasks
-                         WHERE status IN ('completed', 'failed')
-                         ORDER BY created_at DESC, task_id DESC
-                         LIMIT ?
-                     )""",
-                (int(keep_count),),
-            )
+        self._prune_keep_newest(
+            """DELETE FROM queue_tasks
+               WHERE status IN ('completed', 'failed')
+                 AND task_id NOT IN (
+                     SELECT task_id FROM queue_tasks
+                     WHERE status IN ('completed', 'failed')
+                     ORDER BY created_at DESC, task_id DESC
+                     LIMIT ?
+                 )""",
+            keep_count,
+        )
 
     # ---- pending_log（記憶圧縮前の一時ログ） ----------------------------------
 

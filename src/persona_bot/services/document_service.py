@@ -259,7 +259,7 @@ class DocumentService:
                 logger.warning("文書タスク: ペルソナのファイルが見つからないため、標準のプロンプトで処理します。", exc_info=error)
                 prompt = BUILTIN_PERSONA_PROMPT
             summaries = [
-                await self._process_attachment(attachment, author_id, response_settings.model_name)
+                await self._process_attachment(attachment, response_settings.model_name)
                 for attachment in attachments
             ]
             summaries = [self._mask_summary_data(summary) for summary in summaries]
@@ -310,14 +310,15 @@ class DocumentService:
 
             # 生成に成功した時点で消費したトークンを記録する。タグ除去後に空になった場合や
             # 後段のモデレーションで却下された場合も、Gemini を呼んだ分は統計に含める（#432）。
-            self._usage.log_snapshot(
-                "文書タスク",
-                question,
-                f"文書添付: {len(attachments)}件",
-                full_prompt,
-                response_text,
-                usage_info,
-            )
+            if self._usage is not None:
+                self._usage.log_snapshot(
+                    "文書タスク",
+                    question,
+                    f"文書添付: {len(attachments)}件",
+                    full_prompt,
+                    response_text,
+                    usage_info,
+                )
 
             # タグのみの応答は、空本文や参考リンクだけを送らず生成失敗として扱う。
             if not response_text:
@@ -413,7 +414,6 @@ class DocumentService:
     async def _process_attachment(
         self,
         attachment: discord.Attachment,
-        author_id: str,
         model_name: str,
     ) -> dict[str, Any]:
         if attachment.size > MAX_DOCUMENT_SIZE_BYTES:

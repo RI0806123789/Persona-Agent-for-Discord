@@ -67,14 +67,14 @@ class ServiceLoggingTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(text=text), patch.object(
                 content_moderator, "generate_content", AsyncMock(return_value=SimpleNamespace(text=text)),
             ), self.assertLogs(content_moderator.logger, level="WARNING") as captured:
-                safe, reason, _ = await service._judge(("架空の指示", self.PRIVATE_TEXT), self.PRIVATE_ID)
+                safe, reason, _ = await service._judge(("架空の指示", self.PRIVATE_TEXT))
                 self.assertEqual(safe, expected)
                 self.assertEqual(reason, "" if expected else self.PRIVATE_TEXT)
             self.assert_private_message(captured.records)
         error = self.failure()
         with patch.object(content_moderator, "generate_content", AsyncMock(side_effect=error)), \
                 self.assertLogs(content_moderator.logger, level="ERROR") as captured:
-            self.assertEqual(await service._judge(("架空の指示", self.PRIVATE_TEXT), self.PRIVATE_ID), (True, "", None))
+            self.assertEqual(await service._judge(("架空の指示", self.PRIVATE_TEXT)), (True, "", None))
         self.assert_private_message(captured.records)
         self.assertIs(captured.records[0].exc_info[1], error)
 

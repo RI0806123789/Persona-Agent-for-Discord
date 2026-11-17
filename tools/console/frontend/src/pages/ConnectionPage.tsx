@@ -49,7 +49,7 @@ export function ConnectionPage({
   return (
     <div className="grid">
       <Card title="接続先" icon="plug" className="span-7">
-        {profilesError && <InlineError>{privacy.redact(profilesError)}</InlineError>}
+        {profilesError && <InlineError>{profilesError}</InlineError>}
         <div className="m3-list" role="radiogroup" aria-label="接続先">
           {profiles.map((profile) => {
             const selected = profile.id === selectedProfileId;

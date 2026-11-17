@@ -84,7 +84,7 @@ class RuntimeLoggingPrivacyTests(unittest.TestCase):
             (settings_loader._ENV_LOADED, "= の右側を自分のキーへ"),
         ):
             with self.subTest(status=status), capture_log(settings_loader.__name__, logging.WARNING) as output:
-                settings_loader._report_missing(["TOKEN_DISCORD"], status, Path("fictional.env"))
+                settings_loader._report_missing(["TOKEN_DISCORD"], status)
             self.assertIn("TOKEN_DISCORD", output.getvalue())
             self.assertIn(expected, output.getvalue())
             self.assertIn("python bot.py", output.getvalue())

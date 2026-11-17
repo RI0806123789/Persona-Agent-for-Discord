@@ -179,7 +179,6 @@ class CancellerTests(unittest.TestCase):
         pcm = to_pcm(voice[:BLOCK])
         result = simulation.canceller.process(pcm, rtp_timestamp=0, arrival=BLOCK)
         self.assertEqual(result.pcm, pcm)
-        self.assertFalse(result.echo_possible)
         self.assertAlmostEqual(result.level, float(np.sqrt(np.mean(voice[:BLOCK].round() ** 2))), delta=1.0)
 
     def test_echo_is_removed_and_not_counted_as_speech(self):

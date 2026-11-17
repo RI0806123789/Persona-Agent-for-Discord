@@ -14,6 +14,10 @@ import shutil
 import stat
 from uuid import uuid4
 
+# 旧配置（ルート直下）のデータフォルダ名。src/persona_bot/config/data_paths.py の LEGACY_DIRECTORY_NAMES と
+# 同じ値にすること（ボットの起動時の残留確認と、この移行の対象を揃える。一致はテストが確かめる）。
+LEGACY_DIRECTORY_NAMES = ("memory", "ng")
+
 
 class MigrationError(RuntimeError):
     """既存データを上書きせずに移行できない状態。"""
@@ -50,7 +54,7 @@ def migrate_data_directory(project_root: Path, *, check_only: bool = False) -> M
     sources = []
     files = []
     directories = []
-    for name in ("memory", "ng"):
+    for name in LEGACY_DIRECTORY_NAMES:
         source = project_root / name
         target = data_root / name
         _check_path(source, directory=True)
