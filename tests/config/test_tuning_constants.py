@@ -69,7 +69,7 @@ class MemoryAndStatsTuningTests(unittest.IsolatedAsyncioTestCase):
                 {"document_name": f"文書{i}", "summary": f"架空の要約{i}"} for i in range(3)
             ]}
             write_json_file(root / "projects.json", wrapper)
-            service = module.MemoryService(None, None, None)
+            service = module.MemoryService(None, None)
             _, combined = await service.build_contexts("none", "fictional-user")
             individual = await service.build_document_memory_context("fictional-user")
             self.assertEqual(combined, "- 文書2: 架空の要約2")
@@ -84,7 +84,7 @@ class MemoryAndStatsTuningTests(unittest.IsolatedAsyncioTestCase):
                 MEMORY_DIR=root, PROFILE_MEMORY_PATH=root / "profile.json",
                 PROJECTS_MEMORY_PATH=root / "projects.json",
             )
-            zero_service = zero_default.MemoryService(None, None, None)
+            zero_service = zero_default.MemoryService(None, None)
             self.assertEqual(await zero_service.build_document_memory_context("fictional-user"), "")
             self.assertEqual((await zero_service.build_contexts("none", "fictional-user"))[1], "")
 

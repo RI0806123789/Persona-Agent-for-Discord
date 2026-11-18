@@ -118,7 +118,7 @@ class DocumentSummaryCompactionTests(unittest.IsolatedAsyncioTestCase):
         self.db = Database(root / "bot.db")
         self.db.initialize()
         self.addCleanup(self.db.close)
-        self.service = MemoryService(None, None, self.db)
+        self.service = MemoryService(None, self.db)
 
     async def test_anniversaries_use_latest_profile_after_compaction_wait(self):
         birthday = {"label": "誕生日", "month": 5, "day": 1}
@@ -216,7 +216,7 @@ class DocumentSummaryCompactionTests(unittest.IsolatedAsyncioTestCase):
         self.db.pending_append("quiet-user", (now - timedelta(hours=2)).isoformat(), "架空の質問", "応答")
         self.db.pending_append("active-user", (now - timedelta(hours=2)).isoformat(), "古い質問", "応答")
         await self.service.append_pending_log("active-user", "新しい質問", "応答")
-        restarted = MemoryService(None, None, self.db)
+        restarted = MemoryService(None, self.db)
         restarted._compact_memory = AsyncMock(return_value=({}, {}))
         await restarted.flush_if_needed()
         self.assertEqual(self.db.pending_fetch_entries("quiet-user"), [])
@@ -333,7 +333,7 @@ class DocumentSummaryCompactionTests(unittest.IsolatedAsyncioTestCase):
         # 障害解消後には失敗したユーザーだけが再処理される。
         await self.service.flush_if_needed(force=True)
         self.assertEqual(self.db.pending_fetch_entries("user-a"), [])
-        self.assertEqual(self.service._compact_fail_count["user-a"], 0)
+        self.assertEqual(self.service._compact_fail_count.get("user-a", 0), 0)
 
     async def test_save_error_preserves_data_and_continues_with_next_user(self):
         await self.check_user_failure_isolation("save")
@@ -609,7 +609,7 @@ class DocumentSummaryCompactionTests(unittest.IsolatedAsyncioTestCase):
                     finally:
                         release.set()
                         await asyncio.gather(task, return_exceptions=True)
-                self.assertEqual(self.service._compact_fail_count["test-user"], 0)
+                self.assertEqual(self.service._compact_fail_count.get("test-user", 0), 0)
                 await self.service.append_pending_log("test-user", "新しい質問", "新しい応答")
                 self.service._compact_memory = AsyncMock(return_value=(None, None))
                 await self.service._flush_user("test-user", self.db.pending_fetch_entries("test-user"))
@@ -643,7 +643,7 @@ class DocumentSummaryCompactionTests(unittest.IsolatedAsyncioTestCase):
         await self.service._flush_user("test-user", entries)
         self.assertEqual(self.db.profile_load("test-user"), {"note": "新しいプロフィール"})
         self.assertEqual(self.db.pending_fetch_entries("test-user"), [])
-        self.assertEqual(self.service._compact_fail_count["test-user"], 0)
+        self.assertEqual(self.service._compact_fail_count.get("test-user", 0), 0)
 
     async def test_database_commit_failure_restores_json_profile_and_pending_log(self) -> None:
         entries = await self.prepare_compaction_save()
@@ -705,7 +705,7 @@ class DocumentSummaryCompactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.db.profile_load("test-user"), {"note": "新しいプロフィール"})
         self.assertEqual(load_json_file(self.projects_path, {})["users"]["test-user"], {"note": "新しい記憶"})
         self.assertEqual([entry["question"] for entry in self.db.pending_fetch_entries("test-user")], ["保存中の質問"])
-        self.assertEqual(self.service._compact_fail_count["test-user"], 0)
+        self.assertEqual(self.service._compact_fail_count.get("test-user", 0), 0)
 
     async def test_summaries_invented_by_llm_are_discarded(self) -> None:
         invented = [{"document_name": "fake.txt", "summary": "LLMの作り話"}]
@@ -787,7 +787,7 @@ class CompactionFailureCountTests(unittest.IsolatedAsyncioTestCase):
         self.db = Database(root / "bot.db")
         self.db.initialize()
         self.addCleanup(self.db.close)
-        self.service = MemoryService(None, None, self.db)
+        self.service = MemoryService(None, self.db)
 
     async def flush_once(self, error: Exception) -> None:
         self.service._compact_memory = AsyncMock(side_effect=error)

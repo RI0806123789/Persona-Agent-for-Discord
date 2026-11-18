@@ -44,7 +44,7 @@ class EventLoopIOTests(unittest.IsolatedAsyncioTestCase):
         self.db = Database(self.root / "bot.db")
         self.db.initialize()
         self.addCleanup(self.db.close)
-        self.memory = MemoryService(BotState(), None, self.db)
+        self.memory = MemoryService(None, self.db)
 
     def blocking_probe(self, result):
         loop = asyncio.get_running_loop()

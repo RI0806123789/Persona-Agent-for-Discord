@@ -78,7 +78,7 @@ reload_persona_catalog()
 # 記念日の投稿記録をメモリへ復元する。以降の設定変更は各 GuildSettings.persist() で保存される。
 state.restore_from_database(database)
 gemini = GeminiService(genai_client)
-memory = MemoryService(state, genai_client, database)
+memory = MemoryService(genai_client, database)
 affinity = AffinityService(database)
 ng_filter = NgWordFilter()
 moderator = ContentModerator(

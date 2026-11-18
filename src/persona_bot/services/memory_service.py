@@ -3,10 +3,8 @@ import logging
 import asyncio
 import copy
 import json
-import re
 from typing import Any
 
-from persona_bot.core.app_state import BotState
 from persona_bot.core.background import run_in_thread
 from persona_bot.config.constants import (
     ANNIVERSARY_PROFILE_KEY,
@@ -27,7 +25,18 @@ from persona_bot.config.constants import (
 )
 from persona_bot.core.database import Database
 from persona_bot.services.genai_client import generate_content, generate_json_content
-from persona_bot.utils.anniversaries import parse_anniversary
+from persona_bot.services.memory_anniversary import anniversaries_by_label, merge_anniversary_profile
+from persona_bot.services.memory_projects import (
+    PROJECTS_SCHEMA,
+    default_profile_memory,
+    default_projects_memory,
+    format_document_summary_lines,
+    format_pending_entries,
+    looks_memory_irrelevant,
+    max_entry_id,
+    merge_document_summaries,
+    user_projects,
+)
 from persona_bot.utils.normalization import normalize_memory_category
 from persona_bot.utils.timeutil import as_utc, parse_iso_datetime, utc_now, utc_now_iso
 from persona_bot.services.prompting import build_memory_compaction_prompt, build_router_prompt
@@ -39,101 +48,20 @@ from persona_bot.utils.storage import (
 
 logger = logging.getLogger(__name__)
 
-# projects.json のユーザー別スキーマ識別子。users 辞書がある場合は識別子欠落時も保護する。
-_PROJECTS_SCHEMA = "per_user_v1"
+# 純粋な補助関数は別モジュールへ分け（#469）、従来の import 先を保つため再公開する。
+_PROJECTS_SCHEMA = PROJECTS_SCHEMA
+_anniversaries_by_label = anniversaries_by_label
 
-# 記憶参照が明らかに不要な短い定型発言（あいさつ・相槌など）。ルーターの LLM 呼び出しを
-# 省いて category="none" を即決するための簡易判定に使う（API 呼び出し削減）。
-_TRIVIAL_MESSAGE_PATTERN = re.compile(
-    r"^(おはよう|おはよ|こんにちは|こんばんは|やあ|やっほー?|ハロー|hello|hi|hey"
-    r"|ありがと(う|ね)?|thanks?|thx|了解|りょうかい|おk|ok|おけ|うん|はい|いいえ"
-    r"|なるほど|そうだね|そっか|わかった|分かった|おやすみ|おつかれ?|お疲れ様?でした?"
-    r"|バイバイ|またね|乙|w+|笑|草)[！!。、.?？~〜ー\s]*$",
-    re.IGNORECASE,
-)
-
-
-def default_profile_memory() -> dict[str, Any]:
-    return {}
-
-
-def default_projects_memory() -> dict[str, Any]:
-    """projects.json の空の初期構造（ユーザー別スキーマ）。"""
-    return {"_schema": _PROJECTS_SCHEMA, "users": {}}
-
-
-def _anniversaries_by_label(profile: dict[str, Any]) -> dict[str, Any]:
-    """生成待機中の更新を比較するため、有効な記念日をラベルで束ねる。"""
-    entries = profile.get(ANNIVERSARY_PROFILE_KEY)
-    result = {}
-    if isinstance(entries, list):
-        for entry in entries:
-            anniversary = parse_anniversary(entry)
-            if anniversary is not None:
-                result[anniversary[0]] = entry
-    return result
-
-
-def merge_anniversary_profile(
-    snapshot: dict[str, Any], compacted: dict[str, Any], *, previous_snapshot: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """入力を変更せず既存の記念日を引き継ぎ、生成待機中の編集を優先する。"""
-    result = copy.deepcopy(compacted)
-    incoming = compacted.get(ANNIVERSARY_PROFILE_KEY)
-    if previous_snapshot is not None and isinstance(incoming, list):
-        # モデルは入力時の古い日付も出力するため、最新値との単純な統合では訂正が戻る。
-        # 未変更ラベルへのモデルの訂正は採用し、同時に編集されたラベルだけを保護する。
-        previous = _anniversaries_by_label(previous_snapshot)
-        current = _anniversaries_by_label(snapshot)
-        changed_labels = {
-            label for label in previous.keys() | current.keys()
-            if previous.get(label) != current.get(label)
-        }
-        if not isinstance(snapshot.get(ANNIVERSARY_PROFILE_KEY), list) and (
-            snapshot.get(ANNIVERSARY_PROFILE_KEY) != previous_snapshot.get(ANNIVERSARY_PROFILE_KEY)
-            or (ANNIVERSARY_PROFILE_KEY in snapshot) != (ANNIVERSARY_PROFILE_KEY in previous_snapshot)
-        ):
-            # キー全体の削除や手書き途中の値も、古い生成結果で元へ戻さない。
-            incoming = None
-        else:
-            incoming = [
-                entry for entry in incoming
-                if (anniversary := parse_anniversary(entry)) is None or anniversary[0] not in changed_labels
-            ]
-    if not isinstance(incoming, list):
-        if ANNIVERSARY_PROFILE_KEY in snapshot:
-            result[ANNIVERSARY_PROFILE_KEY] = copy.deepcopy(snapshot[ANNIVERSARY_PROFILE_KEY])
-        else:
-            result.pop(ANNIVERSARY_PROFILE_KEY, None)
-        return result
-
-    # LLMだけでは削除できなくなるが、省略で失う記念日は戻せないため保持を優先する。
-    # 既存の不正な要素も消さず、読取側の共通判定で読み飛ばす。新しい不正な要素は採用しない。
-    existing = snapshot.get(ANNIVERSARY_PROFILE_KEY)
-    entries: list[Any] = []
-    positions: dict[str, int] = {}
-    for source, preserve_invalid in ((existing, True), (incoming, False)):
-        if not isinstance(source, list):
-            continue
-        for entry in source:
-            anniversary = parse_anniversary(entry)
-            if anniversary is None:
-                if preserve_invalid:
-                    entries.append(copy.deepcopy(entry))
-                continue
-            label, _, _ = anniversary
-            if label in positions:
-                entries[positions[label]] = copy.deepcopy(entry)
-            else:
-                positions[label] = len(entries)
-                entries.append(copy.deepcopy(entry))
-    result[ANNIVERSARY_PROFILE_KEY] = entries
-    return result
+__all__ = [
+    "MemoryService",
+    "default_profile_memory",
+    "default_projects_memory",
+    "merge_anniversary_profile",
+]
 
 
 class MemoryService:
-    def __init__(self, state: BotState, genai_client: Any, db: Database) -> None:
-        self._state = state
+    def __init__(self, genai_client: Any, db: Database) -> None:
         self._genai_client = genai_client
         self._db = db
         self.io_lock = asyncio.Lock()
@@ -190,10 +118,9 @@ class MemoryService:
             data["users"] = {}
         return data
 
-    def _user_projects(self, wrapper: dict[str, Any], user_id: str) -> dict[str, Any]:
-        users = wrapper.get("users", {})
-        value = users.get(str(user_id), {})
-        return value if isinstance(value, dict) else {}
+    @staticmethod
+    def _user_projects(wrapper: dict[str, Any], user_id: str) -> dict[str, Any]:
+        return user_projects(wrapper, user_id)
 
     # ---- プロンプトへ差し込む記憶コンテキスト --------------------------------
 
@@ -222,19 +149,8 @@ class MemoryService:
         summaries = projects.get("document_summaries", [])
         if pending_summaries:
             # 今回の文書は応答の安全確認が済むまで保存せず、この依頼だけの文脈へ足す。
-            summaries = self._merge_document_summaries(summaries, pending_summaries)
-        lines = []
-        if isinstance(summaries, list) and limit > 0:
-            for summary in summaries[-limit:]:
-                if not isinstance(summary, dict):
-                    continue
-                raw_name = summary.get("document_name")
-                name = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else "unknown"
-                raw_text = summary.get("summary")
-                text = raw_text.strip() if isinstance(raw_text, str) else ""
-                if text:
-                    lines.append(f"- {name}: {text}")
-        return context, "\n".join(lines)
+            summaries = merge_document_summaries(summaries, pending_summaries)
+        return context, format_document_summary_lines(summaries, limit)
 
     async def build_context(self, category: str, user_id: str) -> str:
         context, _ = await self.build_contexts(category, user_id)
@@ -255,18 +171,8 @@ class MemoryService:
 
     @staticmethod
     def _looks_memory_irrelevant(question: str) -> bool:
-        """長期記憶の参照が明らかに不要そうな発言か（あいさつ・相槌・短文）を簡易判定する。
-
-        True の場合、ルーターの LLM 呼び出しを省いて category="none" とする。
-        取りこぼしても route_category は失敗時 none にフォールバックする設計なので、
-        安全側（少し多めに none 判定）に倒しても実害は小さい。
-        """
-        text = question.strip()
-        if not text:
-            return True
-        if _TRIVIAL_MESSAGE_PATTERN.match(text):
-            return True
-        return False
+        """定型発言の簡易判定（実体は `memory_projects.looks_memory_irrelevant`）。"""
+        return looks_memory_irrelevant(question)
 
     async def route_category(self, question: str) -> str:
         if not question.strip():
@@ -309,28 +215,9 @@ class MemoryService:
         if not isinstance(user_projects, dict):
             user_projects = {}
             wrapper["users"][user_id] = user_projects
-        summaries = self._merge_document_summaries(user_projects.get("document_summaries", []), incoming)
+        summaries = merge_document_summaries(user_projects.get("document_summaries", []), incoming)
         user_projects["document_summaries"] = summaries[-DOCUMENT_SUMMARY_LIMIT:]
         write_json_file(PROJECTS_MEMORY_PATH, wrapper)
-
-    @staticmethod
-    def _merge_document_summaries(summaries: Any, incoming: list[dict[str, Any]]) -> list:
-        """保存前の文脈と保存時で、同名・同内容の置換規則を揃える。"""
-        if not isinstance(summaries, list):
-            summaries = []
-        else:
-            summaries = list(summaries)
-        for summary_data in incoming:
-            # 再試行で同じファイルを再解析しても、同名・同内容の要約を重複させない。
-            digest = summary_data.get("document_hash")
-            if digest:
-                summaries = [
-                    old for old in summaries
-                    if not isinstance(old, dict) or (old.get("document_hash"), old.get("document_name"))
-                    != (digest, summary_data.get("document_name"))
-                ]
-            summaries.append(summary_data)
-        return summaries
 
     # ---- 記憶圧縮（ユーザー単位） -------------------------------------------
 
@@ -488,7 +375,8 @@ class MemoryService:
             raise ValueError("記憶圧縮: 対象ログの有効な行IDを取得できませんでした。")
         self._db.pending_clear_upto(user_id, max_entry_id)
         # 消去が成功した場合だけ戻す。新しいログへ過去の失敗回数を持ち越さない。
-        self._compact_fail_count[user_id] = 0
+        # 0 を代入せず項目ごと外し、成功したユーザーの不要なキーを辞書に残さない。
+        self._compact_fail_count.pop(user_id, None)
 
     def _save_compacted_memory(
         self, user_id: str, profile_data: dict[str, Any], projects_data: dict[str, Any], max_entry_id: int,
@@ -519,7 +407,7 @@ class MemoryService:
                     logger.error("記憶圧縮: JSONの復元に失敗しました。", exc_info=error)
             raise
         # キャンセルを伝播する前も、全保存が成功した場合だけリセットする。
-        self._compact_fail_count[user_id] = 0
+        self._compact_fail_count.pop(user_id, None)
 
     def _save_compacted_projects(
         self, wrapper: dict[str, Any], user_id: str, projects_data: dict[str, Any],
@@ -543,28 +431,13 @@ class MemoryService:
 
     @staticmethod
     def _max_entry_id(entries: list[dict[str, Any]]) -> int:
-        """圧縮対象の pending_log 行の最大 id を返す（削除範囲の上限に使う）。
-
-        `pending_fetch_entries` は `SELECT *` なので各行に AUTOINCREMENT の id が入る。
-        万一 id を読めない行しか無い場合は 0 を返す。呼出元は生成・保存・削除を
-        進めずに読込エラーとして扱い、原データを保護する。
-        """
-        ids: list[int] = []
-        for entry in entries:
-            try:
-                ids.append(int(entry["id"]))
-            except (KeyError, TypeError, ValueError):
-                continue
-        return max(ids) if ids else 0
+        """圧縮対象の最大 id（実体は `memory_projects.max_entry_id`）。"""
+        return max_entry_id(entries)
 
     @staticmethod
     def _format_pending_entries(entries: list[dict[str, Any]]) -> str:
-        """DB の pending_log 行を、記憶圧縮プロンプトへ渡すテキスト形式に整形する。"""
-        lines: list[str] = []
-        for entry in entries:
-            lines.append(f"[{entry['created_at']}] User: {entry['question']}")
-            lines.append(f"[{entry['created_at']}] Bot: {entry['response']}")
-        return "\n".join(lines)
+        """圧縮プロンプト用の整形（実体は `memory_projects.format_pending_entries`）。"""
+        return format_pending_entries(entries)
 
     async def _register_compact_failure(
         self, user_id: str, error: BaseException | None, max_entry_id: int,
