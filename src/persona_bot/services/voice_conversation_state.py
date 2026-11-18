@@ -12,6 +12,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from persona_bot.audio.live_audio import LivePlaybackSource, Upsampler
 from persona_bot.config.constants import (
     LIVE_BARGE_IN_GAP_MS,
     LIVE_BARGE_IN_HOLD_SECONDS,
@@ -253,3 +254,24 @@ class _TranscriptState:
         self.close(self.blocked)
         self.close(self.owner)
         self.owner = self.blocked = self.next = self.interrupted = None
+
+
+@dataclass
+class _PlaybackState:
+    """返答の再生とフェードアウトの調停に使う状態（#470）。
+
+    以前は `VoiceConversation` の6つの属性として多数のメソッドから直接書き換えられており、
+    フェード途中の強制停止などで状態が食い違いやすかった。読み書きは `voice_conversation_playback.py`
+    の `VoicePlaybackMixin`（と、音源を作る `_on_model_audio`）だけから行い、ここに集める。
+    """
+
+    # いま再生待ち・再生中の返答の音源と、その返答（所有者）。再生を始めたら started が真になる。
+    source: LivePlaybackSource | None = None
+    owner: _Utterance | None = None
+    started: bool = False
+    # 割り込みでフェードアウトさせている音源（絞り切るまで再生スレッドが流す）。1つだけ持つ。
+    fading: LivePlaybackSource | None = None
+    # ペルソナの声が最後に止まった時刻（止まった直後の話し始めは回り込みを疑う）。
+    last_audible_at: float = float("-inf")
+    # 24kHz → 48kHz ステレオの変換器（断片の境目の状態を持ち越す）。
+    upsampler: Upsampler = field(default_factory=Upsampler)

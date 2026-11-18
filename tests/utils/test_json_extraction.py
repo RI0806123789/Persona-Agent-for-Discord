@@ -85,7 +85,7 @@ class ServiceJsonTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["summary"], "架空の要約")
 
     async def test_router_skips_unrelated_json_and_normalizes_category(self):
-        service = MemoryService(None, None, None)
+        service = MemoryService(None, None)
         for value, expected in ((" PROFILE ", "profile"), (" Projects ", "projects"), (" unknown ", "none")):
             with self.subTest(value=value), patch(
                 "persona_bot.services.memory_service.generate_content", new=AsyncMock(return_value=SimpleNamespace(
@@ -95,7 +95,7 @@ class ServiceJsonTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await service.route_category("前に話した架空の計画を教えてください"), expected)
 
     async def test_compaction_skips_json_missing_either_required_key(self):
-        service = MemoryService(None, None, None)
+        service = MemoryService(None, None)
         expected = {"profile": {"趣味": "架空の工作"}, "projects": {"計画": "架空の計画"}}
         for prefix in ('{"dummy": 1}', '{"profile": {}}', '{"projects": {}}'):
             with self.subTest(prefix=prefix), patch(
@@ -115,7 +115,7 @@ class ServiceJsonTests(unittest.IsolatedAsyncioTestCase):
         with patch("persona_bot.services.memory_service.generate_content", new=AsyncMock(
             return_value=SimpleNamespace(text='{"profile": {}}'),
         )):
-            self.assertEqual(await MemoryService(None, None, None)._compact_memory("架空の会話", "{}", "{}"),
+            self.assertEqual(await MemoryService(None, None)._compact_memory("架空の会話", "{}", "{}"),
                              (None, None))
 
     async def test_combined_moderation_normalizes_category_and_recurrence(self):

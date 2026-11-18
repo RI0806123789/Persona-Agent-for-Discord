@@ -1,16 +1,10 @@
 import logging
 import asyncio
 import io
-import math
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-
-import matplotlib
-
-matplotlib.use("Agg")
-import numpy as np
 
 from persona_bot.config.constants import (
     ROUTER_MODEL_NAME,
@@ -26,90 +20,28 @@ from persona_bot.config.constants import (
     STATS_TOPIC_COUNT,
 )
 from persona_bot.core.background import run_in_thread, spawn, wait_for_cleanup
-from persona_bot.utils.graph_rendering import plot_figure, save_figure_to_buffer, serialized_plot
 from persona_bot.utils.select_options import limit_keeping_selected
 from persona_bot.core.database import Database
 from persona_bot.services.prompting import build_stats_analysis_prompt
+from persona_bot.services.stats_graphs import (
+    render_bigfive_radar,
+    render_hourly_graph,
+    render_ranking_graph,
+    render_topic_graph,
+)
+from persona_bot.services.stats_normalization import (  # noqa: F401（BIG_FIVE_LABELS・normalize_hourly は従来の import 先として再公開）
+    BIG_FIVE_LABELS,
+    finite_number,
+    normalize_big_five,
+    normalize_hourly,
+    normalize_topics,
+)
 from persona_bot.utils.storage import extract_json_object
 from persona_bot.utils.timeutil import as_utc, parse_iso_datetime, resolve_timezone, timezone_label, utc_now_iso
 
 logger = logging.getLogger(__name__)
 
-# ビッグファイブの軸（英語キー → 日本語表示名）。レーダーチャートの軸ラベルに使う。
-BIG_FIVE_LABELS = {
-    "openness": "開放性",
-    "conscientiousness": "誠実性",
-    "extraversion": "外向性",
-    "agreeableness": "協調性",
-    "neuroticism": "神経症傾向",
-}
-
-
-# ---- LLM の解析結果・保存済みの値の正規化 ----------------------------------
-# 解析結果は LLM の出力なので、型が指示どおりとは限らない（"weight": "高" など）。
-# 保存時に揃えるだけでなく、描画時にも同じ関数を通す（以前の版で保存された
-# キャッシュが DB に残っていても、描画が例外で落ち続けないようにするため）。
-
-def _finite_number(value: Any) -> float | None:
-    """有限の数値に変換する。変換できなければ None。
-
-    bool は int の一種だが数値として扱わない（True が 1 点として描かれるのを防ぐ）。
-    "0.8" のような数字の文字列は受け付け、"高" や NaN・無限大は捨てる。
-    """
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        number = float(value)
-    elif isinstance(value, str):
-        try:
-            number = float(value.strip())
-        except ValueError:
-            return None
-    else:
-        return None
-    return number if math.isfinite(number) else None
-
-
-def normalize_topics(topics: Any) -> list[dict[str, Any]]:
-    """話題を {"label": 空でない文字列, "weight": 0 以上の有限数} のリストに揃える。
-
-    LLM は ["ゲーム"] のように文字列だけのリストを返すことがあるため、その場合は
-    重み 1.0 の話題として扱う。重みが無い要素は従来どおり 0、数値でない要素は捨てる。
-    """
-    if not isinstance(topics, list):
-        return []
-    normalized: list[dict[str, Any]] = []
-    for topic in topics:
-        if isinstance(topic, str):
-            label, weight = topic.strip(), 1.0
-        elif isinstance(topic, dict) and isinstance(topic.get("label"), str):
-            label = topic["label"].strip()
-            raw_weight = topic.get("weight")
-            weight = 0.0 if raw_weight is None else _finite_number(raw_weight)
-        else:
-            continue
-        if label and weight is not None:
-            normalized.append({"label": label, "weight": max(0.0, weight)})
-    return normalized
-
-
-def normalize_big_five(big_five: Any) -> dict[str, float]:
-    """ビッグファイブを既知の5軸だけにし、0〜100 の有限数へ丸める。数値でない軸は捨てる。"""
-    if not isinstance(big_five, dict):
-        return {}
-    normalized: dict[str, float] = {}
-    for key in BIG_FIVE_LABELS:
-        number = _finite_number(big_five.get(key))
-        if number is not None:
-            normalized[key] = min(100.0, max(0.0, number))
-    return normalized
-
-
-def normalize_hourly(hourly: Any) -> list[float]:
-    """時間帯別の発言回数を STATS_HOURLY_BUCKETS 個の 0 以上の有限数に揃える（不足は 0）。"""
-    values = hourly if isinstance(hourly, list) else []
-    counts = [max(0.0, _finite_number(value) or 0.0) for value in values[:STATS_HOURLY_BUCKETS]]
-    return counts + [0.0] * (STATS_HOURLY_BUCKETS - len(counts))
+# 正規化・描画は別モジュールへ分け（#469）、従来の import 先を保つため再公開する。
 
 
 @dataclass
@@ -369,7 +301,7 @@ class StatsService:
         件数不足で解析したときは性格推定を保存しないため、件数が揃ったら TTL 内でも
         1回だけ解析し直す。sample_count を持たない以前の版のキャッシュは従来どおり扱う。
         """
-        analyzed = _finite_number(cached.get("sample_count"))
+        analyzed = finite_number(cached.get("sample_count"))
         if analyzed is None:
             return False
         return analyzed < STATS_PERSONALITY_MIN_SAMPLES <= sample_count
@@ -503,64 +435,19 @@ class StatsService:
             or any(normalize_big_five(analysis.get("big_five")).values())
         )
 
-    # ---- グラフ生成 -------------------------------------------------------
+    # ---- グラフ生成（描画本体は `stats_graphs`。ここは委譲だけで、入れ子のロックを避ける） --------
 
-    @serialized_plot
     def build_hourly_graph(self, entry: dict) -> io.BytesIO:
-        """時間帯別の発言回数ヒストグラム（24時間）。"""
-        hourly = normalize_hourly(entry.get("hourly"))
-        with plot_figure(figsize=(10, 5)) as (figure, axis):
-            x = np.arange(STATS_HOURLY_BUCKETS)
-            axis.bar(x, hourly, color="tab:blue")
-            axis.set_xticks(x)
-            # 集計に実際に使った tz を表示する（定数のままだと、tzdata が無く
-            # UTC へフォールバックした環境で「Asia/Tokyo」と偽って表示してしまう）。
-            axis.set_xlabel(f"時刻（{timezone_label(self._tz)}）")
-            axis.set_ylabel("発言回数")
-            axis.set_title("よく話す時間帯")
-            axis.grid(True, axis="y", alpha=0.3)
-            return save_figure_to_buffer(figure, bbox_inches="tight")
+        """時間帯別の発言回数ヒストグラム（24時間）。集計に実際に使った tz の名前を表示する。"""
+        return render_hourly_graph(entry.get("hourly"), timezone_label(self._tz))
 
-    @serialized_plot
     def build_topic_graph(self, topics: list[dict]) -> io.BytesIO | None:
         """話題（トピック）の重み付き横棒グラフ。"""
-        cleaned = [(topic["label"], topic["weight"]) for topic in normalize_topics(topics)]
-        if not cleaned:
-            return None
-        cleaned.sort(key=lambda t: t[1], reverse=True)
-        cleaned = cleaned[:STATS_TOPIC_COUNT][::-1]  # 横棒は下から上へ並ぶため反転
-        labels = [c[0] for c in cleaned]
-        weights = [c[1] for c in cleaned]
-        with plot_figure(figsize=(10, max(3, len(labels) * 0.6))) as (figure, axis):
-            axis.barh(range(len(labels)), weights, color="tab:green")
-            axis.set_yticks(range(len(labels)))
-            axis.set_yticklabels(labels)
-            axis.set_xlabel("重要度")
-            axis.set_title("よく話す話題")
-            axis.grid(True, axis="x", alpha=0.3)
-            return save_figure_to_buffer(figure, bbox_inches="tight")
+        return render_topic_graph(topics)
 
-    @serialized_plot
     def build_bigfive_radar(self, big_five: dict) -> io.BytesIO | None:
         """ビッグファイブ性格推定のレーダーチャート（5軸・0〜100）。"""
-        keys = list(BIG_FIVE_LABELS.keys())
-        normalized = normalize_big_five(big_five)
-        values = [normalized.get(k, 0.0) for k in keys]
-        if not any(values):
-            return None
-        labels = [BIG_FIVE_LABELS[k] for k in keys]
-        angles = np.linspace(0, 2 * np.pi, len(keys), endpoint=False).tolist()
-        # レーダーを閉じるため先頭要素を末尾に足す
-        values_closed = values + values[:1]
-        angles_closed = angles + angles[:1]
-        with plot_figure(figsize=(6, 6), subplot_kw={"polar": True}) as (figure, axis):
-            axis.plot(angles_closed, values_closed, color="tab:purple", marker="o")
-            axis.fill(angles_closed, values_closed, color="tab:purple", alpha=0.25)
-            axis.set_xticks(angles)
-            axis.set_xticklabels(labels)
-            axis.set_ylim(0, 100)
-            axis.set_title("性格推定（ビッグファイブ）", pad=20)
-            return save_figure_to_buffer(figure, bbox_inches="tight")
+        return render_bigfive_radar(big_five)
 
     async def build_ranking_graph(self, top_n: int = STATS_RANKING_TOP_N) -> io.BytesIO | None:
         """発言回数のユーザー別ランキング横棒グラフ（管理者用の全体比較）。
@@ -585,20 +472,8 @@ class StatsService:
             return None
         return graph
 
-    @serialized_plot
     def _render_ranking_graph(self, items: list[tuple[str, int]], top_n: int) -> io.BytesIO:
-        items.sort(key=lambda t: t[1], reverse=True)
-        items = items[:top_n][::-1]  # 横棒は下から上へ並ぶため反転
-        names = [i[0] for i in items]
-        counts = [i[1] for i in items]
-        with plot_figure(figsize=(10, max(3, len(names) * 0.5))) as (figure, axis):
-            axis.barh(range(len(names)), counts, color="tab:orange")
-            axis.set_yticks(range(len(names)))
-            axis.set_yticklabels(names)
-            axis.set_xlabel("発言回数")
-            axis.set_title("発言回数ランキング")
-            axis.grid(True, axis="x", alpha=0.3)
-            return save_figure_to_buffer(figure, bbox_inches="tight")
+        return render_ranking_graph(items, top_n)
 
     # ---- ダッシュボード組み立て ------------------------------------------
 

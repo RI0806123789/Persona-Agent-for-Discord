@@ -20,7 +20,7 @@ from persona_bot.core.voice_commands import (
 )
 from persona_bot.config.constants import LIVE_ENABLED
 from persona_bot.services.autonomous_service import AutonomousService
-from persona_bot.services.voice_conversation import VoiceConversationService
+from persona_bot.services.voice_conversation_service import VoiceConversationService
 from persona_bot.services.blacklist_service import BlacklistService
 from persona_bot.services.content_moderator import ContentModerator
 from persona_bot.utils.discord_helpers import is_administrator, is_bot_owner, reject_blocked_interaction

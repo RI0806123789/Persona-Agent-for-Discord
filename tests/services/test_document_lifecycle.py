@@ -38,7 +38,7 @@ class DocumentLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.settings.current_prompt_file = "../prompts/prompt_default.txt"
         self.settings.current_model_name = "old-model"
         self.settings.grounding_enabled = True
-        self.memory = MemoryService(self.state, None, self.db)
+        self.memory = MemoryService(None, self.db)
         paths = patch.multiple(memory_service, MEMORY_DIR=root,
                                PROFILE_MEMORY_PATH=root / "profile.json", PROJECTS_MEMORY_PATH=root / "projects.json")
         paths.start()

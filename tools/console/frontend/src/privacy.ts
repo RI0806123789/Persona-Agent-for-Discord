@@ -80,7 +80,7 @@ export function collectSecrets(parts: {
 }
 
 // ボットの通常出力と対応させる。ログ書式を追加・変更したら、この一覧と描画回帰を確認する。
-// autonomous_service.py: 配信開始、接続失敗、ステージ準備失敗。
+// autonomous_lifecycle.py: 配信開始、接続失敗、ステージ準備失敗（開始・停止は autonomous_service.py から移した）。
 // autonomous_stage.py: 中止時のステージ枠の終了失敗。
 // voice_guard.py: 元のチャンネルへの復帰。識別子は両モジュールの共通キーで処理する。
 // 名前の括弧・改行を途中で切らないため、最後の対応する接尾辞まで保守的に隠す。

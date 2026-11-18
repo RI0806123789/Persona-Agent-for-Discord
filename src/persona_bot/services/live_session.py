@@ -186,11 +186,13 @@ class LiveSession:
         try:
             while True:
                 try:
-                    await self._open()
+                    if not await self._open_with_search_fallback():
+                        # 開き直す前に close() が呼ばれた。接続は片付け済みなので、受信を始めずに戻る。
+                        return
                     break
                 except Exception as error:
-                    if self._drop_search_on_quota(error):
-                        continue
+                    # 最初の接続だけは、設定の誤りなら声・検索などの任意の設定を外して試し直す。
+                    # （再接続にはこの退避は無い。再接続では再開ハンドルを捨てて新しいセッションで試す。）
                     if not self._minimal and is_config_error(error):
                         logger.warning("Gemini Live: 設定を外して接続し直します。", exc_info=error)
                         self._minimal = True
@@ -204,6 +206,26 @@ class LiveSession:
             logger.error("Gemini Live: 接続できませんでした。", exc_info=error)
             raise LiveUnavailableError(quota=is_quota_error(error)) from error
         self._runner = spawn(self._run(), label="Gemini Live の受信")
+
+    async def _open_with_search_fallback(self) -> bool:
+        """`_open()` で接続し、検索ツール付きの接続だけが利用枠の超過で拒否されたら、検索を外して1回だけ開き直す。
+
+        開き直す前に、失敗した試行の接続を片付ける。最初の接続（`start`）と再接続（`_reconnect`）で
+        共通の流れ。戻り値は、接続できたら True、検索を外して開き直す前に `close()` が呼ばれていたら False。
+        検索を外した後の失敗や、検索を外す理由のない失敗は、そのまま呼び出し側へ例外で返す。
+        """
+        try:
+            await self._open()
+            return True
+        except Exception as error:
+            if not self._drop_search_on_quota(error):
+                raise
+        # 検索だけの超過は同じ試行内で退避する。最終試行でも音声を試し、待ちを増やさない。
+        await self._close_current()
+        if self._closing:
+            return False
+        await self._open()
+        return True
 
     def _drop_search_on_quota(self, error: BaseException) -> bool:
         """検索ツール付きの接続が利用枠の超過で拒否されたなら、検索を外して試し直す（真を返す）。
@@ -378,16 +400,8 @@ class LiveSession:
             if self._closing:
                 return False
             try:
-                try:
-                    await self._open()
-                except Exception as error:
-                    if not self._drop_search_on_quota(error):
-                        raise
-                    # 検索だけの超過は同じ試行内で退避する。最終試行でも音声を試し、待ちを増やさない。
-                    await self._close_current()
-                    if self._closing:
-                        return False
-                    await self._open()
+                if not await self._open_with_search_fallback():
+                    return False
             except asyncio.CancelledError:
                 raise
             except Exception as error:

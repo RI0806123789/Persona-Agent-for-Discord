@@ -238,7 +238,7 @@ test("#219 名前に別の運用書式や補助面文字が含まれても名前
 
 
 test("#283 現行の配信開始ログは名前と識別子を含まず接頭辞でも公開に戻らない", async () => {
-  const bot = await source("../../../../src/persona_bot/services/autonomous_service.py");
+  const bot = await source("../../../../src/persona_bot/services/autonomous_lifecycle.py");
   const kinds = bot.match(/kind = "([^"\r\n]+)" if is_stage else "([^"\r\n]+)"/);
   const format = bot.match(/logger\.info\("(自律行動: %s[^"\r\n]+)", kind\)/);
   assert.ok(kinds);

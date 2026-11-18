@@ -169,3 +169,46 @@ class PanelNavigationTests(unittest.IsolatedAsyncioTestCase):
 
         # interaction_check も False を返す
         self.assertFalse(await panel.interaction_check(interaction))
+
+
+class RunExclusiveTests(unittest.IsolatedAsyncioTestCase):
+    """実行中の重い処理を名前ごとに排他する共通の入口（#470）。"""
+
+    def make_panel(self):
+        panel = PanelView(timeout_notice="時間切れです。")
+        self.addCleanup(panel.stop)
+        return panel
+
+    async def test_runs_the_work_once_and_releases_the_name(self):
+        panel, interaction = self.make_panel(), make_interaction()
+        work = AsyncMock()
+        self.assertTrue(await panel.run_exclusive(interaction, "graph", work))
+        work.assert_awaited_once_with()
+        # 解除されているので、同じ名前をもう一度実行できる。
+        self.assertTrue(await panel.run_exclusive(interaction, "graph", work))
+        self.assertEqual(work.await_count, 2)
+
+    async def test_refuses_the_same_name_while_running_but_allows_other_names(self):
+        panel, interaction = self.make_panel(), make_interaction()
+        inside = AsyncMock()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow():
+            started.set()
+            await release.wait()
+
+        first = asyncio.create_task(panel.run_exclusive(interaction, "ranking", slow))
+        await started.wait()
+        self.assertFalse(await panel.run_exclusive(interaction, "ranking", inside, busy_notice="集計中です。"))
+        interaction.response.send_message.assert_awaited_once_with("集計中です。", ephemeral=True)
+        inside.assert_not_awaited()
+        self.assertTrue(await panel.run_exclusive(interaction, "feedback", inside))
+        release.set()
+        self.assertTrue(await first)
+
+    async def test_releases_the_name_even_when_the_work_fails(self):
+        panel, interaction = self.make_panel(), make_interaction()
+        with self.assertRaises(RuntimeError):
+            await panel.run_exclusive(interaction, "graph", AsyncMock(side_effect=RuntimeError("架空の失敗")))
+        self.assertTrue(panel.try_begin_aggregation("graph"))

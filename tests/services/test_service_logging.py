@@ -47,7 +47,7 @@ class ServiceLoggingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_compaction_failure_passes_exception_without_preformatted_private_text(self) -> None:
         database = Mock()
-        service = memory_service.MemoryService(None, None, database)
+        service = memory_service.MemoryService(None, database)
         error = self.failure()
         try:
             raise error

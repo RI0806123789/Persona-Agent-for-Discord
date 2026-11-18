@@ -12,8 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 import discord
 from persona_bot.core.app_state import BotState
 from persona_bot.core.background import spawn
-from persona_bot.services import autonomous_service, autonomous_stage
+from persona_bot.services import autonomous_lifecycle, autonomous_service, autonomous_stage
 from persona_bot.services.autonomous_service import AutonomousService
+from tests.helpers.autonomous_patch import patch_autonomous
 
 
 class AutonomousStartCancellationTests(unittest.IsolatedAsyncioTestCase):
@@ -42,9 +43,7 @@ class AutonomousStartCancellationTests(unittest.IsolatedAsyncioTestCase):
         picker = patch.object(autonomous_stage, "pick_channel", return_value=self.channel)
         picker.start()
         self.addCleanup(picker.stop)
-        quiet = patch.object(autonomous_service, "is_quiet_hours", return_value=False)
-        quiet.start()
-        self.addCleanup(quiet.stop)
+        patch_autonomous(self, "is_quiet_hours", Mock(return_value=False))
 
     async def test_connect_cancellation_disconnects_only_client_created_by_attempt(self) -> None:
         for replace in (False, True):

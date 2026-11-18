@@ -106,7 +106,7 @@ class SettingsRejoinTests(unittest.IsolatedAsyncioTestCase):
                     await self.rejoin()
 
                 interaction.response.defer.side_effect = rejoin_on_defer
-                with patch("persona_bot.views.view_parts.is_current_administrator",
+                with patch("persona_bot.views.panel_authorization.is_current_administrator",
                            new=AsyncMock(return_value=True)):
                     await button.callback(interaction)
                 self.assertIn("開き直してください", interaction.edit_original_response.call_args.kwargs["content"])

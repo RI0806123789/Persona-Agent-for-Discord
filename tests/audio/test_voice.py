@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 import discord
 from requests.exceptions import ConnectTimeout, ReadTimeout
 
-from persona_bot.audio import voice
+from persona_bot.audio import speech_text, tts_synthesis, voice
 from persona_bot.core.background import spawn
 from persona_bot.utils.logging_setup import LOG_DATE_FORMAT, LOG_FORMAT, OperationalFormatter
 
@@ -42,7 +42,7 @@ class SpeechTextTests(unittest.TestCase):
         self.assertEqual(voice.build_speech_text(text), text)
 
     def test_tags_are_removed_before_applying_length_limit(self):
-        text = "あ" * voice.TTS_MAX_CHARS
+        text = "あ" * speech_text.TTS_MAX_CHARS
         self.assertEqual(voice.build_speech_text("[happy]" + text + "[V:0, A:0]"), text)
 
     def test_markup_urls_code_mentions_and_custom_emoji_are_removed(self):
@@ -51,11 +51,11 @@ class SpeechTextTests(unittest.TestCase):
         self.assertEqual(voice.build_speech_text('https://example.com `code` <:smile:55>'), "")
 
     def test_exact_limit_and_truncation_notice(self):
-        for length in (voice.TTS_MAX_CHARS - 1, voice.TTS_MAX_CHARS):
+        for length in (speech_text.TTS_MAX_CHARS - 1, speech_text.TTS_MAX_CHARS):
             with self.subTest(length=length):
                 self.assertEqual(voice.build_speech_text("あ" * length), "あ" * length)
-        self.assertEqual(voice.build_speech_text("あ" * (voice.TTS_MAX_CHARS + 1)),
-                         "あ" * voice.TTS_MAX_CHARS + voice.TTS_TRUNCATION_NOTICE)
+        self.assertEqual(voice.build_speech_text("あ" * (speech_text.TTS_MAX_CHARS + 1)),
+                         "あ" * speech_text.TTS_MAX_CHARS + speech_text.TTS_TRUNCATION_NOTICE)
 
     def test_url_removal_preserves_adjacent_japanese_text(self):
         cases = (
@@ -76,20 +76,20 @@ class SpeechTextTests(unittest.TestCase):
 class PcmDecodeTests(unittest.TestCase):
     def test_flat_profile_decodes_stereo_without_equalizer(self):
         samples = np.array([-100, -100, 200, 200], dtype=np.int16)
-        with patch.object(voice.miniaudio, "decode", return_value=SimpleNamespace(samples=samples)) as decode, patch.object(
-            voice, "apply_equalizer", side_effect=AssertionError("加工なしの経路でEQを呼んではいけません。"),
+        with patch.object(tts_synthesis.miniaudio, "decode", return_value=SimpleNamespace(samples=samples)) as decode, patch.object(
+            tts_synthesis, "apply_equalizer", side_effect=AssertionError("加工なしの経路でEQを呼んではいけません。"),
         ):
-            result = voice._decode_to_pcm(b"fictional-mp3", {"eq": "flat"})
+            result = tts_synthesis._decode_to_pcm(b"fictional-mp3", {"eq": "flat"})
         self.assertEqual(result, samples.tobytes())
-        self.assertEqual(decode.call_args.kwargs["nchannels"], voice.TTS_CHANNELS)
-        self.assertEqual(decode.call_args.kwargs["sample_rate"], voice.TTS_SAMPLE_RATE)
+        self.assertEqual(decode.call_args.kwargs["nchannels"], tts_synthesis.TTS_CHANNELS)
+        self.assertEqual(decode.call_args.kwargs["sample_rate"], tts_synthesis.TTS_SAMPLE_RATE)
 
     def test_equalized_mono_is_clipped_and_interleaved_for_both_channels(self):
         mono = np.array([-100, 0, 100], dtype=np.int16)
-        with patch.object(voice, "needs_equalizer", return_value=True), patch.object(
-            voice.miniaudio, "decode", return_value=SimpleNamespace(samples=mono),
-        ) as decode, patch.object(voice, "apply_equalizer", return_value=np.array([-40000, 0, 40000], dtype=float)):
-            result = voice._decode_to_pcm(b"fictional-mp3", {"eq": "fictional"})
+        with patch.object(tts_synthesis, "needs_equalizer", return_value=True), patch.object(
+            tts_synthesis.miniaudio, "decode", return_value=SimpleNamespace(samples=mono),
+        ) as decode, patch.object(tts_synthesis, "apply_equalizer", return_value=np.array([-40000, 0, 40000], dtype=float)):
+            result = tts_synthesis._decode_to_pcm(b"fictional-mp3", {"eq": "fictional"})
         self.assertEqual(decode.call_args.kwargs["nchannels"], 1)
         np.testing.assert_array_equal(np.frombuffer(result, dtype=np.int16), [-32768, -32768, 0, 0, 32767, 32767])
 
@@ -102,11 +102,11 @@ class SynthesisTests(unittest.IsolatedAsyncioTestCase):
             buffers.append(buffer)
             buffer.write(b"fictional-mp3")
 
-        with patch.object(voice, "gTTS", return_value=SimpleNamespace(write_to_fp=write)) as engine:
-            self.assertEqual(voice._fetch_gtts_mp3("架空の音声"), b"fictional-mp3")
+        with patch.object(tts_synthesis, "gTTS", return_value=SimpleNamespace(write_to_fp=write)) as engine:
+            self.assertEqual(tts_synthesis._fetch_gtts_mp3("架空の音声"), b"fictional-mp3")
         engine.assert_called_once_with(
-            text="架空の音声", lang=voice.TTS_LANG,
-            timeout=(voice.TTS_GTTS_CONNECT_TIMEOUT_SECONDS, voice.TTS_GTTS_READ_TIMEOUT_SECONDS),
+            text="架空の音声", lang=tts_synthesis.TTS_LANG,
+            timeout=(tts_synthesis.TTS_GTTS_CONNECT_TIMEOUT_SECONDS, tts_synthesis.TTS_GTTS_READ_TIMEOUT_SECONDS),
         )
         for seconds in engine.call_args.kwargs["timeout"]:
             self.assertGreater(seconds, 0)
@@ -133,10 +133,10 @@ class SynthesisTests(unittest.IsolatedAsyncioTestCase):
                     finally:
                         finished.set()
 
-                with patch.object(voice, "gTTS", return_value=SimpleNamespace(write_to_fp=write)), patch.object(
-                    voice, "_fetch_edge_mp3", new=AsyncMock(side_effect=OSError("架空の障害")),
-                ), patch.object(voice, "_edge_tts_failing", False):
-                    task = spawn(voice._fetch_mp3("架空の音声", {}), label="退避音声のキャンセルの確認")
+                with patch.object(tts_synthesis, "gTTS", return_value=SimpleNamespace(write_to_fp=write)), patch.object(
+                    tts_synthesis, "_fetch_edge_mp3", new=AsyncMock(side_effect=OSError("架空の障害")),
+                ), patch.object(tts_synthesis, "_edge_tts_failing", False):
+                    task = spawn(tts_synthesis._fetch_mp3("架空の音声", {}), label="退避音声のキャンセルの確認")
                     try:
                         await asyncio.wait_for(entered.wait(), 2)
                         for _ in range(2):
@@ -160,8 +160,8 @@ class SynthesisTests(unittest.IsolatedAsyncioTestCase):
                 yield chunk
 
         profile = {"voice": "fictional-voice", "rate": "+5%", "pitch": "+10Hz"}
-        with patch.object(voice.edge_tts, "Communicate", return_value=SimpleNamespace(stream=stream)) as engine:
-            self.assertEqual(await voice._fetch_edge_mp3("架空の音声", profile), b"firstsecond")
+        with patch.object(tts_synthesis.edge_tts, "Communicate", return_value=SimpleNamespace(stream=stream)) as engine:
+            self.assertEqual(await tts_synthesis._fetch_edge_mp3("架空の音声", profile), b"firstsecond")
         engine.assert_called_once_with("架空の音声", "fictional-voice", rate="+5%", pitch="+10Hz")
 
     async def test_edge_failure_or_empty_response_falls_back_once_and_recovers(self):
@@ -173,13 +173,13 @@ class SynthesisTests(unittest.IsolatedAsyncioTestCase):
                     threads.append(threading.get_ident())
                     return b"fallback"
 
-                with patch.object(voice, "_edge_tts_failing", False), patch.object(
-                    voice, "_fetch_edge_mp3", new=AsyncMock(side_effect=[failure, failure, b"recovered"]),
-                ), patch.object(voice, "_fetch_gtts_mp3", side_effect=fallback) as backup, self.assertLogs("persona_bot.audio.voice", level="INFO") as logs:
-                    self.assertEqual(await voice._fetch_mp3("架空", {}), b"fallback")
-                    self.assertEqual(await voice._fetch_mp3("架空", {}), b"fallback")
-                    self.assertEqual(await voice._fetch_mp3("架空", {}), b"recovered")
-                    self.assertFalse(voice._edge_tts_failing)
+                with patch.object(tts_synthesis, "_edge_tts_failing", False), patch.object(
+                    tts_synthesis, "_fetch_edge_mp3", new=AsyncMock(side_effect=[failure, failure, b"recovered"]),
+                ), patch.object(tts_synthesis, "_fetch_gtts_mp3", side_effect=fallback) as backup, self.assertLogs("persona_bot.audio.voice", level="INFO") as logs:
+                    self.assertEqual(await tts_synthesis._fetch_mp3("架空", {}), b"fallback")
+                    self.assertEqual(await tts_synthesis._fetch_mp3("架空", {}), b"fallback")
+                    self.assertEqual(await tts_synthesis._fetch_mp3("架空", {}), b"recovered")
+                    self.assertFalse(tts_synthesis._edge_tts_failing)
                     self.assertEqual(backup.call_count, 2)
                     self.assertEqual(len(logs.records), 2)
                     self.assertEqual([record.levelname for record in logs.records], ["WARNING", "INFO"])
@@ -192,14 +192,14 @@ class SynthesisTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_edge_success_skips_fallback_and_cancellation_does_not_trigger_it(self):
         for result in (b"audio", asyncio.CancelledError()):
-            with self.subTest(result=type(result).__name__), patch.object(voice, "_fetch_edge_mp3", new=AsyncMock(side_effect=[result])), patch.object(
-                voice, "_fetch_gtts_mp3",
+            with self.subTest(result=type(result).__name__), patch.object(tts_synthesis, "_fetch_edge_mp3", new=AsyncMock(side_effect=[result])), patch.object(
+                tts_synthesis, "_fetch_gtts_mp3",
             ) as backup:
                 if isinstance(result, BaseException):
                     with self.assertRaises(asyncio.CancelledError):
-                        await voice._fetch_mp3("架空", {})
+                        await tts_synthesis._fetch_mp3("架空", {})
                 else:
-                    self.assertEqual(await voice._fetch_mp3("架空", {}), result)
+                    self.assertEqual(await tts_synthesis._fetch_mp3("架空", {}), result)
                 backup.assert_not_called()
 
     async def test_edge_hang_times_out_and_fallback_completes_synthesis(self):
@@ -211,11 +211,11 @@ class SynthesisTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 cancelled.set()
 
-        with patch.object(voice, "_fetch_edge_mp3", side_effect=hang), patch.object(
-            voice, "_fetch_gtts_mp3", return_value=b"fallback",
-        ) as backup, patch.object(voice, "_decode_to_pcm", return_value=b"pcm") as decode, patch.object(
-            voice, "TTS_EDGE_TIMEOUT_SECONDS", 0.01,
-        ), patch.object(voice, "_edge_tts_failing", False):
+        with patch.object(tts_synthesis, "_fetch_edge_mp3", side_effect=hang), patch.object(
+            tts_synthesis, "_fetch_gtts_mp3", return_value=b"fallback",
+        ) as backup, patch.object(tts_synthesis, "_decode_to_pcm", return_value=b"pcm") as decode, patch.object(
+            tts_synthesis, "TTS_EDGE_TIMEOUT_SECONDS", 0.01,
+        ), patch.object(tts_synthesis, "_edge_tts_failing", False):
             result = await asyncio.wait_for(voice._synthesize_pcm("架空の音声", {}), 2)
 
         self.assertEqual(result, b"pcm")
@@ -233,8 +233,8 @@ class SynthesisTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 cancelled.set()
 
-        with patch.object(voice, "_fetch_edge_mp3", side_effect=hang), patch.object(
-            voice, "_fetch_gtts_mp3",
+        with patch.object(tts_synthesis, "_fetch_edge_mp3", side_effect=hang), patch.object(
+            tts_synthesis, "_fetch_gtts_mp3",
         ) as backup:
             task = asyncio.create_task(voice._synthesize_pcm("架空の音声", {}))
             try:
@@ -256,7 +256,7 @@ class SynthesisTests(unittest.IsolatedAsyncioTestCase):
             threads.append(threading.get_ident())
             return b"pcm"
 
-        with patch.object(voice, "_fetch_mp3", new=AsyncMock(return_value=b"audio")), patch.object(voice, "_decode_to_pcm", side_effect=decode):
+        with patch.object(tts_synthesis, "_fetch_mp3", new=AsyncMock(return_value=b"audio")), patch.object(tts_synthesis, "_decode_to_pcm", side_effect=decode):
             self.assertEqual(await voice._synthesize_pcm("架空", {}), b"pcm")
         self.assertTrue(threads)
         self.assertNotIn(threading.get_ident(), threads)
@@ -410,12 +410,12 @@ class SpeechQueueTests(unittest.IsolatedAsyncioTestCase):
             timeouts.append(kwargs["timeout"])
             raise next(failures)
 
-        with patch.object(voice, "_fetch_edge_mp3", new=AsyncMock(side_effect=[
+        with patch.object(tts_synthesis, "_fetch_edge_mp3", new=AsyncMock(side_effect=[
             OSError("架空の障害"), OSError("架空の障害"), b"fictional-mp3",
         ])), patch("gtts.tts.requests.Session.send", side_effect=send) as network, patch.object(
-            voice, "_decode_to_pcm", return_value=b"pcm",
+            tts_synthesis, "_decode_to_pcm", return_value=b"pcm",
         ) as decode, patch.object(voice, "_play_pcm", new=AsyncMock()) as play, patch.object(
-            voice, "_edge_tts_failing", False,
+            tts_synthesis, "_edge_tts_failing", False,
         ):
             for text in ("接続失敗", "読み取り失敗", "次の返信"):
                 await voice.speak_text(self.guild, text)
@@ -424,7 +424,7 @@ class SpeechQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(threads), 2)
         self.assertNotIn(threading.get_ident(), threads)
         self.assertEqual(timeouts, [(
-            voice.TTS_GTTS_CONNECT_TIMEOUT_SECONDS, voice.TTS_GTTS_READ_TIMEOUT_SECONDS,
+            tts_synthesis.TTS_GTTS_CONNECT_TIMEOUT_SECONDS, tts_synthesis.TTS_GTTS_READ_TIMEOUT_SECONDS,
         )] * 2)
         decode.assert_called_once()
         play.assert_awaited_once_with(self.client, b"pcm", is_valid=ANY)
@@ -443,11 +443,11 @@ class SpeechQueueTests(unittest.IsolatedAsyncioTestCase):
                 raise TimeoutError("音声テストの待機が終了しませんでした")
             raise ReadTimeout("架空の読み取り期限超過")
 
-        with patch.object(voice, "gTTS", return_value=SimpleNamespace(write_to_fp=write)), patch.object(
-            voice, "_fetch_edge_mp3", new=AsyncMock(side_effect=[OSError("架空の障害"), b"fictional-mp3"]),
-        ), patch.object(voice, "_decode_to_pcm", return_value=b"pcm"), patch.object(
+        with patch.object(tts_synthesis, "gTTS", return_value=SimpleNamespace(write_to_fp=write)), patch.object(
+            tts_synthesis, "_fetch_edge_mp3", new=AsyncMock(side_effect=[OSError("架空の障害"), b"fictional-mp3"]),
+        ), patch.object(tts_synthesis, "_decode_to_pcm", return_value=b"pcm"), patch.object(
             voice, "_play_pcm", new=AsyncMock(),
-        ) as play, patch.object(voice, "TTS_TIMEOUT_SECONDS", 0.02), patch.object(voice, "_edge_tts_failing", False):
+        ) as play, patch.object(voice, "TTS_TIMEOUT_SECONDS", 0.02), patch.object(tts_synthesis, "_edge_tts_failing", False):
             await voice.speak_text(self.guild, "期限超過")
             await voice.speak_text(self.guild, "次の返信")
             task = spawn(self.workers[0], label="合成期限後の同期処理回収の確認")

@@ -18,7 +18,7 @@ import discord
 
 from persona_bot.config import constants
 from persona_bot.core.app_state import AutonomousSession, BotState
-from persona_bot.services import autonomous_service
+from persona_bot.services import autonomous_lifecycle, autonomous_service
 from persona_bot.services import voice_guard as voice_guard_module
 from persona_bot.services.autonomous_service import AutonomousService
 from persona_bot.services.voice_guard import VoiceGuard
@@ -391,7 +391,7 @@ class VoiceGuardTests(unittest.IsolatedAsyncioTestCase):
 
         self.voice_client.disconnect.side_effect = disconnect
         notice = AsyncMock()
-        with patch.object(autonomous_service, "send_long_message", notice):
+        with patch.object(autonomous_lifecycle, "send_long_message", notice):
             await self.connect_then_move()
         self.assertIsNone(settings.autonomous_session)
         notice.assert_awaited_once()

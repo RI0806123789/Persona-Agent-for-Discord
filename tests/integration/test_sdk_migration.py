@@ -97,7 +97,7 @@ class SdkWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.sdk.close)
         self.addAsyncCleanup(self.sdk.aio.aclose)
         self.moderator = ContentModerator(self.sdk, SimpleNamespace(words=[]), timeout=2)
-        self.memory = MemoryService(None, self.sdk, None)
+        self.memory = MemoryService(self.sdk, None)
 
     async def test_moderation_routes_and_extracts_reminder_in_one_request(self) -> None:
         self.responses.append(json_response(json.dumps({

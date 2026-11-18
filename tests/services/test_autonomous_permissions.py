@@ -14,8 +14,9 @@ import discord
 from persona_bot.config import constants
 from persona_bot.core.app_state import AutonomousSession, BotState
 from persona_bot.core.background import spawn
-from persona_bot.services import autonomous_service, autonomous_stage
+from persona_bot.services import autonomous_lifecycle, autonomous_service, autonomous_stage
 from persona_bot.services.autonomous_service import AutonomousService
+from tests.helpers.autonomous_patch import patch_autonomous
 from persona_bot.utils import discord_helpers
 
 
@@ -47,9 +48,7 @@ class AutonomousSessionPermissionTests(unittest.IsolatedAsyncioTestCase):
             ("is_quiet_hours", Mock(return_value=False)),
             ("send_long_message", self.notice), ("spawn", start),
         ):
-            patcher = patch.object(autonomous_service, name, replacement)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+            patch_autonomous(self, name, replacement)  # 開始・停止は autonomous_lifecycle も使う
         self.prepare_channel(stage=False)
 
     def prepare_channel(self, *, stage: bool) -> None:

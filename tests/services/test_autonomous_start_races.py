@@ -13,8 +13,9 @@ import discord
 from persona_bot.core.app_state import BotState
 from persona_bot.core.background import spawn
 from persona_bot.core.commands import register_commands
-from persona_bot.services import autonomous_service, autonomous_stage
+from persona_bot.services import autonomous_lifecycle, autonomous_service, autonomous_stage
 from persona_bot.services.autonomous_service import AutonomousService
+from tests.helpers.autonomous_patch import patch_autonomous
 
 
 class AutonomousStartRaceTests(unittest.IsolatedAsyncioTestCase):
@@ -48,14 +49,12 @@ class AutonomousStartRaceTests(unittest.IsolatedAsyncioTestCase):
             self.tasks.append(task)
             return task
 
-        for target, name, replacement in (
-            (autonomous_stage, "pick_channel", Mock(return_value=self.channel)),
-            (autonomous_service, "is_quiet_hours", Mock(return_value=False)),
-            (autonomous_service, "spawn", start),
-        ):
-            patcher = patch.object(target, name, replacement)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        patcher = patch.object(autonomous_stage, "pick_channel", Mock(return_value=self.channel))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # 開始は autonomous_lifecycle、停止条件の判定は autonomous_service が使うので、同じ代役を両方へ当てる。
+        patch_autonomous(self, "is_quiet_hours", Mock(return_value=False))
+        patch_autonomous(self, "spawn", start)
 
     async def asyncTearDown(self) -> None:
         await asyncio.gather(*self.tasks, return_exceptions=True)

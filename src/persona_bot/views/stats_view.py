@@ -150,13 +150,9 @@ class RankingButton(ui.Button):
                 ADMIN_ONLY_NOTICE, ephemeral=True
             )
             return
-        if not view.try_begin_aggregation("ranking"):
-            await interaction.response.send_message(AGGREGATION_BUSY_NOTICE, ephemeral=True)
-            return
-        try:
-            await self._show_ranking(view, interaction)
-        finally:
-            view.end_aggregation("ranking")
+        await view.run_exclusive(
+            interaction, "ranking", lambda: self._show_ranking(view, interaction), busy_notice=AGGREGATION_BUSY_NOTICE,
+        )
 
     @staticmethod
     async def _show_ranking(view: "StatsView", interaction: discord.Interaction) -> None:
@@ -223,13 +219,10 @@ class FeedbackButton(ui.Button):
             )
             return
 
-        if not view.try_begin_aggregation("feedback"):
-            await interaction.response.send_message(AGGREGATION_BUSY_NOTICE, ephemeral=True)
-            return
-        try:
-            await self._show_summary(feedback, interaction)
-        finally:
-            view.end_aggregation("feedback")
+        await view.run_exclusive(
+            interaction, "feedback", lambda: self._show_summary(feedback, interaction),
+            busy_notice=AGGREGATION_BUSY_NOTICE,
+        )
 
     @staticmethod
     async def _show_summary(feedback: FeedbackService, interaction: discord.Interaction) -> None:
