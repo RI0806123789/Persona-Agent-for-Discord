@@ -29,7 +29,7 @@ from persona_bot.services.stats_graphs import (
     render_ranking_graph,
     render_topic_graph,
 )
-from persona_bot.services.stats_normalization import (
+from persona_bot.services.stats_normalization import (  # noqa: F401（BIG_FIVE_LABELS・normalize_hourly は従来の import 先として再公開）
     BIG_FIVE_LABELS,
     finite_number,
     normalize_big_five,

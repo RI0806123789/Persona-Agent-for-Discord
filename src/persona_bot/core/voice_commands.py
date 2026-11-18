@@ -295,7 +295,7 @@ class VoiceSessionCommands:
         # 「配信中」の看板を出したまま残ってしまう）。
         if guild is not None:
             await self._autonomous.stop_session(
-                guild.id, reason=f"/join による上書き（{interaction.user}）"
+                guild.id, reason="/join による上書き"
             )
             if await skip_superseded_voice_operation(interaction, is_current):
                 return
@@ -612,7 +612,7 @@ class VoiceSessionCommands:
         # セッション記録の破棄・切断までをサービス側がまとめて行う
         # （idea.md の「既存の /leave コマンドで強制的に退出できるようにする」）。
         # 配信していなければ False が返るので、従来どおりの切断へ進む。
-        stopped = await self._autonomous.stop_session(guild.id, reason=f"/leave（{interaction.user}）")
+        stopped = await self._autonomous.stop_session(guild.id, reason="/leave")
         if stopped:
             await interaction.followup.send("退出しました。（自律行動の配信を停止しました）")
             return

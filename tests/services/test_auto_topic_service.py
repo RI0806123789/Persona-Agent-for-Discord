@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import discord
-from persona_bot.services import auto_topic_service
+from persona_bot.services import auto_topic_anniversary, auto_topic_service
 from persona_bot.core.app_state import BotState
 from persona_bot.core.background import spawn
 from persona_bot.services.auto_topic_service import AutoTopicService
@@ -112,7 +112,7 @@ class AutoTopicServiceTests(unittest.IsolatedAsyncioTestCase):
                    {**birthday, "month": 10**100}, {**birthday, "label": "架空の私的な記念日"},
                    {**birthday, "label": " 誕生日 "}]
         self.service._db = SimpleNamespace(profile_load_all_for_key=Mock(return_value={"test-user": entries}))
-        with patch.object(auto_topic_service, "datetime") as clock, \
+        with patch.object(auto_topic_anniversary, "datetime") as clock, \
                 patch.object(self.service, "_celebrate_user", AsyncMock()) as celebrate:
             clock.now.return_value = datetime(2026, 2, 28, tzinfo=timezone.utc)
             await self.service.run_anniversary_checks()

@@ -6,9 +6,9 @@
 
 from unittest.mock import patch
 
-from persona_bot.services import autonomous_service, autonomous_speech
+from persona_bot.services import autonomous_lifecycle, autonomous_service, autonomous_speech
 
-AUTONOMOUS_MODULES = (autonomous_service, autonomous_speech)
+AUTONOMOUS_MODULES = (autonomous_service, autonomous_speech, autonomous_lifecycle)
 
 
 def patch_autonomous(testcase, name, replacement):

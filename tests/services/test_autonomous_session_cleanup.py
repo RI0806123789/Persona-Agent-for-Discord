@@ -14,9 +14,10 @@ import discord
 
 from persona_bot.config import constants
 from persona_bot.core.app_state import AutonomousSession, BotState
-from persona_bot.services import autonomous_service
+from persona_bot.services import autonomous_lifecycle, autonomous_service
 from persona_bot.services import autonomous_stage
 from persona_bot.services.autonomous_service import AutonomousService
+from tests.helpers.autonomous_patch import patch_autonomous
 from persona_bot.core.background import spawn
 from persona_bot.core import bot_client
 from persona_bot.core.bot_client import PersonaClient
@@ -44,9 +45,7 @@ class AutonomousSessionCleanupTests(unittest.IsolatedAsyncioTestCase):
         )
         self.service = AutonomousService(self.client, self.state, None, None, None, None)
         self.notice = AsyncMock()
-        notice_patch = patch.object(autonomous_service, "send_long_message", self.notice)
-        notice_patch.start()
-        self.addCleanup(notice_patch.stop)
+        patch_autonomous(self, "send_long_message", self.notice)
         self.tasks = []
 
         def start(coro, **kwargs):
@@ -54,9 +53,7 @@ class AutonomousSessionCleanupTests(unittest.IsolatedAsyncioTestCase):
             self.tasks.append(task)
             return task
 
-        spawn_patch = patch.object(autonomous_service, "spawn", side_effect=start)
-        spawn_patch.start()
-        self.addCleanup(spawn_patch.stop)
+        patch_autonomous(self, "spawn", Mock(side_effect=start))
 
     async def asyncTearDown(self) -> None:
         await asyncio.gather(*self.tasks, return_exceptions=True)
@@ -487,6 +484,12 @@ class AutonomousSessionCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.instance.delete.assert_not_awaited()
         self.voice.disconnect.assert_not_awaited()
 
+    async def test_stop_logs_the_fixed_reason_phrase(self) -> None:
+        """終了理由（固定の定型句）は運用ログへ出し、呼び出し側の引数が黙って捨てられないようにする（#469）。"""
+        with self.assertLogs("persona_bot.services.autonomous_service", level="INFO") as captured:
+            await self.service.stop_session(1, reason="架空の定型理由")
+        self.assertTrue(any("配信を終了しました（理由: 架空の定型理由）" in line for line in captured.output))
+
     async def test_stage_without_recorded_ownership_id_is_not_deleted(self) -> None:
         self.session.stage_instance_id = None
         await self.service.stop_session(1, reason="架空の停止")
@@ -655,7 +658,8 @@ class AutonomousSessionCleanupTests(unittest.IsolatedAsyncioTestCase):
         )
         self.service._speak_opening = AsyncMock()
         with (patch.object(autonomous_stage, "pick_channel", return_value=self.channel),
-              patch.object(autonomous_service, "is_quiet_hours", return_value=False)):
+              patch.object(autonomous_service, "is_quiet_hours", return_value=False),
+              patch.object(autonomous_lifecycle, "is_quiet_hours", return_value=False)):
             await self.service._start_session(self.guild, self.settings)
         session = self.settings.autonomous_session
         self.assertIsNotNone(session)
@@ -675,7 +679,8 @@ class AutonomousSessionCleanupTests(unittest.IsolatedAsyncioTestCase):
         last_activity = self.settings.autonomous_last_activity
         before = datetime.now(timezone.utc)
         with (patch.object(autonomous_stage, "pick_channel", return_value=self.channel),
-              patch.object(autonomous_service, "is_quiet_hours", return_value=False)):
+              patch.object(autonomous_service, "is_quiet_hours", return_value=False),
+              patch.object(autonomous_lifecycle, "is_quiet_hours", return_value=False)):
             await self.service._start_session(self.guild, self.settings)
         self.assertIsNone(self.settings.autonomous_session)
         self.assertEqual(self.settings.autonomous_start_failures, 1)
