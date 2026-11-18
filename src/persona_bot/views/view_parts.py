@@ -1,6 +1,5 @@
 import logging
 import asyncio
-from dataclasses import dataclass
 import io
 from inspect import isawaitable
 from typing import Any, Callable, Coroutine, Optional
@@ -11,28 +10,28 @@ from discord import ui
 from persona_bot.config.constants import DISCORD_SELECT_LABEL_MAX_LENGTH, VIEW_TIMEOUT_SECONDS
 from persona_bot.core.background import TaskOwner, _current_owner
 from persona_bot.core.app_state import GuildSettings
-from persona_bot.utils.discord_helpers import is_administrator, is_current_administrator, reject_blocked_interaction, split_message
+from persona_bot.utils.discord_helpers import reject_blocked_interaction, split_message
+# 操作世代と画面更新の直列化は panel_state.py、権限確認は panel_authorization.py（#470）。
+# 従来の import 先（テストや他のビューが使う名前）を保つため、ここから再公開する。
+from persona_bot.views.panel_authorization import (  # noqa: F401（再公開）
+    authorize_administrator_operation,
+    authorize_panel_operation,
+    begin_current_panel_operation,
+    confirm_administrator_operation,
+    confirm_panel_permission,
+)
+from persona_bot.views.panel_state import (  # noqa: F401（再公開）
+    _edit_panel_message,
+    _PanelOperation,
+    _PanelState,
+    begin_panel_operation,
+    bind_panel_message,
+    edit_panel_message,
+    panel_operation_is_current,
+)
 
 
 logger = logging.getLogger(__name__)
-
-
-async def begin_current_panel_operation(view, interaction, *, defer: bool = False) -> bool:
-    """パネルの操作を開始し、そのパネルがまだ有効かを返す（#453）。
-
-    すでに閉じた・別の画面へ移ったパネルの操作なら、応答だけを保留して False を返す
-    （呼び出し側は何も実行せずに戻ること）。有効なら True を返し、`defer=True` のときは
-    その場で応答（本人だけに見えるエフェメラル）も保留する。
-    ★ 世代の確保は最初の `await` より前に行う（後から始まった操作が先に世代を取れるように）。
-    """
-    operation = begin_panel_operation(view, interaction)
-    if operation is not None and not operation.is_current():
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
-        return False
-    if defer:
-        await interaction.response.defer(ephemeral=True)
-    return True
 
 
 async def defer_and_render_graph(
@@ -54,108 +53,10 @@ async def defer_and_render_graph(
         return False, None
 
 
-async def authorize_panel_operation(view, interaction, *, allowed, recheck, notice: str) -> bool:
-    """押下時と待機後の権限を確かめ、拒否時は適切な応答を返す。"""
-    if not allowed:
-        await interaction.response.send_message(notice, ephemeral=True)
-        return False
-    operation = begin_panel_operation(view, interaction)
-    await interaction.response.defer(ephemeral=True)
-    if operation is not None and not operation.is_current():
-        # すでに閉じた・別の画面へ移ったパネルの操作は、何も実行しない。
-        return False
-    if not await confirm_panel_permission(interaction, await recheck(interaction), notice=notice):
-        return False
-    # 権限の再確認を待つ間に「戻る」などで画面が移っていたら、副作用を起こさせない。
-    return panel_operation_is_current(view, interaction)
-
-
-def _is_personal_settings_operation(view, interaction, allow_dm: bool) -> bool:
-    return (
-        allow_dm and getattr(interaction, "guild", None) is None
-        and getattr(getattr(view, "guild_settings", None), "guild_id", None) is None
-    )
-
-
-async def confirm_administrator_operation(view, interaction, *, allow_dm: bool = False, notice: str) -> bool:
-    """長い待機の後に管理者を再取得し、失効した操作・設定を保存させない。"""
-    allowed = _is_personal_settings_operation(view, interaction, allow_dm) or (
-        getattr(interaction, "guild", None) is not None and await is_current_administrator(interaction)
-    )
-    if not await confirm_panel_permission(interaction, allowed, notice=notice):
-        return False
-    return panel_operation_is_current(view, interaction) and await view.ensure_settings_current(interaction)
-
-
-async def authorize_administrator_operation(
-    view, interaction, *, allow_dm: bool = False, notice: str, refresh: bool = True,
-) -> bool:
-    """写しの権限で即時拒否し、保留後の再確認を共通化する。DM許可は明示する。"""
-    allowed = _is_personal_settings_operation(view, interaction, allow_dm) or (
-        getattr(interaction, "guild", None) is not None and is_administrator(getattr(interaction, "user", None))
-    )
-
-    async def recheck(_interaction):
-        return not refresh or _is_personal_settings_operation(view, interaction, allow_dm) or await is_current_administrator(interaction)
-
-    if not await authorize_panel_operation(view, interaction, allowed=allowed, recheck=recheck, notice=notice):
-        return False
-    return panel_operation_is_current(view, interaction) and await view.ensure_settings_current(interaction)
-
-
-async def confirm_panel_permission(interaction, allowed: bool, *, notice: str, followup: bool = False) -> bool:
-    """待機後の判定結果を返し、画面の更新先に応じて拒否を案内する。"""
-    if allowed:
-        return True
-    if followup:
-        await interaction.followup.send(notice, ephemeral=True)
-    else:
-        await edit_panel_message(interaction, deferred=True, content=notice, view=None)
-    return False
-
 # ハブ（機能パネル）を再生成する呼び出し可能オブジェクトの型。
 # functions_view を直接 import すると循環参照になるため、呼び出し側から
 # FunctionsView.clone のような生成関数を受け取る形にする。
 HubFactory = Callable[[discord.Interaction], Any]
-
-
-class _PanelState:
-    def __init__(self, view: "PanelView") -> None:
-        self.current: PanelView | None = view
-        self.generation = 0
-        self.edit_lock = asyncio.Lock()
-
-
-@dataclass(frozen=True)
-class _PanelOperation:
-    source: "PanelView"
-    state: _PanelState
-    generation: int
-
-    def is_current(self) -> bool:
-        # 元Viewが遷移で停止しても、受付済みの最新操作は次の遷移を完了できる。
-        # 停止済みViewそのものの再表示は、編集時に別途拒否する。
-        return self.generation == self.state.generation
-
-
-def begin_panel_operation(view: ui.View | None, interaction: discord.Interaction) -> _PanelOperation | None:
-    """DB待機より前に操作の世代を確保する。同じInteractionでは二重に進めない。"""
-    if not isinstance(view, PanelView):
-        return None
-    extras = getattr(interaction, "extras", None)
-    if not isinstance(extras, dict):
-        extras = interaction.extras = {}
-    previous = extras.get("persona_panel_operation")
-    if isinstance(previous, _PanelOperation) and previous.source is view:
-        return previous
-    state = view._panel_state
-    if state.current is not view or view.is_finished():
-        operation = _PanelOperation(view, state, -1)
-    else:
-        state.generation += 1
-        operation = _PanelOperation(view, state, state.generation)
-    extras["persona_panel_operation"] = operation
-    return operation
 
 
 def select_option_text(text: Any, *, fallback: str = "") -> str:
@@ -163,82 +64,6 @@ def select_option_text(text: Any, *, fallback: str = "") -> str:
     single_line = " ".join(("" if text is None else str(text)).split())
     return single_line[:DISCORD_SELECT_LABEL_MAX_LENGTH].rstrip() or fallback
 
-
-def panel_operation_is_current(view: ui.View | None, interaction: discord.Interaction) -> bool:
-    extras = getattr(interaction, "extras", {})
-    operation = extras.get("persona_panel_operation") if isinstance(extras, dict) else None
-    if not isinstance(operation, _PanelOperation):
-        operation = begin_panel_operation(view, interaction)
-    return operation is None or operation.is_current()
-
-
-async def _edit_panel_message(
-    interaction: discord.Interaction, *, content: str, view: ui.View | None, deferred: bool,
-) -> None:
-    if deferred or getattr(interaction.response, "is_done", lambda: not hasattr(interaction.response, "edit_message"))():
-        await interaction.edit_original_response(content=content, view=view)
-    else:
-        await interaction.response.edit_message(content=content, view=view)
-
-
-async def edit_panel_message(
-    interaction: discord.Interaction, *, content: str, view: ui.View | None = None,
-    source: ui.View | None = None, deferred: bool = False,
-) -> bool:
-    """同じパネルの編集を直列化し、後から始まった操作がある旧更新を破棄する。"""
-    extras = getattr(interaction, "extras", {})
-    operation = extras.get("persona_panel_operation") if isinstance(extras, dict) else None
-    if not isinstance(operation, _PanelOperation) or (source is not None and operation.source is not source):
-        operation = begin_panel_operation(source if source is not None else view, interaction)
-    if operation is None:
-        await _edit_panel_message(interaction, content=content, view=view, deferred=deferred)
-        return True
-    state = operation.state
-    try:
-        # 先行するHTTP編集が遅くても、ロック待ちでInteractionを失効させない。
-        if state.edit_lock.locked() and not getattr(interaction.response, "is_done", lambda: False)():
-            await interaction.response.defer(ephemeral=True)
-        async with state.edit_lock:
-            if not operation.is_current() or (view is not None and view.is_finished()):
-                if view is not None and view is not state.current:
-                    view.stop()
-                if not getattr(interaction.response, "is_done", lambda: False)():
-                    await interaction.response.defer(ephemeral=True)
-                return False
-            previous = state.current
-            # 閉じる編集の通信中は新しい操作を受け付けない。後発のセレクトが
-            # 実行中の世代を無効にし、両方の結果が破棄されることを防ぐ。
-            if view is None:
-                state.current = None
-            try:
-                await _edit_panel_message(interaction, content=content, view=view, deferred=deferred)
-            except BaseException:
-                if view is None and operation.is_current() and previous is not None and not previous.is_finished():
-                    state.current = previous
-                raise
-            if previous is not view:
-                state.current = view
-                if isinstance(view, PanelView):
-                    view._panel_state = state
-                if previous is not None:
-                    previous.stop()
-            return True
-    except BaseException:
-        # ロック待ちの取り消しでも、不採用の遷移先を残さない。
-        if view is not None and view is not state.current:
-            view.stop()
-        raise
-
-
-async def bind_panel_message(
-    interaction: discord.Interaction, panel: ui.View, *, previous_message: Any = None,
-) -> None:
-    """編集後の参照取得に失敗しても、直前のWebhook参照で時間切れ処理を保つ。"""
-    panel.message = previous_message
-    try:
-        panel.message = await interaction.original_response()
-    except Exception as error:
-        logger.warning("パネルの応答参照の取得に失敗しました。", exc_info=error)
 
 
 PANEL_BUSY_NOTICE = "処理中です。結果が届くまでお待ちください。"
@@ -342,6 +167,25 @@ class PanelView(OwnedView):
 
     def end_aggregation(self, name: str) -> None:
         self._running_aggregations.discard(name)
+
+    async def run_exclusive(
+        self, interaction: discord.Interaction, name: str, work: Callable[[], Coroutine[Any, Any, Any]],
+        *, busy_notice: str = PANEL_BUSY_NOTICE,
+    ) -> bool:
+        """同じ名前の処理が実行中なら本人だけに断り、そうでなければ `work` を実行して必ず解除する（#470）。
+
+        「`try_begin_aggregation` → 実行中の案内 → `try/finally` で `end_aggregation`」の定型を1か所にまとめたもの。
+        実行したら True、実行中で断ったら False を返す。判定と登録の間に await を挟まない
+        （`try_begin_aggregation` の約束）。`work` の例外はそのまま呼び出し側へ伝わる。
+        """
+        if not self.try_begin_aggregation(name):
+            await interaction.response.send_message(busy_notice, ephemeral=True)
+            return False
+        try:
+            await work()
+        finally:
+            self.end_aggregation(name)
+        return True
 
     def stop(self) -> None:
         if self._panel_state.current is self:

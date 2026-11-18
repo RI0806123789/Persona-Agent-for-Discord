@@ -23,7 +23,7 @@ from persona_bot.views.unblock_view import UnblockView
 from persona_bot.utils.usage_graph import UsageTracker
 from persona_bot.views.view_parts import (
     authorize_administrator_operation, authorize_panel_operation, begin_panel_operation, edit_panel_message,
-    PANEL_BUSY_NOTICE, PanelView, defer_and_render_graph, send_graph_ephemeral, swap_panel,
+    PanelView, defer_and_render_graph, send_graph_ephemeral, swap_panel,
 )
 
 
@@ -92,11 +92,7 @@ class GraphButton(ui.Button):
             await interaction.response.send_message("まだ利用データがありません。", ephemeral=True)
             return
 
-        # 結果は別の followup で送るためパネルの操作世代では連打を止められない。実行中は断る（#415）。
-        if not hub.try_begin_aggregation("graph"):
-            await interaction.response.send_message(PANEL_BUSY_NOTICE, ephemeral=True)
-            return
-        try:
+        async def show_graph() -> None:
             rendered, buffer = await defer_and_render_graph(interaction, hub.usage.build_graph_buffer)
             if not rendered:
                 return
@@ -106,8 +102,9 @@ class GraphButton(ui.Button):
                 followup=True, error_log="グラフ送信中に予期せぬエラー",
                 error_notice="エラー: グラフの送信に失敗しました。",
             )
-        finally:
-            hub.end_aggregation("graph")
+
+        # 結果は別の followup で送るためパネルの操作世代では連打を止められない。実行中は断る（#415）。
+        await hub.run_exclusive(interaction, "graph", show_graph)
 
 
 class GroundingToggleButton(ui.Button):
@@ -148,11 +145,7 @@ class NgReloadButton(ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         hub: "FunctionsView" = self.view  # type: ignore[assignment]
-        # 連打で同じ再読込と同じ結果の通知を重ねない（#415）。
-        if not hub.try_begin_aggregation("ng_reload"):
-            await interaction.response.send_message(PANEL_BUSY_NOTICE, ephemeral=True)
-            return
-        try:
+        async def reload_words() -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
             try:
                 await run_in_thread(hub.ng_filter.reload)
@@ -166,8 +159,9 @@ class NgReloadButton(ui.Button):
             await interaction.followup.send(
                 f"✅ NGワードリストを再読み込みしました。（{hub.ng_filter.word_count}件）", ephemeral=True
             )
-        finally:
-            hub.end_aggregation("ng_reload")
+
+        # 連打で同じ再読込と同じ結果の通知を重ねない（#415）。
+        await hub.run_exclusive(interaction, "ng_reload", reload_words)
 
 
 class StatsButton(ui.Button):

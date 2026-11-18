@@ -92,5 +92,45 @@ class ServiceSplitTests(unittest.TestCase):
         self.assertEqual(list(inspect.signature(MemoryService.__init__).parameters), ["self", "genai_client", "db"])
 
 
+class VoiceAndViewSplitTests(unittest.TestCase):
+    """#470 の分割後も、従来の import 先・ロガー名・クラス構成が変わらないことを確かめる。"""
+
+    def test_voice_conversation_parts_keep_the_original_names(self):
+        from persona_bot.services import voice_conversation_playback, voice_conversation_service
+        original = voice_conversation.logger.name
+        self.assertEqual(voice_conversation_playback.logger.name, original)
+        self.assertEqual(voice_conversation_service.logger.name, original)
+        self.assertTrue(issubclass(voice_conversation.VoiceConversation, voice_conversation_playback.VoicePlaybackMixin))
+        # 従来の `from voice_conversation import VoiceConversationService` は遅延で再公開される（循環を避けるため）。
+        self.assertIs(voice_conversation.VoiceConversationService, voice_conversation_service.VoiceConversationService)
+        for name in ("_start_playback", "_abort_playback", "_fade_out_playback", "_discard_response", "_bot_audible"):
+            self.assertTrue(hasattr(voice_conversation.VoiceConversation, name), name)
+        self.assertFalse(hasattr(voice_conversation.VoiceConversation, "_playback"))
+
+    def test_playback_state_is_held_in_one_object(self):
+        from persona_bot.services.voice_conversation_state import _PlaybackState
+        state = _PlaybackState()
+        self.assertIsNone(state.source)
+        self.assertIsNone(state.owner)
+        self.assertFalse(state.started)
+        self.assertIsNone(state.fading)
+        self.assertEqual(state.last_audible_at, float("-inf"))
+
+    def test_tts_parts_are_reachable_from_voice(self):
+        from persona_bot.audio import speech_text, tts_synthesis, voice
+        self.assertIs(voice.build_speech_text, speech_text.build_speech_text)
+        self.assertIs(voice._synthesize_pcm, tts_synthesis._synthesize_pcm)
+        self.assertEqual(tts_synthesis.logger.name, voice.logger.name)
+
+    def test_view_parts_reexports_the_split_helpers(self):
+        from persona_bot.views import panel_authorization, panel_state, view_parts
+        self.assertIs(view_parts.edit_panel_message, panel_state.edit_panel_message)
+        self.assertIs(view_parts.begin_panel_operation, panel_state.begin_panel_operation)
+        self.assertIs(view_parts.authorize_administrator_operation, panel_authorization.authorize_administrator_operation)
+        self.assertEqual(panel_state.logger.name, view_parts.logger.name)
+        self.assertEqual(panel_authorization.logger.name, view_parts.logger.name)
+        self.assertTrue(callable(view_parts.PanelView.run_exclusive))
+
+
 if __name__ == "__main__":
     unittest.main()
