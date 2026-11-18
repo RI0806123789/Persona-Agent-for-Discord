@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from persona_bot.audio import voice
+from persona_bot.audio import speech_text, tts_synthesis, voice
 from persona_bot.core.app_state import BotState
 from persona_bot.core.database import Database
 from persona_bot.services import feedback_service, reminder_service
@@ -114,11 +114,11 @@ class ServiceThreadCancellationTests(unittest.IsolatedAsyncioTestCase):
                     await self.assert_waits(self.db, name, invoke)
 
     async def test_audio_synthesis_and_decode_wait_on_cancellation(self):
-        with patch.object(voice, "_edge_tts_failing", False), patch.object(
-            voice, "_fetch_edge_mp3", new=AsyncMock(side_effect=OSError("架空の障害"))), patch("builtins.print"):
-            await self.assert_waits(voice, "_fetch_gtts_mp3", lambda: voice._fetch_mp3("架空の音声", {}), b"mp3")
-        with patch.object(voice, "_fetch_mp3", new=AsyncMock(return_value=b"mp3")):
-            await self.assert_waits(voice, "_decode_to_pcm", lambda: voice._synthesize_pcm("架空の音声", {}), b"pcm")
+        with patch.object(tts_synthesis, "_edge_tts_failing", False), patch.object(
+            tts_synthesis, "_fetch_edge_mp3", new=AsyncMock(side_effect=OSError("架空の障害"))), patch("builtins.print"):
+            await self.assert_waits(tts_synthesis, "_fetch_gtts_mp3", lambda: tts_synthesis._fetch_mp3("架空の音声", {}), b"mp3")
+        with patch.object(tts_synthesis, "_fetch_mp3", new=AsyncMock(return_value=b"mp3")):
+            await self.assert_waits(tts_synthesis, "_decode_to_pcm", lambda: voice._synthesize_pcm("架空の音声", {}), b"pcm")
 
     async def test_cancelled_registration_finishes_transaction_before_database_is_closed(self):
         with tempfile.TemporaryDirectory() as directory:

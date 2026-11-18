@@ -27,181 +27,26 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass
 import io
-import re
 from typing import Any, Callable, Mapping
 
 import discord
-import edge_tts
-import miniaudio
-import numpy as np
-from gtts import gTTS
 
 from persona_bot.audio.playback import get_playback_controller
-from persona_bot.core.background import run_in_thread, spawn
+# 読み上げ用の文面の整形と音声合成は別モジュール（#470）。従来の名前で再公開する。
+from persona_bot.audio.speech_text import build_speech_text  # noqa: F401（従来の import 先として再公開）
+from persona_bot.audio.tts_synthesis import _synthesize_pcm
+from persona_bot.core.background import spawn
 from persona_bot.config.constants import (
-    EDGE_TTS_VOICE_FEMALE,
-    PCM_INT16_MAX,
-    PCM_INT16_MIN,
     TTS_CHANNELS,
-    TTS_EDGE_TIMEOUT_SECONDS,
-    TTS_GTTS_CONNECT_TIMEOUT_SECONDS,
-    TTS_GTTS_READ_TIMEOUT_SECONDS,
-    TTS_LANG,
-    TTS_MAX_CHARS,
     TTS_PLAY_TIMEOUT_MARGIN_SECONDS,
     TTS_QUEUE_MAX,
     TTS_SAMPLE_RATE,
     TTS_TIMEOUT_SECONDS,
-    TTS_TRUNCATION_NOTICE,
 )
-from persona_bot.audio.voice_dsp import apply_equalizer, needs_equalizer, resolve_profile
-from persona_bot.services.affinity_service import strip_speech_tags
+from persona_bot.audio.voice_dsp import resolve_profile
 
 
 logger = logging.getLogger(__name__)
-
-# 読み上げに不向きな要素を落とすためのパターン群。
-# 音声で聞いて意味をなさないもの（URL・記号・コード）は読み上げる価値がないうえ、
-# 音声エンジンは URL を1文字ずつ読み上げてしまい非常に長くなるため必ず除去する。
-_CODE_BLOCK_PATTERN = re.compile(r"```.*?(?:```|$)", re.DOTALL)
-_INLINE_CODE_PATTERN = re.compile(r"`[^`]*`")
-# URL の直後に空白なしで続く日本語や全角句読点を巻き込まない。
-_URL_PATTERN = re.compile(r"https?://[\x21-\x7e]+")
-# Discord のカスタム絵文字 <:name:123> / アニメ絵文字 <a:name:123>
-_CUSTOM_EMOJI_PATTERN = re.compile(r"<a?:\w+:\d+>")
-# メンション <@123> / <@!123> / <@&123>（ロール） / <#123>（チャンネル）
-_MENTION_PATTERN = re.compile(r"<[@#][!&]?\d+>")
-# Markdown の装飾記号と引用・見出し記号（読み上げでは雑音にしかならない）
-_MARKDOWN_SYMBOL_PATTERN = re.compile(r"[*_~>#|`]")
-_WHITESPACE_PATTERN = re.compile(r"\s+")
-
-# edge-tts が失敗し続けている間、返信のたびに同じログを出さないための状態。
-# 「失敗し始めたとき」と「復旧したとき」の2回だけ記録する。
-_edge_tts_failing = False
-
-
-def build_speech_text(response_text: str) -> str:
-    """返信テキストを読み上げ向けに整形する。
-
-    テキストチャンネルには元の全文が既に投稿されているため、ここでは
-    「声で聞いて分かる部分」だけを残す。長すぎる返信は途中で切り、
-    ボイスチャンネルを何分も占有しないようにする。
-    """
-    text = strip_speech_tags(response_text)
-    text = _CODE_BLOCK_PATTERN.sub(" ", text)
-    text = _INLINE_CODE_PATTERN.sub(" ", text)
-    text = _URL_PATTERN.sub(" ", text)
-    text = _CUSTOM_EMOJI_PATTERN.sub(" ", text)
-    text = _MENTION_PATTERN.sub(" ", text)
-    text = _MARKDOWN_SYMBOL_PATTERN.sub(" ", text)
-    text = _WHITESPACE_PATTERN.sub(" ", text).strip()
-
-    if not any(character.isalnum() for character in text):
-        return ""
-    if len(text) > TTS_MAX_CHARS:
-        text = text[:TTS_MAX_CHARS].rstrip() + TTS_TRUNCATION_NOTICE
-    return text
-
-
-async def _fetch_edge_mp3(text: str, profile: Mapping[str, Any]) -> bytes:
-    """edge-tts で mp3 を取得する。
-
-    edge-tts は async ネイティブで、通信は WebSocket 越しの非同期処理。
-    そのままイベントループ上で await してよい（待っている間ループは塞がらない）。
-    **`asyncio.to_thread` の中で `asyncio.run()` して呼ばないこと** —
-    イベントループが入れ子になり正常に動作しない。
-    """
-    communicate = edge_tts.Communicate(
-        text,
-        str(profile.get("voice") or EDGE_TTS_VOICE_FEMALE),
-        rate=str(profile.get("rate") or "+0%"),
-        pitch=str(profile.get("pitch") or "+0Hz"),
-    )
-    buffer = io.BytesIO()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            buffer.write(chunk["data"])
-    return buffer.getvalue()
-
-
-def _fetch_gtts_mp3(text: str) -> bytes:
-    """退避用。gTTS で mp3 を取得する（同期処理なので別スレッドから呼ぶこと）。"""
-    with io.BytesIO() as buffer:
-        gTTS(
-            text=text, lang=TTS_LANG,
-            timeout=(TTS_GTTS_CONNECT_TIMEOUT_SECONDS, TTS_GTTS_READ_TIMEOUT_SECONDS),
-        ).write_to_fp(buffer)
-        return buffer.getvalue()
-
-
-async def _fetch_mp3(text: str, profile: Mapping[str, Any]) -> bytes:
-    """主エンジン（edge-tts）で合成し、駄目なら gTTS へ退避する。"""
-    global _edge_tts_failing
-
-    failure = None
-    try:
-        mp3 = await asyncio.wait_for(
-            _fetch_edge_mp3(text, profile), timeout=TTS_EDGE_TIMEOUT_SECONDS,
-        )
-        if mp3:
-            if _edge_tts_failing:
-                logger.info('TTS: edge-tts が復旧しました。通常の読み上げに戻ります。')
-                _edge_tts_failing = False
-            return mp3
-    except Exception as error:
-        failure = error
-
-    if not _edge_tts_failing:
-        # 失敗が続く間は返信のたびにログが溢れるため、状態が変わったときだけ残す。
-        logger.warning('TTS: edge-tts で音声を取得できなかったため gTTS で読み上げます。', exc_info=failure)
-        _edge_tts_failing = True
-
-    # 退避時は話者・高さ・速さを再現できないためキャラ差は失われる（音色だけは掛かる）。
-    return await run_in_thread(_fetch_gtts_mp3, text)
-
-
-def _decode_to_pcm(mp3_bytes: bytes, profile: Mapping[str, Any]) -> bytes:
-    """mp3 を Discord へそのまま送出できる生 PCM に変換し、音色を適用する。
-
-    デコードも EQ も同期の CPU 処理のため、呼び出し側から `run_in_thread` で
-    別スレッドに逃がして使う（イベントループを止めるとボット全体の応答が固まる）。
-    """
-    if not needs_equalizer(profile):
-        # 音色を変えないペルソナ。miniaudio 側で 48kHz / ステレオ / 16bit への
-        # 変換まで済ませ、numpy を一切通さない。
-        decoded = miniaudio.decode(
-            mp3_bytes,
-            output_format=miniaudio.SampleFormat.SIGNED16,
-            nchannels=TTS_CHANNELS,
-            sample_rate=TTS_SAMPLE_RATE,
-        )
-        return decoded.samples.tobytes()
-
-    # 音色を変えるペルソナ。EQ はモノラル1ch分だけ掛ければ足りるので、
-    # ステレオ化は最後に回す（計算量が半分で済む）。
-    decoded = miniaudio.decode(
-        mp3_bytes,
-        output_format=miniaudio.SampleFormat.SIGNED16,
-        nchannels=1,
-        sample_rate=TTS_SAMPLE_RATE,
-    )
-    mono = np.frombuffer(decoded.samples.tobytes(), dtype=np.int16)
-    shaped = apply_equalizer(mono, profile, sample_rate=TTS_SAMPLE_RATE)
-
-    # EQ のブーストで int16 の範囲を超えることがあるので、必ずクリップしてから丸める。
-    clipped = np.clip(shaped, PCM_INT16_MIN, PCM_INT16_MAX).astype(np.int16)
-    # モノラル1ch分を L/R へ複製してインターリーブする（Discord はステレオしか受け取らない）。
-    return np.repeat(clipped, TTS_CHANNELS).tobytes()
-
-
-async def _synthesize_pcm(text: str, profile: Mapping[str, Any]) -> bytes:
-    """テキストを Discord へそのまま送出できる生 PCM に変換する。
-
-    ネットワーク待ち（edge-tts）は非同期のままイベントループ上で、
-    CPU 処理（デコードと EQ）は別スレッドで実行する。
-    """
-    mp3_bytes = await _fetch_mp3(text, profile)
-    return await run_in_thread(_decode_to_pcm, mp3_bytes, profile)
 
 
 async def _play_pcm(

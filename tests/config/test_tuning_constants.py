@@ -142,7 +142,7 @@ class VoiceTuningTests(unittest.TestCase):
         np.testing.assert_array_equal(result, 0.5 ** np.arange(11))
 
     def test_pcm_clips_to_configured_limits_before_stereo_conversion(self) -> None:
-        module = load_with_tuning("persona_bot.audio.voice", PCM_INT16_MIN=-100.0, PCM_INT16_MAX=100.0)
+        module = load_with_tuning("persona_bot.audio.tts_synthesis", PCM_INT16_MIN=-100.0, PCM_INT16_MAX=100.0)
         decoded = SimpleNamespace(samples=np.zeros(3, dtype=np.int16))
         with patch.object(module, "needs_equalizer", return_value=True), \
                 patch.object(module.miniaudio, "decode", return_value=decoded), \
