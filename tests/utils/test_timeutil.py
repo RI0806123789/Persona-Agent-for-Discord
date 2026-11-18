@@ -22,6 +22,7 @@ from persona_bot.utils.logging_setup import OperationalFormatter
 from persona_bot.utils.timeutil import (
     WEEKDAY_NAMES_JA,
     as_utc,
+    format_prompt_now,
     format_weekday,
     parse_iso_datetime,
     resolve_timezone,
@@ -210,6 +211,18 @@ assert local.isoformat() == '2026-10-19T00:00:00+09:00', local
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("UTC で代用します", result.stdout + result.stderr)
+
+
+class PromptNowTests(unittest.TestCase):
+    """プロンプトへ埋める現在日時の表記（リマインダー判定と委任の子で共通。#469）。"""
+
+    def test_prompt_now_has_weekday_and_optional_zone_label(self):
+        tokyo = timezone(timedelta(hours=9))
+        fixed = datetime(2026, 11, 19, 9, 30, tzinfo=tokyo)  # 木曜日
+        with patch.object(timeutil, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = fixed
+            self.assertEqual(format_prompt_now(tokyo), "2026-11-19 09:30（木曜日）")
+            self.assertEqual(format_prompt_now(tokyo, include_zone=True), f"2026-11-19 09:30（木曜日、{timezone_label(tokyo)}）")
 
 
 if __name__ == "__main__":

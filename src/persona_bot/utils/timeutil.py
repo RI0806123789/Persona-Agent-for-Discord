@@ -92,3 +92,16 @@ def format_weekday(dt: datetime) -> str:
         dt: 曜日を取り出す日時。tz 有無は問わない（weekday() はどちらでも使える）。
     """
     return WEEKDAY_NAMES_JA[dt.weekday()]
+
+
+def format_prompt_now(tz: tzinfo, *, include_zone: bool = False) -> str:
+    """プロンプトへ埋める「現在日時（曜日つき）」の文字列を返す。
+
+    例: `2026-11-19 09:30（木曜日）`。`include_zone=True` なら `（木曜日、Asia/Tokyo）` のように
+    実際に解決できたタイムゾーン名（timezone_label）を添える。相対表現の解釈に使う基準日時は、
+    リマインダー判定（content_moderator）と委任の子（agent_service）で表記を揃えるため、
+    ここに1つだけ置く。
+    """
+    now = datetime.now(tz)
+    suffix = f"、{timezone_label(tz)}" if include_zone else ""
+    return f"{now:%Y-%m-%d %H:%M}（{format_weekday(now)}曜日{suffix}）"

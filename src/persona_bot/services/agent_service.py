@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Mapping, NamedTuple
 
 from persona_bot.config.constants import (
@@ -27,7 +26,7 @@ from persona_bot.services.affinity_service import strip_affinity_tag
 from persona_bot.services.agent_plan import AgentPlan
 from persona_bot.services.prompting import build_agent_worker_prompt
 from persona_bot.utils.grounding import normalize_sources
-from persona_bot.utils.timeutil import format_weekday, resolve_timezone, timezone_label
+from persona_bot.utils.timeutil import format_prompt_now, resolve_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +76,7 @@ class AgentService:
         self._running_users.discard(user_id)
 
     def _now_text(self) -> str:
-        now = datetime.now(self._tz)
-        return f"{now:%Y-%m-%d %H:%M}（{format_weekday(now)}曜日、{timezone_label(self._tz)}）"
+        return format_prompt_now(self._tz, include_zone=True)
 
     async def run(
         self,

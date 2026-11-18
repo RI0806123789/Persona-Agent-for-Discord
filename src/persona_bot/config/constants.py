@@ -123,6 +123,9 @@ MODERATION_TIMEOUT_SECONDS = 10.0
 # 全件を載せるとプロンプトが肥大化してトークンを浪費するため先頭からこの件数だけ渡す。
 # UI 側の DISCORD_SELECT_LABEL_MAX_LENGTH と数値は同じだが意味がまったく違うので別名にする。
 MODERATION_NG_WORD_SAMPLE_LIMIT = 100
+# ボットの応答が出力モデレーションで不適切と判定されたとき、本文の代わりに返す定型の謝罪文。
+# 親密度・記憶・評価の対象にしないため、呼び出し側はこの文面そのものではなく判定の成否で分岐する。
+BOT_RESPONSE_REFUSAL_TEXT = "申し訳ありませんが、適切な応答を生成できませんでした。"
 
 # 通常会話は入力AI判定・画像読込より前に確保し、満杯なら待たずに見送る。
 CHAT_RATE_WINDOW_SECONDS = 60.0
@@ -234,6 +237,9 @@ AGENT_ROLE_MAX_CHARS = 60
 AGENT_TASK_MAX_CHARS = 600
 AGENT_EXPECTED_OUTPUT_MAX_CHARS = 300
 AGENT_STEP_NAME_MAX_CHARS = 30
+# ルーターがロールまたは手順を返さなかったときの既定値（委任の判定そのものは有効のまま、子へ渡す）。
+AGENT_DEFAULT_ROLE = "調査担当"
+AGENT_DEFAULT_STEP = "依頼された作業"
 # 子の各手順のメモを次の手順へ引き継ぐときの上限（文字数。1手順あたり）。
 AGENT_STEP_NOTE_MAX_CHARS = 3000
 # 子へ伝える「現在日時」のタイムゾーン（「来週の天気」などを正しく扱わせるため）。

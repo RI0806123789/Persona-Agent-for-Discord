@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from persona_bot.config.constants import (
+    AGENT_DEFAULT_ROLE,
+    AGENT_DEFAULT_STEP,
     AGENT_ENABLED,
     AGENT_EXPECTED_OUTPUT_MAX_CHARS,
     AGENT_MAX_STEPS,
@@ -76,8 +78,8 @@ def normalize_agent_plan(value: Any) -> AgentPlan | None:
     )[:AGENT_MAX_STEPS]
     return AgentPlan(
         delegate=True,
-        role=role or "調査担当",
+        role=role or AGENT_DEFAULT_ROLE,
         task=task,
         expected_output=normalize_extracted_text(value.get("expected_output"), AGENT_EXPECTED_OUTPUT_MAX_CHARS),
-        steps=steps or ("依頼された作業",),
+        steps=steps or (AGENT_DEFAULT_STEP,),
     )

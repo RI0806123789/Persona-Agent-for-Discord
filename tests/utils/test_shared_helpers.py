@@ -17,7 +17,7 @@ from persona_bot.services import auto_topic_service
 from persona_bot.services.auto_topic_service import AutoTopicService
 from persona_bot.services.autonomous_service import AutonomousService
 from persona_bot.core import commands
-from persona_bot.services import content_moderator
+from persona_bot.services import content_moderator, moderation_prompts
 from persona_bot.utils import discord_helpers, discord_send, select_options
 from persona_bot.utils.discord_helpers import (
     REPLY_ALLOWED_MENTIONS, build_history_text, fetch_channel_history_text, is_administrator, send_long_message,
@@ -507,12 +507,12 @@ class AdministratorAndConstantsTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(all(len(option.label) == 4 for option in select.options))
 
     async def test_moderation_sampling_and_notice_use_the_same_limit(self) -> None:
-        with patch.object(content_moderator, "MODERATION_NG_WORD_SAMPLE_LIMIT", 2):
-            text, _contents = content_moderator._build_prompt("架空の質問", "Bot応答", ["語句A", "語句B", "語句C"])
+        with patch.object(moderation_prompts, "MODERATION_NG_WORD_SAMPLE_LIMIT", 2):
+            text, _contents = moderation_prompts._build_prompt("架空の質問", "Bot応答", ["語句A", "語句B", "語句C"])
             self.assertIn("語句A, 語句B", text)
             self.assertNotIn("語句C", text)
             self.assertIn("他にもあります", text)
-            text, _contents = content_moderator._build_prompt("架空", "Bot応答", ["語句A", "語句B"])
+            text, _contents = moderation_prompts._build_prompt("架空", "Bot応答", ["語句A", "語句B"])
             self.assertNotIn("他にもあります", text)
 
     async def test_help_and_block_notice_follow_configured_threshold(self) -> None:

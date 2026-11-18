@@ -4,7 +4,6 @@ import hashlib
 import codecs
 import json
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -38,7 +37,7 @@ from persona_bot.utils.discord_helpers import (
     is_supported_message_channel,
     send_long_reply,
 )
-from persona_bot.utils.timeutil import utc_now_iso
+from persona_bot.utils.timeutil import parse_iso_datetime, utc_now_iso
 from persona_bot.services.gemini_service import GeminiService
 from persona_bot.services.memory_service import MemoryService
 from persona_bot.services.ng_word_service import NgWordFilter
@@ -129,12 +128,12 @@ class DocumentService:
         attachments: Sequence[discord.Attachment],
     ) -> str | None:
         """文書タスクを受け付けてタスクIDを返す。未処理件数の上限に達していれば追加せず None を返す。"""
-        now = datetime.now(timezone.utc)
         # 取り出し順は ORDER BY created_at, task_id で決まり、task_id の先頭はチャンネルID。
         # 秒精度にすると同じ1秒に届いた別チャンネルの文書が到着順に処理されなくなるため、
         # この列だけはマイクロ秒まで残す（他の時刻は timeutil.utc_now_iso の秒精度）。
-        now_iso = now.isoformat(timespec="microseconds")
-        task_id = f"{message.channel.id}-{message.id}-{int(now.timestamp() * 1000)}"
+        now_iso = utc_now_iso(timespec="microseconds")
+        # task_id と created_at は同じ時刻から作る（別々に now を取ると、境界でずれうる）。
+        task_id = f"{message.channel.id}-{message.id}-{int(parse_iso_datetime(now_iso).timestamp() * 1000)}"
         result = await self._enqueue(
             {
                 "task_id": task_id,
