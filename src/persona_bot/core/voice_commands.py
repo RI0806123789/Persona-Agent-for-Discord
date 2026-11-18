@@ -30,8 +30,8 @@ from persona_bot.services.voice_conversation import (
     NOTICE_LIVE_UNAVAILABLE,
     ConsentPanelError,
     VoiceConversation,
-    VoiceConversationService,
 )
+from persona_bot.services.voice_conversation_service import VoiceConversationService
 from persona_bot.services.voice_guard import VoiceGuard, release_and_disconnect
 from persona_bot.utils.voice_permissions import missing_voice_permissions
 

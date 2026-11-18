@@ -48,7 +48,7 @@ from persona_bot.config.personas import reload_persona_catalog
 from persona_bot.config.data_paths import ensure_data_directory_ready
 from persona_bot.config.settings_loader import load_settings
 from persona_bot.services.stats_service import StatsService
-from persona_bot.services.voice_conversation import VoiceConversationService
+from persona_bot.services.voice_conversation_service import VoiceConversationService
 from persona_bot.services.voice_guard import VoiceGuard
 from persona_bot.utils.usage_graph import UsageTracker
 

@@ -18,12 +18,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 import discord
 from persona_bot.config import constants
 from persona_bot.audio import voice as tts_voice
-from persona_bot.services import voice_conversation
+from persona_bot.services import voice_conversation, voice_conversation_service
 from persona_bot.services.content_moderator import VERDICT_SAFE, VERDICT_UNKNOWN, VERDICT_UNSAFE
 from persona_bot.services.live_session import CLOSED_QUOTA, LiveOptions, LiveUnavailableError
-from persona_bot.services.voice_conversation import (
-    NOTICE_LIVE_QUOTA, VoiceConversation, VoiceConversationService,
-)
+from persona_bot.services.voice_conversation import NOTICE_LIVE_QUOTA, VoiceConversation
+from persona_bot.services.voice_conversation_service import VoiceConversationService
 from tests.helpers.network_guard import block_network
 
 VOICED = np.full(320, 3000, dtype=np.int16).tobytes()  # 20ms・16kHz・モノラル
@@ -424,8 +423,8 @@ class ResponseTests(ConversationTestBase):
         self.voice_client.is_connected.return_value = False
         await self.respond(complete=False)
         self.voice_client.play.assert_not_called()
-        self.assertIsNone(self.conversation._playback)
-        self.assertFalse(self.conversation._playback_started)
+        self.assertIsNone(self.conversation._playback_state.source)
+        self.assertFalse(self.conversation._playback_state.started)
 
     async def test_failed_playback_does_not_record_latency(self):
         await self.complete_utterance()
@@ -1203,11 +1202,11 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
                         async def panel(_conversation):
                             await wait_at("panel")
 
-                        with patch.object(voice_conversation, "load_persona_template", load), \
+                        with patch.object(voice_conversation_service, "load_persona_template", load), \
                                 patch.object(VoiceConversation, "start", start), \
                                 patch.object(VoiceConversation, "stop", AsyncMock()) as cleanup, \
                                 patch.object(service, "_post_panel", panel), \
-                                patch.object(voice_conversation, "can_bot_send_messages", return_value=False):
+                                patch.object(voice_conversation_service, "can_bot_send_messages", return_value=False):
                             task = asyncio.create_task(service.start(
                                 guild, Mock(), channel, SimpleNamespace(prompt_file="", grounding_enabled=False),
                                 reservation=reservation,
@@ -1240,7 +1239,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         service = self.make_service()
         reservation = service.reserve(1)
         await service.stop_all()
-        with patch.object(voice_conversation, "load_persona_template", AsyncMock()) as load:
+        with patch.object(voice_conversation_service, "load_persona_template", AsyncMock()) as load:
             with self.assertRaises(asyncio.CancelledError):
                 await service.start(
                     SimpleNamespace(id=1), Mock(), Mock(), Mock(), reservation=reservation,
@@ -1297,7 +1296,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         reservation = service.reserve(1)
         with patch.object(VoiceConversation, "start", AsyncMock()), \
                 patch.object(service, "_post_panel", AsyncMock()), \
-                patch.object(voice_conversation, "can_bot_send_messages", return_value=False):
+                patch.object(voice_conversation_service, "can_bot_send_messages", return_value=False):
             task = asyncio.create_task(service.start(
                 guild, voice_client, SimpleNamespace(id=CHANNEL_ID),
                 SimpleNamespace(prompt_file="", grounding_enabled=False), reservation=reservation,
@@ -1334,7 +1333,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             captured["options"] = conversation._live._options
 
         with patch.object(VoiceConversation, "start", fake_start), \
-                patch.object(voice_conversation, "can_bot_send_messages", Mock(return_value=True)):
+                patch.object(voice_conversation_service, "can_bot_send_messages", Mock(return_value=True)):
             conversation = await service.start(guild, Mock(channel=channel), channel, settings)
         self.assertIs(service.get(1), conversation)
         self.assertIn(constants.BUILTIN_PERSONA_PROMPT, captured["options"].system_instruction)
@@ -1437,9 +1436,9 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
                     if takeover == "session":
                         # 登録処理は実物を使い、外部接続とペルソナ読込だけを差し替える。
                         with patch.object(VoiceConversation, "start", AsyncMock()), \
-                                patch.object(voice_conversation, "load_persona_template", AsyncMock(return_value="架空")), \
-                                patch.object(voice_conversation, "current_persona_catalog") as catalog, \
-                                patch.object(voice_conversation, "can_bot_send_messages", return_value=True):
+                                patch.object(voice_conversation_service, "load_persona_template", AsyncMock(return_value="架空")), \
+                                patch.object(voice_conversation_service, "current_persona_catalog") as catalog, \
+                                patch.object(voice_conversation_service, "can_bot_send_messages", return_value=True):
                             catalog.return_value.voice_profile.return_value = {}
                             new = await service.start(guild, voice_client, channel, SimpleNamespace(
                                 prompt_file="", grounding_enabled=False,
@@ -1485,7 +1484,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
                 with patch.object(VoiceConversation, "start", fake_start), \
                         patch.object(VoiceConversation, "stop", AsyncMock()) as stop, \
-                        patch.object(voice_conversation, "can_bot_send_messages", Mock(return_value=True)):
+                        patch.object(voice_conversation_service, "can_bot_send_messages", Mock(return_value=True)):
                     with self.assertRaises(LiveUnavailableError) as raised:
                         await service.start(guild, Mock(channel=channel), channel, SimpleNamespace(
                             prompt_file="", grounding_enabled=False,
@@ -1511,7 +1510,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
                 sendable = case == "send_error"
                 with patch.object(VoiceConversation, "start", AsyncMock()), \
                         patch.object(VoiceConversation, "stop", AsyncMock()) as stop, \
-                        patch.object(voice_conversation, "can_bot_send_messages", Mock(return_value=sendable)):
+                        patch.object(voice_conversation_service, "can_bot_send_messages", Mock(return_value=sendable)):
                     with self.assertLogs("persona_bot.services.voice_conversation", level="WARNING"):
                         with self.assertRaises(voice_conversation.ConsentPanelError):
                             await service.start(guild, Mock(channel=channel), channel, settings, fallback_channel=None)

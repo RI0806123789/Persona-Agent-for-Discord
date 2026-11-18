@@ -38,7 +38,7 @@ import asyncio
 from collections import Counter
 from statistics import median, quantiles
 from time import monotonic
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import discord
 
@@ -48,25 +48,19 @@ from persona_bot.audio.playback import get_playback_controller
 from persona_bot.audio.voice_receive import LiveVoiceClient, VoiceReceiver
 from persona_bot.config.constants import (
     LIVE_AEC_ENABLED,
-    LIVE_BARGE_IN_FADE_MS,
-    LIVE_ECHO_GUARD_SECONDS,
     LIVE_INPUT_CHUNK_MS,
     LIVE_INPUT_QUEUE_MAX_CHUNKS,
     LIVE_MAX_CONCURRENT_SESSIONS,
     LIVE_MAX_UTTERANCE_SECONDS,
     LIVE_OUTPUT_BUFFER_MS,
     LIVE_PLAYBACK_STALL_SECONDS,
-    LIVE_PLAYBACK_FADE_WAIT_SECONDS,
     LIVE_TICK_SECONDS,
     LIVE_TRANSCRIPT_MAX_CHARS,
     LIVE_VAD_ENERGY_THRESHOLD,
     LIVE_VAD_SILENCE_MS,
 )
-from persona_bot.config.paths import load_persona_template
-from persona_bot.config.personas import current_persona_catalog
 from persona_bot.core.background import spawn, wait_for_cleanup
-from persona_bot.services.live_session import CLOSED_QUOTA, LiveOptions, LiveSession, LiveUnavailableError
-from persona_bot.services.prompting import build_live_system_instruction
+from persona_bot.services.live_session import CLOSED_QUOTA, LiveOptions, LiveSession
 from persona_bot.services.voice_barge_in import (
     INTERRUPTION_SPEECH, RecentSpeech, classify_interruption, is_echo_text,
 )
@@ -74,12 +68,13 @@ from persona_bot.services.voice_barge_in import (
 # 従来どおりこのモジュールから import できる。
 from persona_bot.services.voice_conversation_consent import VoiceConsentMixin
 from persona_bot.services.voice_conversation_moderation import VoiceModerationMixin
+from persona_bot.services.voice_conversation_playback import VoicePlaybackMixin
 from persona_bot.services.voice_conversation_state import (
-    _INPUT_BYTES_PER_MS, ConsentState, _Participant, _SpeakerState, _TranscriptState, _Utterance,
+    _INPUT_BYTES_PER_MS, ConsentState, _Participant, _PlaybackState, _SpeakerState, _TranscriptState, _Utterance,
 )
-from persona_bot.services.voice_guard import release_and_disconnect
-from persona_bot.utils.discord_helpers import NO_MENTIONS, can_bot_send_messages
 
+if TYPE_CHECKING:
+    from persona_bot.services.voice_conversation_service import VoiceConversationService
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +83,6 @@ _INPUT_CHUNK_BYTES = _INPUT_BYTES_PER_MS * LIVE_INPUT_CHUNK_MS
 # 再生を始めるまでに溜める応答音声（48kHz・ステレオ）のバイト数。
 _OUTPUT_BUFFER_BYTES = DISCORD_FRAME_BYTES * max(1, LIVE_OUTPUT_BUFFER_MS // 20)
 _PLAYBACK_STALL_FRAMES = int(LIVE_PLAYBACK_STALL_SECONDS * 50)
-# 割り込みを確定したときに絞り切るまでのフレーム数（20ms 単位）。
-_FADE_FRAMES = max(1, LIVE_BARGE_IN_FADE_MS // 20)
 
 
 # 利用者に見せる案内（接続の結果・終了の理由）。
@@ -120,13 +113,16 @@ class ConsentPanelError(Exception):
     """同意パネルを出せない。同意を集められないため、音声会話を始めない。"""
 
 
-class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
+class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMixin):
     """1つのボイスチャンネルの音声会話（Persona Voice Controller）。
 
     責務ごとに次のモジュールへ分けている（#415。動作は変えていない）:
       ・`voice_conversation_state.py`: 同意・参加者・発言・話者の管理・文字起こしの帰属の状態
       ・`voice_conversation_consent.py`: 同意の付与・撤回と同意パネルの更新（`VoiceConsentMixin`）
       ・`voice_conversation_moderation.py`: 入出力のモデレーション・違反記録・記憶と親密度への反映（`VoiceModerationMixin`）
+      ・`voice_conversation_playback.py`: 返答の再生・フェードアウト・破棄の調停（`VoicePlaybackMixin`。#470。
+        状態は `_PlaybackState` にまとめ、`self._playback_state` を通して読み書きする）
+    サーバーごとの会話の管理（`VoiceConversationService`）は `voice_conversation_service.py`（#470）。
     ここには、受信した音声の振り分け・Live への送信・応答の再生と、それらをつなぐ制御を残す。
     """
 
@@ -161,20 +157,14 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
         self._turn_seq = 0
         self._awaiting_interrupt_ack = False
         self._interrupt_ack_deadline = float("-inf")
-        self._playback: LivePlaybackSource | None = None
-        self._playback_owner: _Utterance | None = None
-        self._playback_started = False
-        # 割り込みでフェードアウトさせている音源（絞り切るまで再生スレッドが流す）。
-        self._fading: LivePlaybackSource | None = None
-        # ペルソナの声が最後に止まった時刻（止まった直後の話し始めは回り込みを疑う）。
-        self._last_audible_at = float("-inf")
+        # 返答の再生・フェードアウトの状態は1か所に集める（読み書きは voice_conversation_playback.py）。
+        self._playback_state = _PlaybackState()
         # エコー除去の参照信号（再生した音声。メモリ上の数秒分だけ）と、回り込みの照合に使う直近の発話。
         self._echo_reference = EchoReference() if LIVE_AEC_ENABLED else None
         self._recent_output = RecentSpeech()
         # 診断用の件数（終了時にログへ出す。本文や話者は含めない）。
         self._barge_in_stats: Counter[str] = Counter()
         self._playback_controller = get_playback_controller(voice_client)
-        self._upsampler = Upsampler()
         self._send_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
         # いまの Live の接続（世代）で activity_start を送ったか。送っていなければ None。
         self._open_generation: int | None = None
@@ -400,18 +390,9 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
         elif action == "barge_in":
             self._begin_activity(user_id, participant, now, barge_in=True)
 
-    def _bot_audible(self) -> bool:
-        """ペルソナの声がいま出ているか（再生を始めた音源がある）。割り込みは手元で確かめてから送る。"""
-        source = self._playback
-        return source is not None and not source.aborted and self._playback_started
-
-    def _recently_audible(self, now: float) -> bool:
-        """ペルソナの声が出ているか、止まってすぐか（回り込みがまだ届きうる）。"""
-        return self._bot_audible() or now - self._last_audible_at <= LIVE_ECHO_GUARD_SECONDS
-
     def _bot_speaking(self) -> bool:
         """ボットが返答中か（生成中・再生中）。話し始めのしきい値を割り込み用に上げる。"""
-        if self._playback is not None and not self._playback.aborted:
+        if self._playback_state.source is not None and not self._playback_state.source.aborted:
             return True
         current = self._current
         if current is None or current.ended_at is None or current.response_complete or current.discarded:
@@ -433,9 +414,9 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
             # 未確定の短い発話を挟んだ後でも、まだ鳴っている返答を割り込みの対象にする
             # （挟んだ発話の返答はまだ届いていない。割り込みを確定したときにフェードアウト
             # されるのは、いま鳴っている返答でなければならない）。
-            playing = self._playback_owner
+            playing = self._playback_state.owner
             if (playing is not None and playing is not previous and not playing.discarded
-                    and self._playback_started):
+                    and self._playback_state.started):
                 previous = playing
             if previous is not None and previous.ended_at is not None and not previous.response_complete:
                 # サーバーはこの発話の開始で生成を打ち切る（START_OF_ACTIVITY_INTERRUPTS）。打ち切りの通知
@@ -625,7 +606,7 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
         if getattr(content, "interrupted", None):
             self._awaiting_interrupt_ack = False
             previous = self._transcript_state.interrupted
-            if previous is not None and not previous.discarded and self._playback_owner is previous:
+            if previous is not None and not previous.discarded and self._playback_state.owner is previous:
                 # 割り込みを確かめている間。届いている分は流し切る（確定したらフェードアウトさせる）。
                 self._finish_held_previous(previous)
             else:
@@ -654,14 +635,14 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
         """割り込みを確かめている間、再生を続けている前の返答（打ち切りの通知までに届いた残りもここへ流す）。"""
         previous = self._transcript_state.interrupted
         if (previous is None or not self._awaiting_interrupt_ack or previous.discarded
-                or self._playback_owner is not previous or self._now() >= self._interrupt_ack_deadline):
+                or self._playback_state.owner is not previous or self._now() >= self._interrupt_ack_deadline):
             return None
         return previous
 
     def _finish_held_previous(self, previous: _Utterance) -> None:
         """割り込まれた前の返答の生成が終わった。届いた分を流し切り、出力の AI 判定に掛ける。"""
-        if self._playback is not None and self._playback_owner is previous:
-            self._playback.finish()
+        if self._playback_state.source is not None and self._playback_state.owner is previous:
+            self._playback_state.source.finish()
         if previous.response_started and not previous.response_complete:
             previous.response_complete = True
             # 打ち切られた返答は記憶に使わない（cut_off）が、流している分の安全性は確かめる。
@@ -672,7 +653,7 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
         if self._awaiting_interrupt_ack and self._now() >= self._interrupt_ack_deadline:
             self._awaiting_interrupt_ack = False
             previous = self._transcript_state.interrupted
-            if previous is not None and not previous.discarded and self._playback_owner is previous:
+            if previous is not None and not previous.discarded and self._playback_state.owner is previous:
                 self._finish_held_previous(previous)
         if self._awaiting_interrupt_ack or self._speaker_state.speaking or not self._gate_open:
             return None
@@ -724,7 +705,7 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
         窓の期限に関わらず参照に加える（再生が終わった分は窓で照合する）。
         """
         parts = []
-        owner = self._playback_owner
+        owner = self._playback_state.owner
         if owner is not None and owner.output_text:
             parts.append(owner.output_text)
         interrupted = self._transcript_state.interrupted
@@ -765,8 +746,8 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
         previous = self._held_previous()
         if previous is not None:
             # 割り込みを確かめている間に届いた、前の返答の残り（打ち切りの通知の前に生成された分）。
-            if self._playback is not None and not self._playback.aborted:
-                self._playback.feed(self._upsampler.process(data))
+            if self._playback_state.source is not None and not self._playback_state.source.aborted:
+                self._playback_state.source.feed(self._playback_state.upsampler.process(data))
             return
         utterance = self._accepting_response()
         if utterance is None:
@@ -783,21 +764,21 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
                 self._barge_in_stats["unconfirmed"] += 1
             utterance.first_audio_at = self._now()
         utterance.response_started = True
-        if (self._playback is None or self._playback_owner is not utterance
-                or self._playback.aborted):
+        if (self._playback_state.source is None or self._playback_state.owner is not utterance
+                or self._playback_state.source.aborted):
             # 再生側が途絶えで打ち切った音源（aborted）にはもう流せない。後続のチャンクは
             # 新しい音源で再生し直す（同じ発話の再開）。まだ流れている前の返答（割り込みを確かめる間に
             # 流していた分）は、強めに絞ってから替える。
-            if self._playback is not None and self._playback_owner is not utterance and not self._playback.aborted:
+            if self._playback_state.source is not None and self._playback_state.owner is not utterance and not self._playback_state.source.aborted:
                 self._fade_out_playback()
             else:
                 self._abort_playback()
-            self._playback = LivePlaybackSource(stall_frames=_PLAYBACK_STALL_FRAMES, reference=self._echo_reference)
-            self._playback_owner = utterance
-            self._playback_started = False
-            self._upsampler = Upsampler()
-        self._playback.feed(self._upsampler.process(data))
-        if not self._playback_started and self._playback.buffered_bytes >= _OUTPUT_BUFFER_BYTES:
+            self._playback_state.source = LivePlaybackSource(stall_frames=_PLAYBACK_STALL_FRAMES, reference=self._echo_reference)
+            self._playback_state.owner = utterance
+            self._playback_state.started = False
+            self._playback_state.upsampler = Upsampler()
+        self._playback_state.source.feed(self._playback_state.upsampler.process(data))
+        if not self._playback_state.started and self._playback_state.source.buffered_bytes >= _OUTPUT_BUFFER_BYTES:
             await self._start_playback()
 
     def _on_output_transcript(self, text: str) -> None:
@@ -822,10 +803,10 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
             self._discard_response(utterance, "出力の NG ワード")
 
     async def _on_generation_complete(self) -> None:
-        if self._playback is None or self._playback_owner is not self._current:
+        if self._playback_state.source is None or self._playback_state.owner is not self._current:
             return
-        self._playback.finish()
-        if not self._playback_started:
+        self._playback_state.source.finish()
+        if not self._playback_state.started:
             # バッファに満たない短い返答も、ここで流し始める。
             await self._start_playback()
 
@@ -834,7 +815,7 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
             # 割り込まれた古い返答の終わり。新しい発言の返答はこの後に届く。
             self._awaiting_interrupt_ack = False
             previous = self._transcript_state.interrupted
-            if previous is not None and not previous.discarded and self._playback_owner is previous:
+            if previous is not None and not previous.discarded and self._playback_state.owner is previous:
                 self._finish_held_previous(previous)
             self._close_transcript(previous)
             self._transcript_state.interrupted = None
@@ -873,346 +854,16 @@ class VoiceConversation(VoiceConsentMixin, VoiceModerationMixin):
             label="音声会話の終了（Live）",
         )
 
-    # ==================================================================
-    # 再生
-    # ==================================================================
 
-    async def _wait_previous_player(self) -> None:
-        async with self._playback_controller.lock:
-            await self._playback_controller.wait_for_players()
+def __getattr__(name: str) -> Any:
+    """`VoiceConversationService` は #470 で `voice_conversation_service` へ移した。
 
-    async def _start_playback(self) -> None:
-        source = self._playback
-        if source is None or self._playback_started:
-            return
-        self._playback_started = True
-        owner = self._playback_owner
-        loop = asyncio.get_running_loop()
+    あちらがこのモジュールの `VoiceConversation` を import するため、ここから先に import すると循環する。
+    従来の `from persona_bot.services.voice_conversation import VoiceConversationService` を保つため、
+    参照された時点で遅延して取り出す。
+    """
+    if name == "VoiceConversationService":
+        from persona_bot.services import voice_conversation_service
 
-        def after_playing(error: Exception | None) -> None:
-            # discord.py の再生スレッドから呼ばれる。
-            if error:
-                logger.error("音声会話: 再生エラー。", exc_info=error)
-            loop.call_soon_threadsafe(self._on_playback_finished, source)
-
-        try:
-            async with self._playback_controller.lock:
-                if (self._stopped or self._playback is not source or source.aborted
-                        or owner is None or owner.discarded):
-                    self._release_unplayed(source)
-                    return
-                # 割り込みでフェードアウトさせた音源が鳴り終わるのを待つ（prepare の停止で
-                # 絞り切る前にブツ切りしないため）。期限を過ぎたら切り替えを優先する。
-                # 会話の時計は再生と独立しているため、待ちの上限は壁時計で数える。
-                deadline = monotonic() + LIVE_PLAYBACK_FADE_WAIT_SECONDS
-                while self._fading is not None and monotonic() < deadline:
-                    await asyncio.sleep(0.01)
-                await self._playback_controller.prepare(self.voice_client)
-                if (self._stopped or self._playback is not source or source.aborted
-                        or owner.discarded or not self.voice_client.is_connected()):
-                    self._release_unplayed(source)
-                    return
-                self._playback_controller.play(self.voice_client, source, after=after_playing)
-            if owner.ended_at is not None and owner.playback_started_at is None:
-                # stall 後に同じ発話を再開しても初回だけ記録する。
-                owner.playback_started_at = self._now()
-                self._latencies.append(owner.playback_started_at - owner.ended_at)
-        except asyncio.CancelledError:
-            source.abort()
-            self._on_playback_finished(source)
-            raise
-        except Exception as error:
-            logger.error("音声会話: 再生を開始できませんでした。", exc_info=error)
-            source.abort()
-            self._on_playback_finished(source)
-
-    def _release_unplayed(self, source: LivePlaybackSource) -> None:
-        """再生を始めずに戻るとき、まだ現在の音源なら再生状態を解放する。
-
-        ★ _start_playback は先に _playback_started を立てるため、未接続などで早期に戻ると
-        _playback と _playback_started が残り、_bot_speaking() が真に張り付く。
-        別の音源に入れ替わっていれば、その音源の状態には触れない。
-        """
-        if self._playback is source:
-            source.abort()
-            self._on_playback_finished(source)
-
-    def _on_playback_finished(self, source: LivePlaybackSource) -> None:
-        self._playback_controller.release(source)
-        if self._fading is source:
-            # フェードアウトが鳴り終わった。回り込みの照合は、鳴り終わった時刻を基準に続ける。
-            self._fading = None
-            self._last_audible_at = self._now()
-        if self._playback is source:
-            if self._playback_started:
-                self._last_audible_at = self._now()
-            self._playback = None
-            self._playback_owner = None
-            self._playback_started = False
-
-    def _abort_playback(self) -> None:
-        """再生を即座に止める（会話の終了・違反の検出・一時停止など）。フェードアウト中の音源も止める。"""
-        fading, self._fading = self._fading, None
-        if fading is not None:
-            fading.abort()
-            self._stop_player(fading)
-        source = self._playback
-        if source is None:
-            return
-        source.abort()
-        self._playback = None
-        self._playback_owner = None
-        started, self._playback_started = self._playback_started, False
-        if started:
-            self._last_audible_at = self._now()
-            self._stop_player(source)
-
-    def _fade_out_playback(self) -> None:
-        """再生中の返答を強めにフェードアウトさせてから止める（割り込みを確定したとき。#409）。
-
-        絞り切るまで（LIVE_BARGE_IN_FADE_MS）は再生スレッドが流し、終わると after から後片付けされる。
-        その間に会話が終わったら `_abort_playback` が即座に止める。
-        """
-        source = self._playback
-        if source is None:
-            return
-        self._playback = None
-        self._playback_owner = None
-        started, self._playback_started = self._playback_started, False
-        if started and not source.aborted:
-            self._last_audible_at = self._now()
-            previous_fading, self._fading = self._fading, source
-            if previous_fading is not None and previous_fading is not source:
-                # フェードアウト中の音源は1つにする。前のものを残すと鳴り続け、
-                # 終了の後片付け（_on_playback_finished）も先の音源のままで追えなくなる。
-                previous_fading.abort()
-                self._stop_player(previous_fading)
-            source.fade_out(_FADE_FRAMES)
-        else:
-            source.abort()
-
-    def _stop_player(self, source: LivePlaybackSource) -> None:
-        try:
-            self._playback_controller.stop(self.voice_client, source=source)
-        except Exception:
-            logger.debug("音声会話: 再生の停止に失敗しました。", exc_info=True)
-
-    def _discard_response(self, utterance: _Utterance, reason: str, *, fade: bool = False) -> None:
-        """返答を捨てる。fade が真なら（割り込み）強めにフェードアウトさせ、偽なら即座に止める。"""
-        if not utterance.discarded:
-            logger.info("音声会話: 返答を破棄しました（%s）。", reason)
-        utterance.discarded = True
-        if utterance.input_task is not None and utterance.input_task is not asyncio.current_task():
-            utterance.input_task.cancel()
-        if self._playback_owner is utterance:
-            if fade:
-                self._fade_out_playback()
-            else:
-                self._abort_playback()
-
-
-class VoiceConversationService:
-    """サーバーごとの音声会話を管理する（同時実行の上限・開始・終了・参加者の出入り）。"""
-
-    def __init__(
-        self,
-        client: discord.Client,
-        genai_client: Any,
-        *,
-        moderator: Any,
-        ng_filter: Any,
-        blacklist: Any,
-        memory: Any,
-        affinity: Any,
-        usage: Any,
-        voice_guard: Any = None,
-        live_connect: Callable[..., Any] | None = None,
-        receiver_factory: Callable[..., Any] | None = None,
-    ) -> None:
-        self._client = client
-        self.genai_client = genai_client
-        self.moderator = moderator
-        self.ng_filter = ng_filter
-        self.blacklist = blacklist
-        self.memory = memory
-        self.affinity = affinity
-        self.usage = usage
-        self.voice_guard = voice_guard
-        self.live_connect = live_connect
-        # 受信の生成口: (voice_client, sink, echo_reference=参照信号または None) -> 受信（start/stop を持つ）。
-        self.receiver_factory = receiver_factory or (
-            lambda voice_client, sink, echo_reference=None: VoiceReceiver(
-                voice_client, sink, echo_reference=echo_reference,
-            )
-        )
-        self._sessions: dict[int, VoiceConversation] = {}
-        self._reserved: dict[int, object] = {}
-
-    def is_blocked(self, user_id: int) -> bool:
-        return self.blacklist.is_blocked(user_id)
-
-    def get(self, guild_id: int) -> VoiceConversation | None:
-        return self._sessions.get(guild_id)
-
-    def reserve(self, guild_id: int) -> object | None:
-        """開始の予約票を返す。上限なら None（判定と確保の間に await を挟まない）。"""
-        if guild_id in self._reserved:
-            return self._reserved[guild_id]
-        # 置換中も枠を保持し、既存会話と予約は同じサーバーなら二重に数えない。
-        if (guild_id not in self._sessions
-                and len(self._sessions.keys() | self._reserved.keys()) >= LIVE_MAX_CONCURRENT_SESSIONS):
-            return None
-        reservation = self._reserved[guild_id] = object()
-        return reservation
-
-    def release_reservation(self, guild_id: int, *, reservation: object | None = None) -> None:
-        # 古い開始処理の finally で、停止後に取り直した予約を消さない。
-        if reservation is None or self._reserved.get(guild_id) is reservation:
-            self._reserved.pop(guild_id, None)
-
-    async def start(
-        self,
-        guild: discord.Guild,
-        voice_client: LiveVoiceClient,
-        voice_channel: Any,
-        response_settings: Any,
-        *,
-        fallback_channel: Any = None,
-        reservation: object | None = None,
-    ) -> VoiceConversation:
-        """音声会話を始める。先行する接続・設定読込があれば reserve() の予約票を渡す。
-
-        Raises:
-            LiveUnavailableError: Live へ接続できなかった。
-            ConsentPanelError: 同意パネルを出せなかった（同意を集められないので始めない）。
-            asyncio.CancelledError: 待機中に予約が取り消された。
-        """
-        reservation = reservation if reservation is not None else self.reserve(guild.id)
-        if reservation is None:
-            raise LiveUnavailableError(quota=False)
-
-        def check_reservation() -> None:
-            if self._reserved.get(guild.id) is not reservation:
-                # /leave・サーバー退出後は、待機から戻っても会話を復活させない。
-                raise asyncio.CancelledError
-
-        try:
-            check_reservation()
-            # 予約票が枠を保持するので、旧会話の所有権は停止を待つ前に外す。
-            # 遅れて来た旧会話の end() が置換用の予約と接続を片付けないようにする。
-            existing = self._sessions.pop(guild.id, None)
-            if existing is not None:
-                await wait_for_cleanup(existing.stop(), label="音声会話の置換前の終了")
-                check_reservation()
-            persona_prompt = await load_persona_template(response_settings.prompt_file)
-            check_reservation()
-            voice_name = str(current_persona_catalog().voice_profile(response_settings.prompt_file).get("live_voice") or "")
-            options = LiveOptions(
-                system_instruction=build_live_system_instruction(
-                    persona_prompt, grounding=response_settings.grounding_enabled,
-                ),
-                voice_name=voice_name,
-                grounding=response_settings.grounding_enabled,
-            )
-            notice_channel = (
-                voice_channel if can_bot_send_messages(voice_channel, guild.me) else fallback_channel
-            )
-            conversation = VoiceConversation(
-                self, guild, voice_client, voice_channel.id, notice_channel, options,
-            )
-            try:
-                await conversation.start()
-                check_reservation()
-                # 同意パネルを出せなければ誰も同意できず、Live の接続と同時実行の枠だけが残る。
-                # パネルの投稿までを開始の成功の条件にする（登録はその後）。
-                await self._post_panel(conversation)
-                check_reservation()
-                if conversation.live_closed_reason is not None:
-                    # パネルの投稿を待つ間に Live が終わった。未登録のため end() は何もしないので、
-                    # 声に応答しない会話を登録せず、ここで開始を失敗にする。
-                    raise LiveUnavailableError(quota=conversation.live_closed_reason == CLOSED_QUOTA)
-            except BaseException:
-                await wait_for_cleanup(conversation.stop(), label="音声会話の開始失敗の後片付け")
-                raise
-            self._sessions[guild.id] = conversation
-        finally:
-            self.release_reservation(guild.id, reservation=reservation)
-        logger.info("音声会話: 開始しました。")
-        return conversation
-
-    async def _post_panel(self, conversation: VoiceConversation) -> None:
-        from persona_bot.views.voice_consent_view import VoiceConsentView, build_consent_panel_text
-
-        channel = conversation.notice_channel
-        if channel is None:
-            logger.warning("音声会話: 同意パネルを出せるチャンネルがありません。")
-            raise ConsentPanelError
-        view = VoiceConsentView(conversation, is_blocked=self.is_blocked)
-        try:
-            conversation.panel_message = await channel.send(
-                build_consent_panel_text(conversation), view=view, allowed_mentions=NO_MENTIONS,
-            )
-        except discord.DiscordException as error:
-            view.stop()
-            logger.error("音声会話: 同意パネルを送信できませんでした。", exc_info=error)
-            raise ConsentPanelError from error
-        conversation.panel_view = view
-
-    async def stop(self, guild_id: int, *, reason: str) -> bool:
-        """そのサーバーの音声会話を止める（切断は呼び出し側）。止めたら True。"""
-        conversation = self._sessions.pop(guild_id, None)
-        self.release_reservation(guild_id)
-        if conversation is None:
-            return False
-        logger.info("音声会話: 終了します（%s）。", reason)
-        await wait_for_cleanup(conversation.stop(), label="音声会話の終了")
-        return True
-
-    async def end(
-        self, guild_id: int, *, reason: str, notice: str | None = None, disconnect: bool,
-        conversation: VoiceConversation | None = None,
-    ) -> None:
-        """会話側の事情（Live の終了・接続の喪失）で止める。必要なら案内して退出する。"""
-        current = self._sessions.get(guild_id)
-        if conversation is not None and current is not conversation:
-            # 既に /leave・/join で入れ替わった会話には触らない。
-            return
-        if current is None:
-            return
-        voice_client = current.voice_client
-        await self.stop(guild_id, reason=reason)
-        if guild_id in self._sessions or guild_id in self._reserved:
-            # 終了を待つ間に /join が同じ接続で新しい会話を始めた（始めようとしている）。
-            # 新しい会話の接続には触らず、退出の案内も出さない。
-            return
-        if notice:
-            await current._notify(notice)
-        if guild_id in self._sessions or guild_id in self._reserved:
-            # 案内の送信中にも /join は始まる。保護解除・切断の直前に所有権を再確認する。
-            return
-        guild = current.guild
-        if disconnect and guild.voice_client is voice_client and voice_client.is_connected():
-            await release_and_disconnect(
-                self.voice_guard, guild_id, voice_client, label="音声会話の終了時の切断",
-                failure_message="音声会話: 終了時の切断に失敗しました。", log=logger,
-            )
-
-    async def stop_all(self) -> None:
-        # まだ _sessions に登録されていない開始待ちも無効にする。
-        self._reserved.clear()
-        for guild_id in list(self._sessions):
-            await self.stop(guild_id, reason="ボットの終了")
-
-    def handle_voice_state_update(self, member: Any, before: Any, after: Any) -> None:
-        """参加者の出入りを、そのサーバーの音声会話へ伝える（同期関数。届いた順に処理する）。"""
-        guild = getattr(member, "guild", None)
-        conversation = self._sessions.get(getattr(guild, "id", None))
-        if conversation is None:
-            return
-        bot_user = self._client.user
-        if bot_user is not None and member.id == bot_user.id:
-            # 接続の終了・戻しは見回り（tick）と voice_guard が扱う。ただし別のチャンネルへ
-            # 移された瞬間から、移動先の人の声を扱わないよう、ゲートだけはすぐ更新する。
-            conversation.handle_self_update()
-            return
-        conversation.handle_member_update(member, before, after)
+        return voice_conversation_service.VoiceConversationService
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
