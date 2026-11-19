@@ -89,7 +89,10 @@ class ServiceSplitTests(unittest.TestCase):
         import inspect
 
         from persona_bot.services.memory_service import MemoryService
-        self.assertEqual(list(inspect.signature(MemoryService.__init__).parameters), ["self", "genai_client", "db"])
+        # BotState は受け取らない。usage は内部の Gemini 呼び出しのトークン記録用の任意引数（#480）。
+        parameters = inspect.signature(MemoryService.__init__).parameters
+        self.assertEqual(list(parameters), ["self", "genai_client", "db", "usage"])
+        self.assertIsNone(parameters["usage"].default)
 
 
 class VoiceAndViewSplitTests(unittest.TestCase):
@@ -130,6 +133,28 @@ class VoiceAndViewSplitTests(unittest.TestCase):
         self.assertEqual(panel_state.logger.name, view_parts.logger.name)
         self.assertEqual(panel_authorization.logger.name, view_parts.logger.name)
         self.assertTrue(callable(view_parts.PanelView.run_exclusive))
+
+    def test_agent_thread_state_is_split_but_reachable_from_the_original_module(self):
+        """#480: インメモリの状態を agent_thread_state へ分けても、従来の import 先・ロガー名を保つ。"""
+        from persona_bot.views import agent_thread, agent_thread_state
+        for name in ("AgentWebhooks", "AgentWorkThreads", "WorkThreadEntry"):
+            self.assertIs(getattr(agent_thread, name), getattr(agent_thread_state, name), name)
+        self.assertEqual(agent_thread_state.logger.name, agent_thread.logger.name)
+        self.assertEqual(agent_thread.logger.name, "persona_bot.views.agent_thread")
+        # 状態側は進捗の表示（Discord への投稿）を持たない。
+        for name in ("AgentThreadProgress", "start_agent_progress", "archive_work_thread"):
+            self.assertFalse(hasattr(agent_thread_state, name), name)
+
+    def test_agent_thread_state_does_not_import_the_progress_module(self):
+        import ast
+        from pathlib import Path
+
+        from persona_bot.views import agent_thread_state
+        tree = ast.parse(Path(agent_thread_state.__file__).read_text(encoding="utf-8-sig"))
+        imported = {
+            node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module
+        } | {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+        self.assertNotIn("persona_bot.views.agent_thread", imported)  # 循環参照になる
 
 
 if __name__ == "__main__":

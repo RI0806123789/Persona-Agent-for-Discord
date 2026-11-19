@@ -170,7 +170,8 @@ class WebhookCacheTests(unittest.IsolatedAsyncioTestCase):
         channel = make_channel()
         channel.webhooks.side_effect = [discord.Forbidden(Mock(status=403), "架空の拒否"), [own_webhook()]]
         webhooks = AgentWebhooks()
-        with patch("persona_bot.views.agent_thread.logger"):
+        # AgentWebhooks は agent_thread_state にあるため、その警告ログを黙らせる（#480）。
+        with patch("persona_bot.views.agent_thread_state.logger"):
             self.assertIsNone(await webhooks.get(channel, BOT_ID))
         self.assertIsNotNone(await webhooks.get(channel, BOT_ID))
 

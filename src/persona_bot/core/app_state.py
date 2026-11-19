@@ -17,6 +17,7 @@ from persona_bot.config.constants import (
 from persona_bot.config.personas import current_persona_catalog, persona_file_name
 from persona_bot.core.background import run_in_thread, wait_for_cleanup
 from persona_bot.core.guild_settings_fields import GUILD_SETTINGS_DEFAULTS, GUILD_SETTINGS_FIELDS
+from persona_bot.core.guild_state_store import GuildStateStore
 
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ class GuildSettings:
     # 自分がどのサーバーの設定かと、保存先の Database。DM は guild_id=None。
     # DB が未接続（None）のときは保存を試みない（DB を使わないテスト等で動くように）。
     guild_id: int | None = None
-    _db: Any = field(default=None, repr=False, compare=False)
+    _db: GuildStateStore | None = field(default=None, repr=False, compare=False)
 
     # persist() の直列化用。並行した保存の書き込み順が入れ替わって、
     # 古い値で新しい値を上書きしないようにする（persist の説明を参照）。
@@ -165,7 +166,7 @@ class GuildSettings:
             grounding_enabled=self.grounding_enabled,
         )
 
-    def attach(self, db: Any, guild_id: int | None) -> None:
+    def attach(self, db: GuildStateStore | None, guild_id: int | None) -> None:
         """永続化先の Database と自分のギルドIDを紐づける（BotState が生成時に呼ぶ）。"""
         self._db = db
         self.guild_id = guild_id
@@ -328,7 +329,7 @@ class BotState:
     feedback_prune_background_started: bool = False
 
     # 設定の保存先。restore_from_database() で紐づけられる。
-    _db: Any = field(default=None, repr=False, compare=False)
+    _db: GuildStateStore | None = field(default=None, repr=False, compare=False)
     # 読込中・待機中だけ保持し、過去に退出したサーバーの識別子を溜めない。
     _guild_loads: WeakValueDictionary[int, _GuildSettingsLoad] = field(
         default_factory=WeakValueDictionary, repr=False, compare=False,
@@ -438,7 +439,7 @@ class BotState:
         self.invalidate_guild(guild_id)
         self.guild_settings.pop(guild_id, None)
 
-    def restore_from_database(self, db: Any) -> None:
+    def restore_from_database(self, db: GuildStateStore) -> None:
         """Database を紐づけ、保存済みの設定と記念日の投稿記録をメモリへ復元する。
 
         起動時に1回だけ呼ぶ（bot.py）。読み込みに失敗しても既定値で起動を続ける
