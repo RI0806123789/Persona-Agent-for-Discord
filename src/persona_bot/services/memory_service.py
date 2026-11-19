@@ -26,6 +26,7 @@ from persona_bot.config.constants import (
 from persona_bot.core.database import Database
 from persona_bot.services.genai_client import generate_content, generate_json_content
 from persona_bot.services.memory_anniversary import anniversaries_by_label, merge_anniversary_profile
+from persona_bot.services.memory_graph import MemorySnapshot
 from persona_bot.services.memory_projects import (
     PROJECTS_SCHEMA,
     default_profile_memory,
@@ -164,6 +165,27 @@ class MemoryService:
     ) -> str:
         _, documents = await self.build_contexts("none", user_id, limit)
         return documents
+
+    async def load_user_snapshot(self, user_id: str) -> MemorySnapshot:
+        """本人1人分の記憶を、同じ時点の内容でまとめて読む（記憶の可視化。#484）。
+
+        プロフィール・プロジェクト記憶・文書要約と、まだ圧縮していない会話の件数を返す。
+        対象は引数のユーザーだけで、他人のスライスは読まない。会話ログの本文は読まない
+        （件数だけ）。読み取りだけで、記憶を書き換えない。
+        """
+        async with self.io_lock:
+            return await run_in_thread(self._load_user_snapshot, str(user_id))
+
+    def _load_user_snapshot(self, user_id: str) -> MemorySnapshot:
+        self.ensure_storage()
+        projects = self._user_projects(self._load_projects_wrapper(), user_id)
+        summaries = projects.get("document_summaries", [])
+        return MemorySnapshot(
+            profile=self._db.profile_load(user_id),
+            projects={key: value for key, value in projects.items() if key != "document_summaries"},
+            document_summaries=list(summaries) if isinstance(summaries, list) else [],
+            pending_count=self._db.pending_count(user_id),
+        )
 
     async def append_pending_log(self, user_id: str, question: str, response_text: str) -> None:
         timestamp = utc_now().strftime("%Y-%m-%d %H:%M:%S UTC")
