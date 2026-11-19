@@ -141,5 +141,102 @@ class SshErrorsSplitTests(unittest.TestCase):
         self.assertEqual(connection_lost_message(None), "SSH 接続が切れました。もう一度接続してください。")
 
 
+class RouterSplitTests(unittest.TestCase):
+    """ルートを routers/ へ分けた（#482）後も、API の公開面と、テストが差し替える状態の窓口が変わらないこと。"""
+
+    # 分割前の app.py が公開していた HTTP のルート（OpenAPI に出るもの）。WebSocket は別に確かめる。
+    EXPECTED_HTTP_ROUTES = {
+        ("GET", "/api/profiles"), ("GET", "/api/connection"), ("POST", "/api/connect"), ("POST", "/api/disconnect"),
+        ("GET", "/api/history"), ("GET", "/api/status"), ("GET", "/api/logs"), ("POST", "/api/service/{action}"),
+        ("GET", "/api/operations"), ("GET", "/api/deploy"), ("POST", "/api/deploy"), ("GET", "/api/insights"),
+        ("GET", "/api/db"), ("GET", "/api/db/tables/{table}"),
+    }
+
+    def test_every_http_route_is_still_published_exactly_once(self):
+        import app
+        published = {
+            (method.upper(), path)
+            for path, operations in app.app.openapi()["paths"].items()
+            for method in operations
+        }
+        api_routes = {(method, path) for method, path in published if path.startswith("/api/")}
+        self.assertEqual(api_routes, self.EXPECTED_HTTP_ROUTES)
+
+    def test_websocket_route_lives_in_the_logs_router(self):
+        import app
+        import routers.logs
+        self.assertTrue(any(getattr(route, "path", None) == "/api/logs/stream" for route in routers.logs.router.routes))
+        self.assertIs(app.stream_logs, routers.logs.stream_logs)
+
+    def test_handlers_are_reexported_by_app_as_the_same_objects(self):
+        import app
+        import routers.database
+        import routers.logs
+        import routers.operations
+        import routers.system
+        for module, names in (
+            (routers.system, ("get_profiles", "get_connection", "connect", "disconnect", "get_history", "get_status",
+                              "get_insights", "ConnectRequest")),
+            (routers.logs, ("get_logs", "stream_logs")),
+            (routers.operations, ("control_service", "get_operations", "get_deploy", "start_deploy", "ServiceTarget")),
+            (routers.database, ("get_db_summary", "get_db_table")),
+        ):
+            for name in names:
+                self.assertIs(getattr(app, name), getattr(module, name), name)
+
+    def test_routers_read_shared_state_from_app_at_call_time(self):
+        """`patch.object(app, "session", fake)` が、ルーターの `state.session` に届く（#461 の判断のまま、状態は app.py）。"""
+        from unittest.mock import patch
+
+        import app
+        from routers.context import state
+        self.assertIs(state.session, app.session)
+        sentinel = object()
+        with patch.object(app, "session", sentinel), patch.object(app, "deploys", sentinel):
+            self.assertIs(state.session, sentinel)
+            self.assertIs(state.deploys, sentinel)
+        self.assertIs(state.session, app.session)
+        self.assertIs(state.deploys, app.deploys)
+
+    def test_unbound_state_fails_loudly_instead_of_returning_nothing(self):
+        from routers.context import AppState
+        with self.assertRaises(RuntimeError):
+            AppState().session  # noqa: B018
+
+    def test_routers_never_import_app_and_hold_no_shared_state(self):
+        """python app.py では app.py のモジュール名が __main__ になる。ルーターが `import app` すると別のコピーが
+        読み込まれ、状態が二重になる。"""
+        for name in ("context", "system", "logs", "operations", "database"):
+            imported = imported_modules(f"routers/{name}")
+            self.assertNotIn("app", imported, name)
+            self.assertNotIn("ssh_session", imported, name)  # 型は ssh_errors から取る（循環参照を避ける）
+        for name in ("system", "logs", "operations", "database"):
+            source = (BACKEND / "routers" / f"{name}.py").read_text(encoding="utf-8-sig")
+            # 共有状態は app.py のグローバル。ルーターで作り直さない。
+            for forbidden in ("SshSession()", "DeployManager()", "asyncio.Lock()", "deque("):
+                self.assertNotIn(forbidden, source, f"{name}.py に共有状態の生成があります: {forbidden}")
+
+    def test_app_keeps_the_shared_state_as_module_globals(self):
+        import app
+        for name in (
+            "session", "deploys", "_connection_change_lock", "operations", "_operation_ids",
+            "_insights_cache", "_insights_lock", "_service_completion_pending",
+        ):
+            self.assertTrue(hasattr(app, name), name)
+        source = (BACKEND / "app.py").read_text(encoding="utf-8-sig")
+        self.assertNotIn("@app.get", source)
+        self.assertNotIn("@app.post", source)
+        self.assertNotIn("@app.websocket", source)
+        self.assertIn("state.bind(sys.modules[__name__])", source)
+
+    def test_pure_messages_are_reexported_under_the_original_names(self):
+        import app
+        import console_messages
+        self.assertIs(app._sudo_password_message, console_messages.sudo_password_message)
+        self.assertIs(app._unset_profile_message, console_messages.unset_profile_message)
+        self.assertIs(app._journal_error_message, console_messages.journal_error_message)
+        self.assertNotIn("app", imported_modules("console_messages"))
+
+
 if __name__ == "__main__":
     unittest.main()
