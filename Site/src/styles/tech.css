@@ -1,0 +1,43 @@
+/* 技術スタック・ツール。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* --- 技術スタック・ツール ------------------------------------------------ */
+
+.stack {
+  display: grid;
+  gap: 56px;
+}
+
+.stack-list {
+  display: grid;
+  gap: 2px;
+}
+
+.stack-item {
+  display: grid;
+  gap: 2px 20px;
+  padding: 14px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.stack-item strong {
+  font-weight: 700;
+}
+
+.stack-item span {
+  color: var(--text-soft);
+  font-size: 0.92rem;
+}
+
+@media (min-width: 520px) {
+  .stack-item {
+    grid-template-columns: 11.5em minmax(0, 1fr);
+    align-items: baseline;
+  }
+}
+
+@media (min-width: 900px) {
+  .stack {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 64px;
+  }
+}

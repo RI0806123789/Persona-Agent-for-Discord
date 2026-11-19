@@ -1,0 +1,71 @@
+/* セクションの共通部分と、画面に入ったときの出現（reveal）。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* --- セクションの共通部分 ------------------------------------------------ */
+
+.section {
+  padding: 72px 0;
+}
+
+.section--tinted {
+  background: var(--bg-tint);
+  border-block: 1px solid var(--border);
+  transition: background-color 0.4s var(--ease);
+}
+
+.section__head {
+  max-width: 680px;
+  margin: 0 auto 40px;
+  text-align: center;
+}
+
+.section__head--left {
+  margin: 0 0 24px;
+  text-align: left;
+}
+
+.section__head h2,
+.updates h2 {
+  margin-top: 10px;
+  font-size: clamp(1.6rem, 5vw, 2.3rem);
+  font-weight: 800;
+}
+
+.section__lead {
+  margin-top: 14px;
+  color: var(--text-soft);
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  transition: transform 0.4s var(--ease), box-shadow 0.4s var(--ease), border-color 0.4s var(--ease),
+    background-color 0.4s var(--ease);
+}
+
+@media (min-width: 980px) {
+  .section {
+    padding: 104px 0;
+  }
+}
+
+/* 画面に入ったときに、下からふわっと現れる */
+/* transition ではなく animation にしている: カードの hover の transition（浮き上がり）と
+   同じ要素に同居するため。fill-mode を backwards にして、現れ終わったあとは hover の transform を邪魔しない */
+.reveal {
+  opacity: 0;
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  animation: reveal-in 0.7s var(--ease) backwards;
+  animation-delay: calc(var(--reveal-order, 0) * 70ms);
+}
+
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+}

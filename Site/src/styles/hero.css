@@ -1,0 +1,125 @@
+/* ヒーロー（ファーストビュー）。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* --- ヒーロー ----------------------------------------------------------- */
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding: 48px 0 72px;
+}
+
+.hero__glow {
+  position: absolute;
+  inset: -20% -10% auto;
+  height: 720px;
+  background:
+    radial-gradient(520px 380px at 18% 30%, var(--glow-a), transparent 70%),
+    radial-gradient(480px 360px at 82% 18%, var(--glow-b), transparent 70%);
+  pointer-events: none;
+  /* 気づくかどうかの速さで、光をゆっくり揺らす */
+  animation: glow-drift 26s ease-in-out infinite alternate;
+}
+
+@keyframes glow-drift {
+  from {
+    transform: translate3d(-2%, -1%, 0) scale(1);
+  }
+
+  to {
+    transform: translate3d(3%, 3%, 0) scale(1.08);
+  }
+}
+
+/* ファーストビューは、読み込んだときに上から順に現れる。
+   .reveal と同じく animation の backwards にして、現れ終わったあとの hover の動きを邪魔しない */
+.hero-in {
+  animation: hero-in 0.9s var(--ease) backwards;
+  animation-delay: calc(80ms + var(--hero-order, 0) * 90ms);
+}
+
+.hero-in--demo {
+  animation-name: hero-in-demo;
+  animation-duration: 1.1s;
+}
+
+@keyframes hero-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+}
+
+@keyframes hero-in-demo {
+  from {
+    opacity: 0;
+    transform: translateY(28px) scale(0.98);
+  }
+}
+
+.hero__inner {
+  position: relative;
+  display: grid;
+  gap: 44px;
+  align-items: center;
+}
+
+.hero__title {
+  margin-top: 16px;
+  font-size: clamp(2.1rem, 8.4vw, 3.6rem);
+  font-weight: 900;
+  line-height: 1.28;
+  letter-spacing: 0.005em;
+}
+
+.hero__title span {
+  display: block;
+}
+
+.hero__title .is-accent {
+  color: var(--accent);
+}
+
+.hero__lead {
+  margin-top: 22px;
+  max-width: 34em;
+  color: var(--text-soft);
+  font-size: 1.05rem;
+}
+
+.hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 30px;
+}
+
+.hero__notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  margin-top: 26px;
+}
+
+.hero__notes li {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--warm-soft);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.hero__demo {
+  min-width: 0;
+}
+
+@media (min-width: 980px) {
+  .hero {
+    padding: 72px 0 104px;
+  }
+
+  .hero__inner {
+    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+    gap: 56px;
+  }
+}

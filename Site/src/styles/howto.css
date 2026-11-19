@@ -1,0 +1,36 @@
+/* 使い方。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* --- 使い方 ------------------------------------------------------------- */
+
+.steps {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+}
+
+.steps li {
+  display: flex;
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 28px 24px;
+}
+
+.step h3 {
+  font-size: 1.12rem;
+  font-weight: 700;
+}
+
+.step p {
+  color: var(--text-soft);
+  font-size: 0.95rem;
+}
+
+.step .text-link {
+  margin-top: auto;
+}

@@ -1,0 +1,84 @@
+/* 機能紹介。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* --- 機能紹介 ----------------------------------------------------------- */
+
+.feature-groups {
+  display: grid;
+  gap: 52px;
+}
+
+.feature-group__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  margin-bottom: 18px;
+}
+
+.feature-group__head h3 {
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+
+.feature-group__head p {
+  color: var(--text-soft);
+  font-size: 0.95rem;
+}
+
+.feature-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 232px), 1fr));
+}
+
+.feature {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  padding: 24px 22px;
+}
+
+.feature:hover,
+.step:hover {
+  border-color: var(--accent);
+  transform: translateY(-4px);
+}
+
+.feature__icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: var(--accent-soft);
+  font-size: 1.45rem;
+  line-height: 1;
+  transition: transform 0.5s var(--ease), background-color 0.4s var(--ease);
+}
+
+.feature:hover .feature__icon {
+  background: var(--warm-soft);
+  transform: scale(1.08) rotate(-4deg);
+}
+
+.feature h4 {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.feature p {
+  color: var(--text-soft);
+  font-size: 0.93rem;
+  line-height: 1.8;
+}
+
+.feature .feature__note {
+  margin-top: auto;
+  padding: 8px 12px;
+  border-radius: var(--radius-s);
+  background: var(--warm-soft);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.65;
+}

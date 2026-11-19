@@ -1,0 +1,76 @@
+/* 配色・角丸・幅などのトークン（ライト／ダーク）。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* 紹介サイトのスタイル。
+ *
+ * 配色は紹介動画の「暗い地＋ティール（青緑）」を土台に、琥珀色の差し色と
+ * クリーム色の地で温かみを足している（Issue #410）。色は必ず下のトークンから使い、
+ * 部品の中に直接の色を書かないこと（ライト／ダークの片方だけ読めなくなる）。
+ */
+
+:root {
+  /* ライト（既定） */
+  --bg: #fbf6ee;
+  --bg-tint: #f4ecde;
+  --surface: #fffdf9;
+  --surface-strong: #ffffff;
+  --border: rgba(60, 48, 30, 0.12);
+  --border-strong: rgba(60, 48, 30, 0.2);
+  --text: #1f2a28;
+  --text-soft: #56645f;
+  --accent: #0e8a78;
+  --accent-strong: #0a6f61;
+  --accent-soft: rgba(14, 138, 120, 0.12);
+  --on-accent: #fffdf9;
+  --warm: #d98324;
+  --warm-soft: rgba(217, 131, 36, 0.14);
+  --shadow: 0 1px 2px rgba(60, 48, 30, 0.06), 0 12px 32px -12px rgba(60, 48, 30, 0.18);
+  --shadow-strong: 0 2px 4px rgba(60, 48, 30, 0.08), 0 28px 60px -20px rgba(40, 60, 55, 0.35);
+  --glow-a: rgba(14, 138, 120, 0.2);
+  --glow-b: rgba(217, 131, 36, 0.18);
+  --header-bg: rgba(251, 246, 238, 0.82);
+
+  /* 疑似 Discord 画面は、どちらの配色でも暗い画面のまま見せる（動画の色味） */
+  --dc-bg: #111a18;
+  --dc-side: #0c1312;
+  --dc-raised: #1a2623;
+  --dc-border: rgba(255, 255, 255, 0.07);
+  --dc-text: #e6efeb;
+  --dc-text-soft: #8fa39c;
+  --dc-accent: #3fd1b8;
+  --dc-warm: #f2b56b;
+
+  --radius-s: 10px;
+  --radius-m: 16px;
+  --radius-l: 24px;
+  --container: 1120px;
+  --ease: cubic-bezier(0.22, 0.8, 0.26, 1);
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0d1413;
+  --bg-tint: #111b19;
+  --surface: #151f1d;
+  --surface-strong: #1a2624;
+  --border: rgba(235, 245, 240, 0.09);
+  --border-strong: rgba(235, 245, 240, 0.18);
+  --text: #eef3ef;
+  --text-soft: #a3b4ad;
+  --accent: #3fd1b8;
+  --accent-strong: #6be0cb;
+  --accent-soft: rgba(63, 209, 184, 0.13);
+  --on-accent: #06231e;
+  --warm: #f2b56b;
+  --warm-soft: rgba(242, 181, 107, 0.13);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px -12px rgba(0, 0, 0, 0.5);
+  --shadow-strong: 0 2px 4px rgba(0, 0, 0, 0.3), 0 28px 60px -20px rgba(0, 0, 0, 0.7);
+  --glow-a: rgba(63, 209, 184, 0.16);
+  --glow-b: rgba(242, 181, 107, 0.1);
+  --header-bg: rgba(13, 20, 19, 0.8);
+
+  --dc-bg: #131d1b;
+  --dc-side: #0e1615;
+
+  color-scheme: dark;
+}
