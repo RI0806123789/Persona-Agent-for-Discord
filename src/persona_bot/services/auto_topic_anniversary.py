@@ -155,7 +155,9 @@ class AnniversaryMixin:
             return
 
         for guild_id, guild_settings in list(self._state.guild_settings.items()):
-            if not guild_settings.auto_topic_enabled or guild_settings.autonomous_session is not None:
+            # 前のサーバーの投稿を待つ間に退出した設定（is_active が偽）は飛ばす（#466）。
+            if (not guild_settings.auto_topic_enabled or guild_settings.autonomous_session is not None
+                    or not guild_settings.is_active):
                 continue
             if guild_settings.anniversary_posted_dates.get(posted_key) == today_str:
                 continue  # このサーバーでは今日すでに投稿済み
@@ -221,8 +223,11 @@ class AnniversaryMixin:
         """お祝いメッセージを生成し、チャンネルへ投稿する。戻り値の意味は _post_topic と同様。"""
         def eligible() -> bool:
             # 生成の前後・送信の前に何度も呼ばれる。待機中にブロックされた場合も止める。
+            # 待機中にサーバーから退出した設定（is_active が偽）でも止める（#466。古い設定のまま投稿すると、
+            # 記録は保存されず、再参加後の新しい設定が同じ日にもう一度祝ってしまう）。
             return (
-                guild_settings.auto_topic_enabled and guild_settings.autonomous_session is None
+                guild_settings.is_active
+                and guild_settings.auto_topic_enabled and guild_settings.autonomous_session is None
                 and channel.id in guild_settings.auto_topic_channels
                 and not self._is_user_blocked(member.id)
             )

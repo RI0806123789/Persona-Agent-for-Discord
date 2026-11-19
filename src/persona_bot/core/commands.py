@@ -5,6 +5,7 @@
 `voice_commands.VoiceSessionCommands` にある。
 """
 
+import asyncio
 from functools import wraps
 import logging
 
@@ -25,7 +26,7 @@ from persona_bot.services.blacklist_service import BlacklistService
 from persona_bot.services.content_moderator import ContentModerator
 from persona_bot.utils.discord_helpers import is_administrator, is_bot_owner, reject_blocked_interaction
 from persona_bot.views.functions_view import FunctionsView
-from persona_bot.views.view_parts import edit_panel_message
+from persona_bot.views.view_parts import bind_panel_message, edit_panel_message
 from persona_bot.services.gemini_service import GeminiService
 from persona_bot.services.memory_service import MemoryService
 from persona_bot.services.ng_word_service import NgWordFilter
@@ -136,12 +137,23 @@ def register_commands(
             memory=memory,
         )
         # 機能パネルは本人だけに見えるよう ephemeral で送信する
-        if deferred:
-            await edit_panel_message(interaction, content=view.build_preview(), view=view, deferred=True)
-        else:
-            await interaction.response.send_message(view.build_preview(), view=view, ephemeral=True)
-        # タイムアウト時に UI を取り除けるよう、送信したパネルメッセージを View に持たせる
-        view.message = await interaction.original_response()
+        try:
+            if deferred:
+                shown = await edit_panel_message(interaction, content=view.build_preview(), view=view, deferred=True)
+            else:
+                await interaction.response.send_message(view.build_preview(), view=view, ephemeral=True)
+                shown = True
+        except (Exception, asyncio.CancelledError):
+            # 表示できなかったパネルの時間切れの待機を残さない（#466）。失敗の通知は共通の入口が行う。
+            view.stop()
+            raise
+        if not shown:
+            view.stop()
+            return
+        # タイムアウト時に UI を取り除けるよう、送信したパネルメッセージを View に持たせる。
+        # 表示できた後の参照の取得に失敗しても、警告だけにする（#466。表示済みのパネルの下に
+        # 失敗の通知を重ねない。他のパネルの切り替えと同じ bind_panel_message を使う）。
+        await bind_panel_message(interaction, view)
 
     @tree.command(name="join", description="ボットがボイスチャンネルに参加します")
     @owned_command

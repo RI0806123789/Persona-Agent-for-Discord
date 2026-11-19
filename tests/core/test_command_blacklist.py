@@ -68,6 +68,50 @@ class CommandBlacklistTests(unittest.IsolatedAsyncioTestCase):
         self.state.get_guild.assert_called_once_with(1)
         interaction.response.send_message.assert_awaited_once_with("架空の機能パネル", view=view, ephemeral=True)
 
+    def functions_panel(self):
+        """/functions が作る実物の機能パネルを控える（失敗時に止まったかを確かめる）。"""
+        self.blacklist.is_blocked.return_value = False
+        created = []
+
+        def create(*args, **kwargs):
+            view = FunctionsView(*args, **kwargs)
+            self.addCleanup(view.stop)
+            created.append(view)
+            return view
+
+        return created, patch.object(commands, "FunctionsView", side_effect=create)
+
+    async def test_functions_panel_is_stopped_when_sending_fails(self):
+        """パネルの送信に失敗したら、表示できなかった View の時間切れの待機を残さない（#466）。"""
+        created, factory = self.functions_panel()
+        interaction = self.interaction()
+        interaction.command = SimpleNamespace(name="functions")
+        interaction.response.send_message.side_effect = discord.HTTPException(
+            SimpleNamespace(status=500, reason="架空"), "架空の送信失敗",
+        )
+        with factory, self.assertLogs("persona_bot.core.commands", "ERROR"):
+            await self.callbacks["functions"](interaction)
+        self.assertEqual(len(created), 1)
+        self.assertTrue(created[0].is_finished())
+        # 失敗は共通の入口が本人だけに伝える（未応答なので、初回の応答で通知を試みる）。
+        self.assertEqual(interaction.response.send_message.await_count, 2)
+        self.assertTrue(interaction.response.send_message.await_args.kwargs["ephemeral"])
+
+    async def test_reference_failure_after_showing_the_panel_does_not_add_an_error_notice(self):
+        """表示できた後の参照の取得に失敗しても、パネルは残し、失敗の通知を重ねない（#466）。"""
+        created, factory = self.functions_panel()
+        interaction = self.interaction()
+        interaction.original_response.side_effect = discord.HTTPException(
+            SimpleNamespace(status=500, reason="架空"), "架空の取得失敗",
+        )
+        # panel_state のログの出元は、分割前と同じ view_parts のロガー。
+        with factory, self.assertLogs("persona_bot.views.view_parts", "WARNING"):
+            await self.callbacks["functions"](interaction)
+        interaction.response.send_message.assert_awaited_once()
+        self.assertFalse(created[0].is_finished())
+        self.assertIsNone(created[0].message)
+        interaction.followup.send.assert_not_awaited()
+
     async def test_open_panel_and_subpanel_recheck_block_status_after_navigation(self):
         self.blacklist.is_blocked.return_value = False
         hub = FunctionsView(self.state.get_guild(1), None, None, self.blacklist, None, None, None, None)

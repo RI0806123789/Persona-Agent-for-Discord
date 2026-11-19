@@ -867,6 +867,55 @@ class StatsAnalysisTests(unittest.IsolatedAsyncioTestCase):
                 result = await self.service.ensure_analysis("user-0")
                 self.assertEqual(result["personality"], valid["personality"])
 
+    async def test_broken_cached_analysis_and_samples_do_not_raise(self) -> None:
+        """キャッシュの analysis が dict でない・recent_samples が list でなくても落ちない（#466）。"""
+        for analysis, samples in (("壊れた解析", None), (["壊れた"], "壊れたサンプル"),
+                                  (12, {"壊れた": 1}), ("壊れた解析", ["架空の会話", 3, None])):
+            with self.subTest(analysis=analysis, samples=samples):
+                self.seed(STATS_PERSONALITY_MIN_SAMPLES)
+                self.gemini.generate.reset_mock()
+                entry = self.service.cache["user-0"]
+                entry["analysis"] = analysis
+                entry["recent_samples"] = samples
+                result = await self.service.ensure_analysis("user-0")
+                if isinstance(samples, list):
+                    # 文字列のサンプルだけで解析する（壊れた解析は使わずに作り直す）。
+                    self.gemini.generate.assert_awaited_once()
+                    self.assertEqual(result["topics"], self.analysis["topics"])
+                else:
+                    # サンプルが無いとみなし、壊れた解析も返さない。
+                    self.gemini.generate.assert_not_awaited()
+                    self.assertIsNone(result)
+                caption, names = await self.dashboard("all")
+                self.assertIn("累計発言回数", caption)
+                self.assertIn("stats_hourly.png", names)
+
+    async def test_recheck_after_rendering_uses_the_normalized_count(self) -> None:
+        """描画中に回数が真偽値・不正な文字列へ壊れたら、描画後の確認で送らない（#466）。"""
+        for broken in (True, "架空の不正な値", None):
+            with self.subTest(broken=broken):
+                self.seed(STATS_PERSONALITY_MIN_SAMPLES)
+                original = self.service.build_hourly_graph
+
+                def break_count_while_rendering(entry, *, value=broken):
+                    self.service.cache["user-0"]["total_count"] = value
+                    return original(entry)
+
+                with patch.object(self.service, "build_hourly_graph", side_effect=break_count_while_rendering):
+                    caption, images = await self.service.build_dashboard("user-0", "time")
+                self.assertEqual(images, [])
+                self.assertIn("まだありません", caption)
+
+                self.seed(STATS_PERSONALITY_MIN_SAMPLES)
+                original_ranking = self.service._render_ranking_graph
+
+                def break_count_while_ranking(items, top_n, *, value=broken):
+                    self.service.cache["user-0"]["total_count"] = value
+                    return original_ranking(items, top_n)
+
+                with patch.object(self.service, "_render_ranking_graph", side_effect=break_count_while_ranking):
+                    self.assertIsNone(await self.service.build_ranking_graph())
+
     async def test_previously_cached_empty_analysis_retries_inside_ttl(self) -> None:
         self.seed(STATS_PERSONALITY_MIN_SAMPLES)
         self.service.cache["user-0"]["analysis"] = {

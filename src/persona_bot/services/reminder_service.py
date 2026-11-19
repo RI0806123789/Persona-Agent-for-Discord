@@ -76,10 +76,15 @@ class ReminderService:
     「依頼されたチャンネル」で、そこに依頼者をメンションして投稿する。
     """
 
-    def __init__(self, client: discord.Client, db: Database, ng_filter: NgWordFilter) -> None:
+    def __init__(
+        self, client: discord.Client, db: Database, ng_filter: NgWordFilter,
+        *, is_blocked: Callable[[int | str], bool] | None = None,
+    ) -> None:
         self._client = client
         self._db = db
         self._ng_filter = ng_filter
+        # ブラックリストの判定（#466）。ブロック中の依頼者へは通知しない（スレッドの再開もしない）。
+        self._is_blocked = is_blocked
         self._tz = resolve_timezone(REMINDER_TIMEZONE, purpose="リマインダーの表示・日時解釈")
         # 実行中・待機中だけ保持し、使い終わった系列のロックを溜めない。
         self._delivery_locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
@@ -296,8 +301,25 @@ class ReminderService:
             return False
         return as_utc(remind_at) < stale_before
 
+    def _requester_blocked(self, record: dict[str, Any]) -> bool:
+        """依頼者がいまブロック中か（#466）。判定できない ID は「ブロック中でない」とみなす。"""
+        if self._is_blocked is None:
+            return False
+        try:
+            return bool(self._is_blocked(int(record["user_id"])))
+        except (KeyError, TypeError, ValueError):
+            return False
+
     async def _notify(self, record: dict[str, Any]) -> None:
-        """1件分の通知を、依頼されたチャンネルへ投稿する。"""
+        """1件分の通知を、依頼されたチャンネルへ投稿する。
+
+        依頼者がブロック中なら、チャンネルの取得・スレッドの再開・送信のどれもしない（#466）。
+        記録は消さない（単発はクレームの時点で完了済み。繰り返しは系列を残し、ブロックの解除後の
+        次回から再び届く）— ブロックはボット所有者が解除できるため、利用者の予定を消すことはしない。
+        """
+        if self._requester_blocked(record):
+            logger.info("リマインダー: 依頼者がブロック中のため通知を見送りました。")
+            return
         channel_id = int(record["channel_id"])
         channel = self._client.get_channel(channel_id)
         if channel is None:
@@ -335,6 +357,9 @@ class ReminderService:
                         return
             # 宛先を親へ変えると、非公開スレッドの内容を別の参加者へ漏らしうる。
             # 元のスレッドだけを再開し、ロック解除や代替配送は行わない。
+            if self._requester_blocked(record):
+                # チャンネルを取得している間にブロックされた。スレッドを再開しない。
+                return
             if channel.locked and not channel.permissions_for(guild.me).manage_threads:
                 logger.warning("リマインダー: ロックされたスレッドを再開する権限がありません。")
                 return
@@ -368,6 +393,9 @@ class ReminderService:
         )
         if not next_at:
             # 単発はクレーム時に完了済みで、これ以降の取消は成功しない。
+            # チャンネルの取得・スレッドの再開を待つ間のブロックも、送信の直前に確かめる。
+            if self._requester_blocked(record):
+                return
             await send_long_message(channel, body, allowed_mentions=allowed_mentions)
             return
 
@@ -376,5 +404,8 @@ class ReminderService:
         # DBの共有同期ロックは通信中に保持しない。
         async with self._delivery_lock(int(record["reminder_id"])):
             if not await run_in_thread(self._db.reminder_is_pending, int(record["reminder_id"])):
+                return
+            # 状態確認を待つ間にブロックされた場合も送らない（判定と送信の間に await を挟まない）。
+            if self._requester_blocked(record):
                 return
             await send_long_message(channel, body, allowed_mentions=allowed_mentions)

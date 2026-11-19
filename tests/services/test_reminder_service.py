@@ -118,6 +118,70 @@ class ReminderCompatibilityTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     channel.send.assert_not_awaited()
 
+    def blocked_thread_service(self, blocked: set[int]):
+        channel = Mock(spec=discord.Thread, archived=True, locked=False, send=AsyncMock())
+        channel.guild = SimpleNamespace(me=object())
+        channel.permissions_for.return_value = make_permissions(manage_threads=True)
+        channel.edit = AsyncMock(return_value=channel)
+        client = Mock(get_channel=Mock(return_value=channel), fetch_channel=AsyncMock(return_value=channel))
+        db = Mock(reminder_is_pending=Mock(return_value=True))
+        service = ReminderService(
+            client, db, Mock(mask_with_log=Mock(side_effect=lambda text, **kwargs: text)),
+            is_blocked=lambda user_id: user_id in blocked,
+        )
+        return service, channel, client
+
+    async def test_blocked_requester_gets_no_notification_or_thread_reopen(self):
+        """ブロック中の依頼者へは通知せず、アーカイブ済みのスレッドも再開しない（#466）。"""
+        for recurring in (False, True):
+            with self.subTest(recurring=recurring):
+                service, channel, client = self.blocked_thread_service({11})
+                record = {"channel_id": 10, "user_id": "11", "message": "架空の予定", "reminder_id": 1}
+                if recurring:
+                    record["next_remind_at"] = "2026-11-20T00:00:00+00:00"
+                with self.assertLogs(reminder_service.logger, "INFO") as logs:
+                    await service._notify(record)
+                client.get_channel.assert_not_called()
+                channel.edit.assert_not_awaited()
+                channel.send.assert_not_awaited()
+                self.assertNotIn("11", "\n".join(logs.output))
+                # 他の利用者の通知はふつうに届く
+                service2, channel2, _ = self.blocked_thread_service({11})
+                await service2._notify({**record, "user_id": "12"})
+                channel2.send.assert_awaited_once()
+
+    async def test_block_during_the_reopen_or_status_check_stops_the_send(self):
+        """チャンネルの取得・スレッドの再開・状態確認を待つ間にブロックされても送らない（#466）。"""
+        for recurring in (False, True):
+            with self.subTest(recurring=recurring):
+                blocked: set[int] = set()
+                service, channel, _ = self.blocked_thread_service(blocked)
+
+                async def reopen(**kwargs):
+                    blocked.add(11)  # 再開の通信中にブロックされる
+                    return channel
+
+                channel.edit.side_effect = reopen
+                record = {"channel_id": 10, "user_id": "11", "message": "架空の予定", "reminder_id": 1}
+                if recurring:
+                    record["next_remind_at"] = "2026-11-20T00:00:00+00:00"
+                await service._notify(record)
+                channel.edit.assert_awaited_once()
+                channel.send.assert_not_awaited()
+
+    async def test_blocked_requesters_reminder_is_kept_for_after_unblocking(self):
+        """ブロック中の繰り返しは系列を消さない。解除後の次回から届く（#466）。"""
+        blocked = {11}
+        service, channel, _ = self.blocked_thread_service(blocked)
+        record = {"channel_id": 10, "user_id": "11", "message": "架空の予定", "reminder_id": 1,
+                  "next_remind_at": "2026-11-20T00:00:00+00:00"}
+        await service._notify(record)
+        channel.send.assert_not_awaited()
+        service._db.reminder_cancel.assert_not_called()
+        blocked.clear()
+        await service._notify(record)
+        channel.send.assert_awaited_once()
+
 
 class ReminderDaylightSavingTests(unittest.TestCase):
     """夏時間の切り替えをまたぐ繰り返しの次回時刻を確認する（#222）。"""

@@ -121,6 +121,20 @@ class StatsService:
         except (TypeError, ValueError):
             return 0
 
+    @staticmethod
+    def _analysis_of(entry: dict) -> dict | None:
+        """保存済みの解析結果を返す。dict でない壊れた値は「解析なし」として扱う（#466）。"""
+        value = entry.get("analysis")
+        return value if isinstance(value, dict) else None
+
+    @staticmethod
+    def _samples_of(entry: dict) -> list[str]:
+        """発言サンプルを返す。list でない壊れた値は空、文字列でない要素は除いて扱う（#466）。"""
+        value = entry.get("recent_samples")
+        if not isinstance(value, list):
+            return []
+        return [sample for sample in value if isinstance(sample, str)]
+
     def _to_local_hour(self, when: datetime) -> int:
         """発言時刻（UTC aware 想定）を集計用タイムゾーンの「時」に変換する。"""
         return as_utc(when).astimezone(self._tz).hour
@@ -320,10 +334,10 @@ class StatsService:
             entry = self.cache.get(user_id)
             if not entry:
                 return None
-            cached = deepcopy(entry.get("analysis"))
+            cached = deepcopy(self._analysis_of(entry))
             if self._entry_opted_out(entry):
                 return cached
-            samples = list(entry.get("recent_samples") or [])
+            samples = self._samples_of(entry)
             if not samples:
                 return cached
             if (not force and cached and self._analysis_usable(cached, len(samples))
@@ -337,7 +351,7 @@ class StatsService:
                     and observed_flight.task.done() and not observed_flight.task.cancelled()
                     and observed_flight.saved):
                 # 保存ロックを待つ間に完了した解析も、この要求の実行中処理として共有する。
-                return deepcopy(entry.get("analysis"))
+                return deepcopy(self._analysis_of(entry))
             if (flight is None or flight.version != version or flight.samples != samples
                     or flight.task.done()):
                 flight = _AnalysisFlight(samples=samples, version=version)
@@ -419,22 +433,24 @@ class StatsService:
             # LLM待機中の削除・停止・再開をまたいだ結果は反映しない。
             if (analysis is None or flight.version != self._analysis_versions.get(user_id, 0)
                     or self._entry_opted_out(entry)):
-                return deepcopy(entry.get("analysis"))
+                return deepcopy(self._analysis_of(entry))
             if self._analysis_tasks.get(user_id) is not flight:
                 # 新しい解析の実行に交代された。計算済みの新しい結果を優先して返し、
                 # 古いキャッシュは解析が失敗した（analysis が None）ときだけ使う。
-                return deepcopy(analysis or entry.get("analysis"))
+                return deepcopy(analysis or self._analysis_of(entry))
             candidate = deepcopy(entry)
             candidate["analysis"] = analysis
             if not await self._save_user_locked(user_id, candidate):
-                return deepcopy(entry.get("analysis"))
+                return deepcopy(self._analysis_of(entry))
             self.cache[user_id] = candidate
             flight.saved = True
         return analysis
 
     @staticmethod
     def _analysis_usable(analysis: dict, sample_count: int) -> bool:
-        """失敗表示になる空の解析を、TTLの有効なキャッシュとして扱わない。"""
+        """失敗表示になる空の解析を、TTLの有効なキャッシュとして扱わない。dict でない値も使えない（#466）。"""
+        if not isinstance(analysis, dict):
+            return False
         return bool(normalize_topics(analysis.get("topics"))) and (
             sample_count < STATS_PERSONALITY_MIN_SAMPLES
             or any(normalize_big_five(analysis.get("big_five")).values())
@@ -470,8 +486,9 @@ class StatsService:
         versions = {uid: self._analysis_versions.get(uid, 0) for uid in snapshot}
         graph = await run_in_thread(self._render_ranking_graph, list(snapshot.values()), top_n)
         # 描画中に停止・削除したユーザーの情報を、管理者へ後から送信しない。
+        # 回数は描画前と同じ _total_count で読む（生の値の真偽で見ると True や不正な文字列が通る。#466）。
         if any(uid not in self.cache or self._entry_opted_out(self.cache[uid])
-               or not self.cache[uid].get("total_count")
+               or self._total_count(self.cache[uid]) == 0
                or versions[uid] != self._analysis_versions.get(uid, 0) for uid in snapshot):
             graph.close()
             return None
@@ -524,7 +541,7 @@ class StatsService:
             if want_time:
                 images.append(("stats_hourly.png", await run_in_thread(self.build_hourly_graph, entry)))
 
-            samples = entry.get("recent_samples") or []
+            samples = self._samples_of(entry)
             enough_samples = len(samples) >= STATS_PERSONALITY_MIN_SAMPLES
             analysis = None
             # 性格推定だけを見る場合、件数が足りなければ解析（Gemini 呼び出し）自体を行わない。
@@ -559,7 +576,8 @@ class StatsService:
                         lines.append("・性格推定: 解析に失敗しました。時間をおいて再度お試しください。")
 
             current = self.cache.get(user_id)
-            if (not current or not current.get("total_count")
+            # 描画前と同じ _total_count で読む（#466）。
+            if (not current or self._total_count(current) == 0
                     or version != self._analysis_versions.get(user_id, 0)
                     or (viewer_id is not None and viewer_id != user_id and self._entry_opted_out(current))):
                 for _, buffer in images:
