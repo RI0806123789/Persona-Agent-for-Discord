@@ -1,0 +1,192 @@
+/* デプロイ。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ------------------------------------------------------------ デプロイ */
+
+.deploy-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.deploy-current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deploy-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 結果のお知らせ（状態の色の面。色だけに頼らずアイコンと文で示す） */
+.m3-status-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: var(--md-sys-shape-large);
+  background: var(--tone-container);
+  color: var(--on-tone-container);
+}
+
+/* ステップの並び。左の印どうしを縦の線でつなぎ、どこまで進んだかを見せる */
+.deploy-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.deploy-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 16px;
+  padding: 12px 16px 12px 12px;
+  border-radius: var(--md-sys-shape-large);
+  transition: background var(--spring-effects-default);
+}
+.deploy-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 56px;
+  bottom: -8px;
+  left: 31px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--md-sys-color-outline-variant);
+}
+.deploy-step.is-succeeded:not(:last-child)::after {
+  background: var(--md-custom-success);
+}
+.deploy-step.is-running {
+  background: var(--md-sys-color-surface-container-high);
+}
+.deploy-step.is-failed {
+  background: color-mix(in srgb, var(--md-sys-color-error-container) 45%, transparent);
+}
+.deploy-step.is-pending .deploy-step-body,
+.deploy-step.is-skipped .deploy-step-body {
+  opacity: 0.72;
+}
+.deploy-steps.is-planned .deploy-step-body {
+  opacity: 1;
+}
+.deploy-step-icon {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--md-sys-shape-full);
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.deploy-step-icon.tone-good {
+  background: var(--md-custom-success-container);
+  color: var(--md-custom-on-success-container);
+}
+.deploy-step-icon.tone-critical {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+.deploy-step-icon.tone-info {
+  background: var(--md-sys-color-primary-container);
+}
+.deploy-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.deploy-step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.deploy-step-message.is-error {
+  color: var(--md-sys-color-error);
+  font-weight: 500;
+}
+.deploy-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.deploy-checks li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.deploy-checks li.is-ok .icon {
+  color: var(--md-custom-success);
+}
+.deploy-checks li.is-ng .icon {
+  color: var(--md-sys-color-error);
+}
+.deploy-check-detail {
+  padding: 1px 8px;
+  border-radius: var(--md-sys-shape-small);
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface-variant);
+  word-break: break-all;
+}
+.deploy-output summary,
+.deploy-commits summary {
+  width: fit-content;
+  padding: 4px 8px;
+  border-radius: var(--md-sys-shape-small);
+  color: var(--md-sys-color-primary);
+  cursor: pointer;
+}
+.deploy-output summary:hover,
+.deploy-commits summary:hover {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+.deploy-output pre {
+  max-height: 320px;
+  margin: 8px 0 0;
+  padding: 12px 16px;
+  overflow: auto;
+  border-radius: var(--md-sys-shape-medium);
+  background: var(--app-terminal-bg);
+  color: var(--app-terminal-ink);
+  font: 12px/1.6 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.deploy-rollback {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+.deploy-rollback h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--md-custom-on-warning-container);
+}
+.deploy-commits ul {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+.dialog-steps {
+  margin: 0;
+  padding-left: 20px;
+}

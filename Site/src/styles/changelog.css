@@ -1,0 +1,31 @@
+/* 更新履歴への入口。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* --- 更新履歴への入口 ---------------------------------------------------- */
+
+.updates {
+  display: grid;
+  gap: 24px;
+  align-items: center;
+  padding: 36px 28px;
+  background:
+    radial-gradient(420px 220px at 100% 0%, var(--glow-b), transparent 70%),
+    radial-gradient(420px 240px at 0% 100%, var(--glow-a), transparent 70%), var(--surface);
+}
+
+.updates p:not(.eyebrow) {
+  margin-top: 10px;
+  color: var(--text-soft);
+}
+
+.updates__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+@media (min-width: 860px) {
+  .updates {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 48px;
+  }
+}

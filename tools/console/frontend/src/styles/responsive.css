@@ -1,0 +1,167 @@
+/* 画面幅ごとの調整（M3 のウィンドウサイズクラス）。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ------------------------------------------------------------ 画面幅ごとの調整（M3 のウィンドウサイズクラス） */
+
+@media (max-width: 1199px) {
+  .span-3 {
+    grid-column: span 6;
+  }
+  .span-4,
+  .span-5,
+  .span-7,
+  .span-8 {
+    grid-column: span 12;
+  }
+  .hero-layout {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .hero-spark {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 839px) {
+  .span-6 {
+    grid-column: span 12;
+  }
+  .action-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 599px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    padding-bottom: 80px;
+  }
+  .main {
+    height: calc(100vh - 80px);
+    margin: 0;
+    border-radius: 0;
+  }
+  .m3-top-app-bar {
+    padding: 16px;
+  }
+  .m3-top-app-bar-title {
+    flex: 1;
+    min-width: 0;
+  }
+  .m3-top-app-bar-title p {
+    display: none;
+  }
+  .m3-top-app-bar-actions {
+    margin-left: 0;
+  }
+  .m3-select-button {
+    max-width: 180px;
+  }
+  /* 狭い画面では右下の FAB が「今すぐ更新」を担うので、トップの更新ボタンは出さない */
+  .top-refresh {
+    display: none;
+  }
+  .m3-snackbars,
+  .go-key-hint {
+    bottom: 160px;
+  }
+  .m3-divider-vertical {
+    display: none;
+  }
+  .content {
+    padding: 4px 16px 40px;
+  }
+  .m3-banner {
+    margin: 0 16px 8px;
+  }
+  .span-3 {
+    grid-column: span 12;
+  }
+  .grid {
+    gap: 12px;
+  }
+  .m3-card {
+    padding: 16px;
+  }
+  .table-wrap {
+    margin: 0 -16px;
+    padding: 0 16px;
+  }
+  .hero-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hero-shape {
+    width: 88px;
+    height: 88px;
+  }
+  .bar-row {
+    grid-template-columns: minmax(0, 1fr) 56px 20px;
+  }
+  .bar-list .bar-track {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .db-range {
+    margin-left: 0;
+  }
+  .db-row-detail-body {
+    padding-left: 12px;
+  }
+  .db-fields {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: calc(100cqi - 24px);
+  }
+  .log-row {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+  .log-row .level,
+  .log-row .log-source {
+    display: none;
+  }
+  .logs-page {
+    height: calc(100vh - 300px);
+  }
+  .shortcut-list li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .settings-list li {
+    grid-template-columns: 24px 96px minmax(0, 1fr);
+  }
+
+  .m3-nav-bar {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 50;
+    display: flex;
+    justify-content: space-around;
+    height: 80px;
+    padding: 12px 4px 16px;
+    background: var(--md-sys-color-surface-container);
+  }
+  .m3-nav-bar-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+    border: 0;
+    background: none;
+    color: var(--md-sys-color-on-surface-variant);
+    cursor: pointer;
+  }
+  .m3-nav-bar-indicator {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 32px;
+    border-radius: var(--md-sys-shape-full);
+    transition: background var(--spring-effects-default);
+  }
+  .m3-nav-bar-item.is-active {
+    color: var(--md-sys-color-on-surface);
+  }
+  .m3-nav-bar-item.is-active .m3-nav-bar-indicator {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+  }
+}

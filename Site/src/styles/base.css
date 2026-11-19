@@ -1,0 +1,132 @@
+/* リセット・文字・コンテナ・スキップリンク・見出しの飾り。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  /* 文字の大きさは rem で決めている。ブラウザの既定の文字サイズを大きくしている人にはそのまま従い、
+     小さくしている環境（既定が 10px など）でも本文が読めなくならないよう、16px を下限にする */
+  font-size: max(100%, 16px);
+  scroll-behavior: smooth;
+  /* 固定のヘッダーに見出しが隠れないよう、ページ内リンクの着地点を下げる */
+  scroll-padding-top: 84px;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Noto Sans JP Variable", "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.85;
+  font-feature-settings: "palt";
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.4s var(--ease), color 0.4s var(--ease);
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+ul,
+ol {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  /* 日本語の見出しを、単語の途中でなるべく折り返さない */
+  word-break: auto-phrase;
+  text-wrap: balance;
+}
+
+p {
+  /* 段落の最後の行に 1〜2 文字だけ残るのを、対応しているブラウザでは避ける */
+  text-wrap: pretty;
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.container {
+  width: 100%;
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.skip-link {
+  position: absolute;
+  left: 16px;
+  top: -64px;
+  z-index: 100;
+  padding: 10px 16px;
+  border-radius: var(--radius-s);
+  background: var(--accent);
+  color: var(--on-accent);
+  text-decoration: none;
+  font-weight: 700;
+  transition: top 0.2s var(--ease);
+}
+
+.skip-link:focus {
+  top: 12px;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.eyebrow::before {
+  content: "";
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--warm);
+  transform-origin: left center;
+}
+
+/* 見出しが現れるときに、飾りの線を左から伸ばす */
+.reveal.is-visible .eyebrow::before,
+.eyebrow.hero-in::before {
+  animation: bar-in 0.8s var(--ease) 0.3s backwards;
+}
+
+@keyframes bar-in {
+  from {
+    transform: scaleX(0);
+  }
+}

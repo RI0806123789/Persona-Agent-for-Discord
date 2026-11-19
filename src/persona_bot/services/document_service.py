@@ -41,9 +41,9 @@ from persona_bot.utils.timeutil import parse_iso_datetime, utc_now_iso
 from persona_bot.services.gemini_service import GeminiService
 from persona_bot.services.memory_service import MemoryService
 from persona_bot.services.ng_word_service import NgWordFilter
-from persona_bot.config.paths import load_persona_template
+from persona_bot.config.paths import load_persona_or_default, load_persona_template
 from persona_bot.services.prompting import build_full_prompt, build_memory_sections
-from persona_bot.utils.usage_graph import UsageTracker
+from persona_bot.utils.usage_graph import UsageTracker, log_tokens_safely
 
 logger = logging.getLogger(__name__)
 
@@ -250,13 +250,14 @@ class DocumentService:
             guild_settings = await self._state.get_guild_async(guild_id)
             response_settings = guild_settings.snapshot_response()
 
-            try:
-                prompt = await load_persona_template(response_settings.prompt_file)
-            except FileNotFoundError as error:
-                # 受付後にペルソナのファイルが消えた場合も、組み込みの標準プロンプトで処理を続ける
-                # （タスク全体を失敗にすると、利用者は内容に関係なく汎用の失敗通知しか受け取れない）。
-                logger.warning("文書タスク: ペルソナのファイルが見つからないため、標準のプロンプトで処理します。", exc_info=error)
-                prompt = BUILTIN_PERSONA_PROMPT
+            # 受付後にペルソナのファイルが消えた場合も、組み込みの標準プロンプトで処理を続ける
+            # （タスク全体を失敗にすると、利用者は内容に関係なく汎用の失敗通知しか受け取れない）。
+            # 見つからないときの扱いは呼び出し元ごとの契約で、load_persona_or_default の docstring に一覧がある。
+            prompt = await load_persona_or_default(
+                response_settings.prompt_file, logger=logger, loader=load_persona_template,
+                message="文書タスク: ペルソナのファイルが見つからないため、標準のプロンプトで処理します。",
+                default=BUILTIN_PERSONA_PROMPT,
+            )
             summaries = [
                 await self._process_attachment(attachment, response_settings.model_name)
                 for attachment in attachments
@@ -440,7 +441,7 @@ class DocumentService:
             finally:
                 # アップロード先の削除が失敗しても、ローカルの回収を実行する。
                 if temp_path is not None:
-                    self._remove_temp_file(temp_path)
+                    await self._remove_temp_file(temp_path)
 
     @staticmethod
     def _document_hash(path: Path) -> str:
@@ -448,38 +449,62 @@ class DocumentService:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def _record_summary_usage(self, usage_info: Any) -> None:
-        """要約内容をログへ出さず、トークン数のみ記録する。"""
-        if self._usage is None or usage_info is None:
-            return
-        try:
-            self._usage.log_tokens("文書要約", usage_info)
-        except Exception as error:
-            logger.warning("文書要約のトークン記録に失敗しました: %s", type(error).__name__)
+        """要約内容をログへ出さず、トークン数のみ記録する。記録の失敗は要約を止めない。"""
+        log_tokens_safely(self._usage, "文書要約", usage_info)
 
     async def _download_to_temp_file(self, attachment: discord.Attachment, suffix: str) -> Path:
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-        temp_path = Path(temp_file.name)
-        downloaded = False
-        try:
-            temp_file.close()
-            temp_bytes = await attachment.read()
-            if len(temp_bytes) > MAX_DOCUMENT_SIZE_BYTES:
-                raise DocumentUserError(f"ファイルサイズが上限を超えています: {attachment.filename}")
-            # 書き込み完了まで待ち、キャンセル時も回収後の再作成を防ぐ。
-            await run_in_thread(temp_path.write_bytes, temp_bytes)
-            downloaded = True
-            return temp_path
-        finally:
-            # 正常に返した時点で呼び出し側へ所有権を渡す。それまではここで回収する。
-            if not downloaded:
-                self._remove_temp_file(temp_path)
+        """添付を一時ファイルへ保存して返す。返した時点から回収は呼び出し側の責務。
+
+        ダウンロードと大きさの確認を先に済ませ、一時ファイルの作成・書き込み・失敗時の回収は
+        1回のワーカーにまとめる（#480。作成と close をイベントループ上で同期実行しない）。
+        """
+        temp_bytes = await attachment.read()
+        if len(temp_bytes) > MAX_DOCUMENT_SIZE_BYTES:
+            raise DocumentUserError(f"ファイルサイズが上限を超えています: {attachment.filename}")
+        # 書き込み完了まで待つ。キャンセルされても作成済みの _TemporaryFile を run_in_thread が
+        # close() で回収するので、受取先の無いファイルが残らず、回収後の再作成も起きない。
+        temp_file = await run_in_thread(self._create_temp_file, suffix, temp_bytes)
+        return temp_file.path
 
     @staticmethod
-    def _remove_temp_file(temp_path: Path) -> None:
+    def _create_temp_file(suffix: str, data: bytes) -> "_TemporaryFile":
+        """一時ファイルを作って内容を書く。どこで失敗しても作ったファイルは自分で消してから例外を返す。"""
+        created = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        temp_file = _TemporaryFile(Path(created.name))
         try:
-            temp_path.unlink(missing_ok=True)
-        except OSError as error:
-            logger.error("文書タスク: 一時ファイルの削除に失敗しました。", exc_info=error)
+            created.close()
+            temp_file.path.write_bytes(data)
+        except BaseException:
+            temp_file.close()
+            raise
+        return temp_file
+
+    @staticmethod
+    async def _remove_temp_file(temp_path: Path) -> None:
+        """一時ファイルの削除を別スレッドで待つ。キャンセルされても削除が終わるまで待つ。"""
+        await run_in_thread(_unlink_temp_file, temp_path)
+
+
+class _TemporaryFile:
+    """作成した一時ファイルの所有権。
+
+    `run_in_thread` はキャンセルで受取先を失った結果に `close()` があれば呼ぶ。作成直後に
+    キャンセルされても、パスを誰も知らないまま一時ファイルが残らないよう、`close()` で削除する。
+    正常に返したときは呼び出し側が `path` を受け取り、使い終えたら自分で削除する。
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def close(self) -> None:
+        _unlink_temp_file(self.path)
+
+
+def _unlink_temp_file(temp_path: Path) -> None:
+    try:
+        temp_path.unlink(missing_ok=True)
+    except OSError as error:
+        logger.error("文書タスク: 一時ファイルの削除に失敗しました。", exc_info=error)
 
 
 def validate_pdf_file(temp_path: Path) -> None:

@@ -1,0 +1,78 @@
+/* 伏せ字・キーの入力待ち・補助。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ------------------------------------------------------------ 伏せ字・キーの入力待ち・補助 */
+
+.privacy-chip {
+  height: 32px;
+}
+
+/* g を押して次のキーを待っている間の表示（Vim の showcmd に当たる）。画面の下に浮かぶ */
+.go-key-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border-radius: var(--md-sys-shape-full);
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
+  box-shadow: var(--md-elevation-3);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 16px);
+  transition:
+    opacity var(--spring-effects-fast),
+    transform var(--spring-spatial-fast);
+}
+.go-key-hint.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.go-key-hint .m3-kbd {
+  background: color-mix(in srgb, var(--md-sys-color-inverse-on-surface) 16%, transparent);
+  color: inherit;
+}
+.go-key-hint > .body-medium {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.go-key-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.trend-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* 画面には出さず、スクリーンリーダーにだけ読ませる */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* 狭い画面で、ナビゲーションバーの上に浮かぶ FAB */
+.m3-fab.m3-fab-compact {
+  position: fixed;
+  right: 16px;
+  bottom: 96px;
+  z-index: 55;
+  width: 56px;
+  margin: 0;
+  box-shadow: var(--md-elevation-3);
+}

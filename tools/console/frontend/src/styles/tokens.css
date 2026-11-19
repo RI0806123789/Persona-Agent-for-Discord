@@ -1,0 +1,132 @@
+/* デザイントークン（形・色・動き）と文字の段階。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ============================================================
+   Persona Bot Console — Material 3 Expressive
+   色: theme/theme.ts がシード色から生成する --md-sys-color-*（SchemeExpressive / 2025 年版）
+   形・文字: このファイルのトークン（--md-sys-shape-* / 文字クラス）
+   動き: theme/motion.ts がばね（spring）の物理計算から作る --spring-*（時間 + linear()）。
+   利用者の好みに合わせ、跳ねない Standard 方式（減衰比 0.9 = 行き過ぎ 0.15%）で「ぬるっと」止める。
+   使い分け: --spring-spatial-* = 位置・大きさ・形 / --spring-effects-* = 色・透明度
+   ============================================================ */
+
+:root {
+  /* ---- 形（角丸）のトークン */
+  --md-sys-shape-extra-small: 4px;
+  --md-sys-shape-small: 8px;
+  --md-sys-shape-medium: 12px;
+  --md-sys-shape-large: 16px;
+  --md-sys-shape-large-increased: 20px;
+  --md-sys-shape-extra-large: 28px;
+  --md-sys-shape-extra-large-increased: 32px;
+  --md-sys-shape-extra-extra-large: 48px;
+  --md-sys-shape-full: 9999px;
+
+  /* ---- 文字 */
+  --font-brand: "Roboto Flex Variable", "Noto Sans JP Variable", system-ui, sans-serif;
+  --font-plain: "Roboto Flex Variable", "Noto Sans JP Variable", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "Roboto Mono", monospace;
+
+  /* ---- 影（elevation） */
+  --md-elevation-1: 0 1px 2px rgb(0 0 0 / 0.18), 0 1px 3px 1px rgb(0 0 0 / 0.08);
+  --md-elevation-2: 0 1px 2px rgb(0 0 0 / 0.18), 0 2px 6px 2px rgb(0 0 0 / 0.1);
+  --md-elevation-3: 0 4px 8px 3px rgb(0 0 0 / 0.1), 0 1px 3px rgb(0 0 0 / 0.18);
+
+  --rail-collapsed: 96px;
+  --rail-expanded: 256px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface);
+  font-family: var(--font-plain);
+  font-size: 14px;
+  line-height: 20px;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+p {
+  margin: 0;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 1px 6px;
+  border-radius: var(--md-sys-shape-small);
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface);
+}
+
+:focus-visible {
+  outline: 3px solid var(--md-sys-color-secondary);
+  outline-offset: 2px;
+}
+
+.icon {
+  flex: none;
+  user-select: none;
+}
+
+/* ------------------------------------------------------------ 文字の段階（M3 タイプスケール） */
+
+.display-large { font-size: 57px; line-height: 64px; letter-spacing: -0.25px; font-weight: 400; }
+.display-medium { font-size: 45px; line-height: 52px; font-weight: 400; }
+.display-small { font-size: 36px; line-height: 44px; font-weight: 400; }
+.headline-large { font-size: 32px; line-height: 40px; font-weight: 400; }
+.headline-medium { font-size: 28px; line-height: 36px; font-weight: 400; }
+.headline-small { font-size: 24px; line-height: 32px; font-weight: 400; margin: 0; }
+.title-large { font-size: 22px; line-height: 28px; font-weight: 400; margin: 0; }
+.title-medium { font-size: 16px; line-height: 24px; font-weight: 500; letter-spacing: 0.15px; margin: 0; }
+.title-small { font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px; }
+.body-large { font-size: 16px; line-height: 24px; letter-spacing: 0.3px; }
+.body-medium { font-size: 14px; line-height: 20px; letter-spacing: 0.15px; }
+.body-small { font-size: 12px; line-height: 16px; letter-spacing: 0.3px; }
+.label-large { font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px; }
+.label-medium { font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: 0.4px; }
+.label-small { font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: 0.4px; }
+
+/* Expressive の「強調」した数字（太く、少し詰める） */
+.display-small,
+.headline-large,
+.display-medium {
+  font-weight: 560;
+  font-variation-settings: "wdth" 92;
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.muted {
+  color: var(--md-sys-color-on-surface-variant);
+}
+.nowrap {
+  white-space: nowrap;
+}
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.break {
+  word-break: break-all;
+}

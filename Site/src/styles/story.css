@@ -1,0 +1,66 @@
+/* 制作背景・目的。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* --- 制作背景・目的 ------------------------------------------------------ */
+
+.story {
+  display: grid;
+  gap: 40px;
+}
+
+.story__text {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  font-size: 1.05rem;
+  line-height: 2.05;
+}
+
+.story__purpose h3 {
+  margin-top: 8px;
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+
+.purpose-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.purpose {
+  display: flex;
+  gap: 16px;
+  padding: 20px;
+}
+
+.purpose__number,
+.step__number {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 800;
+}
+
+.purpose h4 {
+  font-size: 1.02rem;
+  font-weight: 700;
+}
+
+.purpose p {
+  margin-top: 4px;
+  color: var(--text-soft);
+  font-size: 0.93rem;
+  line-height: 1.8;
+}
+
+@media (min-width: 900px) {
+  .story {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 64px;
+  }
+}

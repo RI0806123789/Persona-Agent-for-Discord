@@ -1,0 +1,116 @@
+/* ヘッダーと配色の切り替え。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* --- ヘッダー ----------------------------------------------------------- */
+
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--header-bg);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  border-bottom: 1px solid var(--border);
+  transition: box-shadow 0.4s var(--ease);
+}
+
+/* 下へ送ったら影を付けて、本文の上に浮いていることを示す */
+.header.is-scrolled {
+  box-shadow: var(--shadow);
+}
+
+.header__inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 64px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  /* スマホの幅でもサイト名が省略されない大きさにする */
+  font-size: clamp(0.86rem, 3.9vw, 1rem);
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+}
+
+.brand span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand svg {
+  flex: none;
+}
+
+.nav {
+  display: none;
+  margin-left: auto;
+  gap: 4px;
+}
+
+.nav a {
+  padding: 6px 14px;
+  border-radius: 999px;
+  color: var(--text-soft);
+  font-size: 0.92rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 0.25s var(--ease), color 0.25s var(--ease);
+}
+
+.nav a:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.header__actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.25s var(--ease), background-color 0.25s var(--ease), transform 0.25s var(--ease);
+}
+
+.icon-button:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+/* 配色を切り替えたときに、新しいアイコンを少し回しながら出す */
+.icon-swap {
+  display: grid;
+  animation: icon-swap 0.5s var(--ease) backwards;
+}
+
+@keyframes icon-swap {
+  from {
+    opacity: 0;
+    transform: rotate(-70deg) scale(0.7);
+  }
+}
+
+@media (min-width: 860px) {
+  .nav {
+    display: flex;
+  }
+
+  .header__actions {
+    margin-left: 8px;
+  }
+}

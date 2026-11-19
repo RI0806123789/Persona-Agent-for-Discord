@@ -1,0 +1,65 @@
+/* ボタン・リンク。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* --- ボタン・リンク ----------------------------------------------------- */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 22px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: transform 0.3s var(--ease), box-shadow 0.3s var(--ease), background-color 0.3s var(--ease),
+    border-color 0.3s var(--ease);
+}
+
+.button--primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 10px 24px -12px var(--accent);
+}
+
+.button--primary:hover {
+  background: var(--accent-strong);
+  transform: translateY(-2px);
+}
+
+.button--ghost {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.button--ghost:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.button svg,
+.text-link svg {
+  transition: transform 0.3s var(--ease);
+}
+
+.button:hover svg:last-child,
+.text-link:hover svg {
+  transform: translateX(3px);
+}
+
+.text-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-strong);
+  font-weight: 700;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.25s var(--ease);
+}
+
+.text-link:hover {
+  border-bottom-color: currentColor;
+}

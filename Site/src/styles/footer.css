@@ -1,0 +1,66 @@
+/* フッター。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* --- フッター ----------------------------------------------------------- */
+
+.footer {
+  padding: 56px 0 40px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-tint);
+  transition: background-color 0.4s var(--ease);
+}
+
+.disclaimer {
+  display: grid;
+  gap: 8px;
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--warm);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: 0.88rem;
+}
+
+.disclaimer h2 {
+  color: var(--text);
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
+.footer__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px 32px;
+  margin-top: 36px;
+}
+
+.footer__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+}
+
+.footer__links a,
+.footer__meta a {
+  color: var(--text-soft);
+  font-size: 0.9rem;
+  text-decoration: none;
+  transition: color 0.25s var(--ease);
+}
+
+.footer__links a:hover,
+.footer__meta a:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
+.footer__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin-top: 22px;
+  color: var(--text-soft);
+  font-size: 0.8rem;
+}

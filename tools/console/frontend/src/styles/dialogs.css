@@ -1,0 +1,277 @@
+/* ダイアログ・テキストフィールド・スナックバー。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ------------------------------------------------------------ ダイアログ・テキストフィールド・スナックバー */
+
+.m3-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: transparent;
+  visibility: hidden;
+  transition: background var(--spring-effects-default), visibility 0s linear var(--spring-spatial-default-duration);
+}
+.m3-scrim.is-open {
+  visibility: visible;
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 32%, transparent);
+  transition: background var(--spring-effects-default), visibility 0s;
+}
+.m3-dialog {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: min(440px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 24px;
+  border-radius: var(--md-sys-shape-extra-large);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  box-shadow: var(--md-elevation-3);
+  opacity: 0;
+  transform: translateY(-12px) scale(0.92);
+  transform-origin: top center;
+  transition: opacity var(--spring-effects-fast), transform var(--spring-spatial-fast);
+}
+.m3-scrim.is-open .m3-dialog {
+  opacity: 1;
+  transform: none;
+  transition: opacity var(--spring-effects-default), transform var(--spring-spatial-slow);
+}
+/* 押したボタンの位置から広がる / そこへ縮んで戻る動き（hooks.ts の useEmergeFrom）の間は、
+   CSS の transition を止める（transition の方が Web Animations より優先されるため） */
+.m3-dialog[data-emerge] {
+  transition: none;
+}
+.m3-dialog h2 {
+  text-align: center;
+}
+.m3-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+.m3-dialog-wide {
+  width: min(600px, 100%);
+  align-items: stretch;
+}
+.m3-dialog-icon {
+  display: grid;
+  place-items: center;
+  color: var(--md-sys-color-secondary);
+}
+.m3-dialog.is-danger .m3-dialog-icon {
+  color: var(--md-sys-color-error);
+}
+.m3-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.dialog-target strong {
+  color: var(--md-sys-color-on-surface);
+}
+.dialog-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: var(--md-sys-shape-large);
+  background: var(--md-custom-serious-container);
+  color: var(--md-custom-on-serious-container);
+  font-weight: 600;
+}
+.m3-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+.m3-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.m3-dialog-head h2 {
+  flex: 1;
+  text-align: left;
+}
+
+/* 外枠のテキストフィールド（ラベルが枠の上へ浮かぶ） */
+.m3-text-field {
+  position: relative;
+  display: block;
+}
+.m3-text-field input {
+  width: 100%;
+  height: 56px;
+  padding: 16px;
+  border: 0;
+  border-radius: var(--md-sys-shape-small);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--md-sys-color-outline);
+  color: var(--md-sys-color-on-surface);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  outline: none;
+  transition: box-shadow var(--spring-effects-fast);
+}
+.m3-text-field input:focus {
+  box-shadow: inset 0 0 0 2px var(--md-sys-color-primary);
+}
+.m3-text-field-label {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  padding: 0 4px;
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 16px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  transition:
+    top var(--spring-spatial-fast),
+    font-size var(--spring-spatial-fast),
+    color var(--spring-effects-fast);
+}
+.m3-text-field input:focus + .m3-text-field-label,
+.m3-text-field input:not(:placeholder-shown) + .m3-text-field-label {
+  top: 0;
+  font-size: 12px;
+}
+.m3-text-field input:focus + .m3-text-field-label {
+  color: var(--md-sys-color-primary);
+}
+.m3-text-field-support {
+  display: block;
+  padding: 4px 16px 0;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.shortcut-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.shortcut-group-title {
+  margin: 8px 0 0;
+  color: var(--md-sys-color-primary);
+}
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.shortcut-list li {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+.shortcut-list li:last-child {
+  border-bottom: 0;
+}
+.shortcut-keys {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.shortcut-sep {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.m3-snackbars {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(560px, calc(100vw - 32px));
+  transform: translateX(-50%);
+}
+.m3-snackbar {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 48px;
+  padding: 14px 8px 14px 16px;
+  border-radius: var(--md-sys-shape-medium);
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
+  box-shadow: var(--md-elevation-3);
+  animation: snackbar-in var(--spring-spatial-default) both;
+}
+.m3-snackbar > .icon {
+  margin-top: 0;
+  color: var(--md-sys-color-inverse-primary);
+}
+.m3-snackbar.tone-critical > .icon {
+  color: #ffb4ab;
+}
+.m3-snackbar-text {
+  flex: 1;
+  min-width: 0;
+}
+.m3-snackbar-text p {
+  margin-top: 2px;
+  opacity: 0.85;
+  word-break: break-word;
+}
+.m3-snackbar-action {
+  flex: none;
+  height: 36px;
+  margin-top: -8px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--md-sys-shape-full);
+  background: none;
+  color: var(--md-sys-color-inverse-primary);
+  cursor: pointer;
+  transition: background var(--spring-effects-fast);
+}
+.m3-snackbar-action:hover {
+  background: color-mix(in srgb, var(--md-sys-color-inverse-primary) 12%, transparent);
+}
+.m3-snackbar-close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-top: -6px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.m3-snackbar-close:hover {
+  background: rgb(255 255 255 / 0.1);
+}
+.m3-snackbar.is-leaving {
+  animation: snackbar-out var(--spring-effects-default) both;
+}
+@keyframes snackbar-in {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.96);
+  }
+}
+@keyframes snackbar-out {
+  to {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}

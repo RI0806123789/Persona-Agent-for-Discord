@@ -285,6 +285,8 @@ test("接続切替の最初の描画から、子のテーブル取得を明示�
     "../components/expressive": {},
     "./DbTableDetail": { DbTableDetail: "DbTableDetail" },
   };
+  // CellValue は DbCells.tsx へ分けた（#481）。DbTableDetail が描く実物を、同じ模擬の表で読み込む。
+  modules["./DbCells"] = compile(await source("pages/DbCells.tsx"), modules);
   const stableHooks = (runtime) => ({
     ...runtime.hooks,
     useCallback(callback, dependencies) {

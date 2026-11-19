@@ -1,0 +1,100 @@
+/* 操作ページ。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ------------------------------------------------------------ 操作ページ */
+
+.ops-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.action-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 20px;
+  border-radius: var(--md-sys-shape-extra-large);
+  background: var(--md-sys-color-surface-container);
+}
+.action-card .m3-btn {
+  margin-top: auto;
+}
+.action-card > .body-medium {
+  flex: 1;
+}
+.action-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 4px;
+  border-radius: var(--md-sys-shape-large);
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+}
+.action-danger .action-icon {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+.action-tonal .action-icon {
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.steps li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.steps li > div {
+  display: flex;
+  flex-direction: column;
+}
+.step-index {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.safety-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.safety-list li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.safety-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--md-sys-shape-medium);
+  background: var(--md-custom-success-container);
+  color: var(--md-custom-on-success-container);
+}

@@ -1,5 +1,13 @@
 # 回帰テスト
 
+## 内部Gemini呼び出しのトークン記録・定数/状態の分割（#480）
+
+`services/test_internal_usage_tracking.py` は、モデレーション・記憶のルーティングと圧縮・会話統計の解析が `UsageTracker.log_tokens` で数えられ、「User (」行（会話件数）には混ざらないことを確認する。プロンプトがブロックされた応答も数え、通信の失敗・本文のない応答では数えない。**記録に失敗しても「不適切」の判定が「判定不能（通過）」へ変わらない**こと（`_judge_verdict` が全体を `except Exception` で包むため）、`usage` を渡さない従来の生成でも動くことも確かめる。`services/test_document_service.py` の `DocumentTemporaryFileTests` は、一時ファイルの作成・書き込み・削除がイベントループのスレッドで走らないこと、サイズ超過では一時ファイルを作らないこと、作成後の書き込みの失敗をワーカーが自分で片付けることを確認する（作成直後のキャンセルは、既存のキャンセルのテストが `_TemporaryFile.close()` による回収を通る）。
+
+`config/test_constants_layout.py` は、`constants.py` を領域別の `constants_*.py` へ分けても、領域モジュールの名前が `constants` から同じオブジェクトのまま取れること、どの名前も1か所でだけ定義されること、領域モジュールが何も import しないこと（循環参照を作らない）、`patch.multiple("persona_bot.config.constants", ...)` が領域モジュールの名前にも効くこと、管理コンソールが AST で読む6つの定数が `constants.py` に直接の代入として残ることを確認する。`core/test_guild_state_store.py` は、`app_state.py` が DB に対して呼ぶメソッドがすべて `GuildStateStore` に書いてあり、`Database` の同名メソッドと引数名が食い違わないことを確認する（型の確認ツールが CI に無いための代わり）。`services/test_module_split.py` は、`agent_thread_state.py` への分割後も従来の import 先とロガー名が変わらないことを確認する。
+
+画面側（#481）では `tools/console/frontend/tests/styles-layout.test.mjs` が、`styles.css` が `styles/` のファイルを決まった順に `@import` するだけであること、取りこぼしがないこと、画面幅の調整が各ページより後・動きを減らす設定が最後であること、各ファイルが規則の途中で切れていないことを確認する。ビルドした CSS は分割前と同じハッシュ（`index-DeMYDDPI.css`）になり、出力がバイト単位で一致することを手元で確かめた。`component-layout.test.mjs` は、`components/ui.tsx` が `primitives/` を `export *` で再公開するだけの入口であること、基本部品が従来の名前を1か所ずつで公開すること、`redactNode` が `InlineError` / `Notice` と同じファイルにあること、ページから切り出した部品（`OverviewCards`・`DataSummaryParts`・`DbCells`）の公開する名前と、テストが名前で探す `ServiceHero`・`TableRows` が元のページに残ることを確かめる。紹介サイト（`Site/tests/styles-layout.test.mjs`）も同様に、`styles/` の14ファイルの読み込みの順番と取りこぼし、トークンが最初のファイルにだけあること、動きを減らす設定が最後にだけあること、波括弧の釣り合いを確認し、疑似 Discord 画面の3ファイル（`DiscordDemo`・`demo/ScenarioPlayer`・`demo/DemoMessages`）の公開名と、発言の描画が状態・時間を持たず、再生のタイマーが `ScenarioPlayer` だけにあることを確かめる。ビルドした CSS は分割前と同じハッシュ（`index-tFA-V0aH.css`）で一致した。ページの分割に合わせて、`connection.test.mjs`（`DbTableDetail` の描く `CellValue` を実体の `DbCells` から読み込む）と `dbTables.test.mjs`（「表に無い依存は失敗」の厳格な表へ `./DbCells` を追加）の依存表を更新した。
+
 ## 遠隔集計の読込境界・終了処理の防御（#396・#397）
 
 `tools/console/backend/tests/test_remote_collection.py` は、遠隔スクリプトをimportしてもargvの解釈・設定読込・DB・外部通信・JSON出力を行わないこと、連続した収集で行・エラー・設定・期限が混ざらないこと、従来の標準入力CLIの引数とJSON出力を保つことを確認する。ページング・設定解決・表示名取得の既存テストも、ASTで関数を作り直さず通常のimportと呼出しで実行する。
@@ -467,6 +475,7 @@ Windows・Python 3.13.3でボット672件・コンソールバックエンド158
 
 | 分類 | ファイル |
 | --- | --- |
+| config | [test_constants_layout.py](config/test_constants_layout.py) |
 | config | [test_personas.py](config/test_personas.py) |
 | config | [test_prompt_loading.py](config/test_prompt_loading.py) |
 | config | [test_settings_loader.py](config/test_settings_loader.py) |
@@ -479,6 +488,7 @@ Windows・Python 3.13.3でボット672件・コンソールバックエンド158
 | core | [test_database_json_values.py](core/test_database_json_values.py) |
 | core | [test_db_modules.py](core/test_db_modules.py) |
 | core | [test_guild_settings_persist.py](core/test_guild_settings_persist.py) |
+| core | [test_guild_state_store.py](core/test_guild_state_store.py) |
 | core | [test_join_command.py](core/test_join_command.py) |
 | core | [test_message_gates.py](core/test_message_gates.py) |
 | core | [test_message_handler_import.py](core/test_message_handler_import.py) |
@@ -507,6 +517,7 @@ Windows・Python 3.13.3でボット672件・コンソールバックエンド158
 | services | [test_feedback_votes.py](services/test_feedback_votes.py) |
 | services | [test_gemini_service.py](services/test_gemini_service.py) |
 | services | [test_genai_client.py](services/test_genai_client.py) |
+| services | [test_internal_usage_tracking.py](services/test_internal_usage_tracking.py) |
 | services | [test_llm_value_validation.py](services/test_llm_value_validation.py) |
 | services | [test_memory_service.py](services/test_memory_service.py) |
 | services | [test_ng_word_service.py](services/test_ng_word_service.py) |

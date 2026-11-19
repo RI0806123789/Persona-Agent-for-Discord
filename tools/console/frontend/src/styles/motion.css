@@ -1,0 +1,18 @@
+/* 動きを減らす設定（prefers-reduced-motion）。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* ビュー遷移は viewTransition.ts でも使わないようにしているが、念のため写しの動きも止める */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

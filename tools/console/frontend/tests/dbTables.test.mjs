@@ -124,14 +124,21 @@ test("範囲外の日時が1行あっても、同じページのほかの行は�
   const read = (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
   const tables = compileCjs(source, {});
   const detailSource = (await read("pages/DbTableDetail.tsx"));
+  const format = compileCjs(await read("format.ts"), {});
+  const privacy = { MASK: "MASKED", usePrivacy: () => ({ enabled: false }) };
+  // 行・セルの描画は DbCells.tsx にあり、DbTableDetail が RowFields を再公開している（#481）。
+  // どちらも「表に無い依存は失敗」の厳格な表で読み込む。
+  const cells = compileCjs(await read("pages/DbCells.tsx"), {
+    "react/jsx-runtime": jsxRuntime, "../components/ui": {}, "../dbTables": tables, "../format": format, "../privacy": privacy,
+  });
   const { RowFields } = compileCjs(detailSource, {
     react: React, "react/jsx-runtime": jsxRuntime,
     "../api": { api: {}, errorMessage: String },
     "../components/Collapse": {}, "../components/expressive": {}, "../components/ui": {}, "../hooks": {},
-    "../dbTables": tables,
-    "../format": compileCjs(await read("format.ts"), {}),
-    "../privacy": { MASK: "MASKED", usePrivacy: () => ({ enabled: false }) },
+    "../dbTables": tables, "../format": format, "../privacy": privacy,
+    "./DbCells": cells,
   });
+  assert.equal(RowFields, cells.RowFields);
   const columns = tables.resolveColumns("affinity", ["last_interaction"]);
   const page = { users: {} };
   const values = [1700000000, 10000000000000, "10000000000000", 1e308, "1700000001"];

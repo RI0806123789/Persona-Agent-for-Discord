@@ -1,0 +1,139 @@
+/* 表・リスト。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ------------------------------------------------------------ 表・リスト */
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 -24px;
+  padding: 0 24px;
+}
+.m3-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.m3-table th {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+.m3-table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  vertical-align: middle;
+}
+.m3-table tbody tr {
+  transition: background var(--spring-effects-fast);
+}
+.m3-table tbody tr:hover {
+  background: var(--md-sys-color-surface-container);
+}
+.m3-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.m3-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.m3-table.is-compact td {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.m3-table tr.is-error td {
+  background: color-mix(in srgb, var(--md-sys-color-error-container) 40%, transparent);
+}
+.command-cell {
+  max-width: 560px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.ok-icon {
+  color: var(--md-custom-success);
+  vertical-align: -4px;
+}
+.err-icon {
+  color: var(--md-sys-color-error);
+  vertical-align: -4px;
+}
+
+/* M3 Expressive のリスト（項目ごとに角丸の面で区切る） */
+.m3-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.m3-list-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 20px 14px 16px;
+  border: 0;
+  border-radius: var(--md-sys-shape-small);
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    border-radius var(--spring-spatial-default),
+    background var(--spring-effects-default);
+}
+.m3-list-item:first-child {
+  border-top-left-radius: var(--md-sys-shape-large-increased);
+  border-top-right-radius: var(--md-sys-shape-large-increased);
+}
+.m3-list-item:last-child {
+  border-bottom-left-radius: var(--md-sys-shape-large-increased);
+  border-bottom-right-radius: var(--md-sys-shape-large-increased);
+}
+.m3-list-item:hover:not(:disabled)::before {
+  opacity: 0.08;
+}
+.m3-list-item.is-selected {
+  border-radius: var(--md-sys-shape-large-increased);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+.m3-list-item:disabled {
+  cursor: default;
+}
+.m3-list-item:disabled:not(.is-selected) {
+  opacity: 0.55;
+}
+.m3-list-leading {
+  margin-top: 2px;
+  color: var(--md-sys-color-primary);
+}
+.m3-list-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.m3-list-headline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.m3-list-headline .m3-status {
+  margin-left: 4px;
+}
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+.session-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

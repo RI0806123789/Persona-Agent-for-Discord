@@ -20,6 +20,8 @@
 - 投稿はすべて `AllowedMentions.none()`。子の発言（定型文と報告）は呼び出し側が NG ワードを伏せてから渡す。
 - Webhook はチャンネルごとに1つだけ作って使い回す（`AgentWebhooks`）。依頼のたびに作ると
   チャンネルあたりの上限に達するため。
+- インメモリの状態（`AgentWebhooks`・`AgentWorkThreads`・`WorkThreadEntry`）は `agent_thread_state.py` に分けてある
+  （#480）。従来の import 先を保つため、ここから再公開している。ログは分割前と同じロガー名に出す。
 - スレッドへの投稿の失敗はログに残すだけで、子の作業も人格役の返信も止めない。
 - 閉じるのはアーカイブだけで、ロックはしない（利用者が書き込めば再開できるようにする）。閉じられなければ、
   理由を依頼したチャンネルへ伝えてスレッドは残す（例外の本文は載せない）。
@@ -27,10 +29,7 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
-from dataclasses import dataclass
 import logging
-import asyncio
 import re
 from typing import Mapping
 
@@ -43,13 +42,12 @@ from persona_bot.config.constants import (
     AGENT_THREAD_ENABLED,
     AGENT_THREAD_NAME,
     AGENT_THREAD_NAME_MAX_CHARS,
-    AGENT_WEBHOOK_NAME,
-    AGENT_WORK_THREADS_MAX,
     DISCORD_MESSAGE_MAX_LENGTH,
 )
 from persona_bot.services.agent_plan import AgentPlan
 from persona_bot.services.agent_service import AgentReport, render_agent_line
 from persona_bot.utils.discord_helpers import NO_MENTIONS, format_grounding_sources, split_message
+from persona_bot.views.agent_thread_state import AgentWebhooks, AgentWorkThreads, WorkThreadEntry
 from persona_bot.views.agent_view import AgentProgress, AgentProgressBase
 
 
@@ -113,111 +111,6 @@ def thread_unavailable_reason(message: discord.Message) -> str | None:
         return f"権限不足: {', '.join(missing)}"
     return None
 
-
-class AgentWebhooks:
-    """子の投稿に使う Webhook を、チャンネルごとに1つ用意して使い回す（インメモリ）。
-
-    ボット自身が作った同名の Webhook があればそれを使い、無ければ作る。再起動しても
-    同じものを見つけて使うので、Webhook は増え続けない。
-    """
-
-    def __init__(self) -> None:
-        self._cache: dict[int, discord.Webhook] = {}
-        # 作成は初回だけなので、全チャンネルで1つのロックにする（同時の依頼で2つ作らないため）。
-        self._lock = asyncio.Lock()
-
-    async def get(self, channel: discord.TextChannel, bot_user_id: int) -> discord.Webhook | None:
-        """使える Webhook を返す。用意できなければ None（呼び出し側は返信の進捗表示へ切り替える）。"""
-        webhook = self._cache.get(channel.id)
-        if webhook is not None:
-            return webhook
-        async with self._lock:
-            webhook = self._cache.get(channel.id)
-            if webhook is not None:
-                return webhook
-            try:
-                webhook = next(
-                    (hook for hook in await channel.webhooks() if _is_own_webhook(hook, bot_user_id)), None,
-                )
-                if webhook is None:
-                    webhook = await channel.create_webhook(
-                        name=AGENT_WEBHOOK_NAME, reason="サブエージェントの作業スレッドへの投稿に使う",
-                    )
-                    logger.info("サブエージェント: 作業スレッド用の Webhook を作りました。")
-            except discord.DiscordException as error:
-                logger.warning("サブエージェント: Webhook を用意できませんでした。", exc_info=error)
-                return None
-            self._cache[channel.id] = webhook
-            return webhook
-
-    def forget(self, channel_id: int, webhook: discord.Webhook) -> None:
-        """消された Webhook を次回から使わない（別の依頼が入れ替えた後なら何もしない）。"""
-        if self._cache.get(channel_id) is webhook:
-            del self._cache[channel_id]
-
-
-def _is_own_webhook(webhook: discord.Webhook, bot_user_id: int) -> bool:
-    return (
-        webhook.type is discord.WebhookType.incoming
-        and bool(webhook.token)
-        and webhook.user is not None
-        and webhook.user.id == bot_user_id
-        and webhook.name == AGENT_WEBHOOK_NAME
-    )
-
-
-@dataclass
-class WorkThreadEntry:
-    """作業スレッド1つ分の記録。lines と role は、そのスレッドで依頼を受けたときの定型文とロール。"""
-
-    lines: Mapping[str, str]
-    role: str
-    # ボットが閉じた後、まだ書き込みで再開されていないか
-    archived: bool = False
-
-
-class AgentWorkThreads:
-    """作業スレッドの記録（インメモリ。#408）。
-
-    - 作業スレッドかどうか: 再開したスレッドの中で受けた追加の依頼も、完了したら閉じ直すため。
-    - ボットが閉じたか: 閉じたスレッドへ書き込みがあると Discord が再開するので、そのとき一度だけ
-      追加の依頼を確かめるため（自動アーカイブや人の操作で閉じたものは対象にしない）。
-
-    再起動で消える（それ以前のスレッドは再開しても確かめない）。`AGENT_WORK_THREADS_MAX` を超えたら
-    古いものから忘れる。
-    """
-
-    def __init__(self, max_entries: int = AGENT_WORK_THREADS_MAX) -> None:
-        self._entries: OrderedDict[int, WorkThreadEntry] = OrderedDict()
-        self._max_entries = max_entries
-
-    def register(self, thread_id: int, lines: Mapping[str, str], role: str) -> None:
-        """依頼のために作ったスレッドを覚える。"""
-        self._entries[thread_id] = WorkThreadEntry(lines, role)
-        self._entries.move_to_end(thread_id)
-        while len(self._entries) > self._max_entries:
-            self._entries.popitem(last=False)
-
-    def is_work_thread(self, thread_id: int) -> bool:
-        return thread_id in self._entries
-
-    def mark_archived(self, thread_id: int) -> None:
-        """ボットが閉じたことを記録する（記録に無いスレッドなら何もしない）。"""
-        entry = self._entries.get(thread_id)
-        if entry is not None:
-            entry.archived = True
-            self._entries.move_to_end(thread_id)
-
-    def take_reopened(self, thread_id: int) -> WorkThreadEntry | None:
-        """ボットが閉じたスレッドへの最初の書き込みなら記録を返し、以後は返さない。
-
-        判定と記録の更新の間に await を挟まない（同時に届いた2件へ二重に確かめないため）。
-        """
-        entry = self._entries.get(thread_id)
-        if entry is None or not entry.archived:
-            return None
-        entry.archived = False
-        return entry
 
 
 def archive_failure_reason(error: BaseException) -> str:

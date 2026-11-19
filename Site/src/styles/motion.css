@@ -1,0 +1,24 @@
+/* 動きを減らす設定（prefers-reduced-motion）。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* --- 動きを減らす設定 ---------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    /* 遅れを残すと、順番に出す要素がその間だけ見えなくなる */
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    transition-delay: 0s !important;
+  }
+
+  .reveal {
+    opacity: 1;
+  }
+}

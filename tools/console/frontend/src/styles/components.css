@@ -1,0 +1,460 @@
+/* カード・状態のチップ・統計・ローディング・プログレス・スパークライン。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ------------------------------------------------------------ カード */
+
+.m3-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding: 20px 24px 24px;
+  border-radius: var(--md-sys-shape-large-increased);
+}
+/* 登場アニメーションでカードごとに重なりの層ができるため、メニューを開いたカードは手前に出す */
+.m3-card:has(.m3-menu.is-open),
+.m3-top-app-bar:has(.m3-menu.is-open) {
+  position: relative;
+  z-index: 20;
+}
+.m3-card-filled {
+  background: var(--md-sys-color-surface-container-low);
+}
+.m3-card-outlined {
+  background: var(--md-sys-color-surface);
+  box-shadow: inset 0 0 0 1px var(--md-sys-color-outline-variant);
+}
+.m3-card-elevated {
+  background: var(--md-sys-color-surface-container-low);
+  box-shadow: var(--md-elevation-1);
+}
+.m3-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+}
+.m3-card-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--md-sys-shape-medium);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+.m3-card-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.m3-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.m3-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--md-sys-shape-full);
+  background: var(--md-custom-success-container);
+  color: var(--md-custom-on-success-container);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  cursor: help;
+}
+
+/* ------------------------------------------------------------ 状態・チップ・統計 */
+
+.tone-good {
+  --tone: var(--md-custom-success);
+  --tone-container: var(--md-custom-success-container);
+  --on-tone-container: var(--md-custom-on-success-container);
+}
+.tone-warning {
+  --tone: var(--md-custom-warning);
+  --tone-container: var(--md-custom-warning-container);
+  --on-tone-container: var(--md-custom-on-warning-container);
+}
+.tone-serious {
+  --tone: var(--md-custom-serious);
+  --tone-container: var(--md-custom-serious-container);
+  --on-tone-container: var(--md-custom-on-serious-container);
+}
+.tone-critical {
+  --tone: var(--md-sys-color-error);
+  --tone-container: var(--md-sys-color-error-container);
+  --on-tone-container: var(--md-sys-color-on-error-container);
+}
+.tone-info {
+  --tone: var(--md-sys-color-primary);
+  --tone-container: var(--md-sys-color-primary-container);
+  --on-tone-container: var(--md-sys-color-on-primary-container);
+}
+.tone-neutral {
+  --tone: var(--md-sys-color-outline);
+  --tone-container: var(--md-sys-color-surface-container-highest);
+  --on-tone-container: var(--md-sys-color-on-surface-variant);
+}
+
+.m3-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px 0 10px;
+  border-radius: var(--md-sys-shape-full);
+  background: var(--tone-container);
+  color: var(--on-tone-container);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background var(--spring-effects-default);
+}
+.m3-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tone);
+}
+.m3-status-dot.is-pulsing {
+  animation: dot-pulse 2.6s ease-out infinite;
+}
+@keyframes dot-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--tone) 60%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+@keyframes breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.m3-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--md-sys-shape-small);
+  box-shadow: inset 0 0 0 1px var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m3-chip .icon {
+  color: var(--md-sys-color-primary);
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.m3-tag {
+  display: inline-block;
+  flex: none;
+  margin-left: 6px;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: var(--md-sys-shape-full);
+  font-size: 11px;
+  font-weight: 600;
+}
+.m3-tag.is-prod {
+  background: var(--md-custom-serious-container);
+  color: var(--md-custom-on-serious-container);
+}
+.m3-tag.is-dev {
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+}
+/* 見本の値のままの接続先（色だけに頼らず「要設定」の文字で示す） */
+.m3-tag.is-unset {
+  background: var(--md-custom-warning-container);
+  color: var(--md-custom-on-warning-container);
+}
+
+.m3-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.m3-stat-label {
+  color: var(--md-sys-color-on-surface-variant);
+}
+.m3-stat-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.m3-stat-hint {
+  color: var(--md-sys-color-on-surface-variant);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 16px 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.log-reconnect {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 0 16px;
+}
+
+.m3-inline-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: var(--md-sys-shape-large);
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+.m3-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.m3-notice .icon {
+  margin-top: -1px;
+  color: var(--md-sys-color-primary);
+}
+
+.m3-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.m3-empty h3 {
+  color: var(--md-sys-color-on-surface);
+}
+.m3-empty p {
+  max-width: 480px;
+}
+.m3-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--md-sys-shape-extra-large);
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+}
+.not-connected {
+  padding: 40px;
+}
+
+.m3-kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: var(--md-sys-shape-small);
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface-variant);
+  font: 600 12px/1 var(--font-mono);
+}
+
+.m3-tooltip {
+  padding: 6px 10px;
+  border-radius: var(--md-sys-shape-extra-small);
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--md-elevation-2);
+}
+
+dl.kv {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 0;
+  font-size: 14px;
+}
+dl.kv dt {
+  color: var(--md-sys-color-on-surface-variant);
+}
+dl.kv dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.metric {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.metric .m3-status {
+  align-self: center;
+}
+.metric-value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+/* ------------------------------------------------------------ 形が変わるローディング表示・波打つプログレス */
+
+.loading-indicator {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+.loading-indicator path {
+  fill: var(--md-sys-color-primary);
+}
+.loading-indicator.is-contained {
+  border-radius: 50%;
+  background: var(--md-sys-color-primary-container);
+}
+.loading-indicator.is-contained path {
+  fill: var(--md-sys-color-on-primary-container);
+}
+
+.wavy-progress {
+  width: 100%;
+  overflow: hidden;
+}
+.wavy-progress svg {
+  display: block;
+  overflow: visible;
+}
+.wavy-active {
+  fill: none;
+  stroke: var(--md-sys-color-primary);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.wavy-track {
+  stroke: var(--md-sys-color-secondary-container);
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+.wavy-stop {
+  fill: var(--md-sys-color-primary);
+}
+.wavy-progress.tone-warning .wavy-active,
+.wavy-progress.tone-warning .wavy-stop {
+  stroke: var(--md-custom-warning);
+}
+.wavy-progress.tone-warning .wavy-stop {
+  fill: var(--md-custom-warning);
+}
+.wavy-progress.tone-error .wavy-active {
+  stroke: var(--md-sys-color-error);
+}
+.wavy-progress.tone-error .wavy-stop {
+  fill: var(--md-sys-color-error);
+}
+.wavy-moving {
+  animation: wavy-slide 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes wavy-slide {
+  from {
+    transform: translateX(calc(var(--w) * -0.5px));
+  }
+  to {
+    transform: translateX(calc(var(--w) * 1px));
+  }
+}
+
+/* ------------------------------------------------------------ スパークライン */
+
+.sparkline {
+  position: relative;
+}
+.sparkline svg {
+  display: block;
+  width: 100%;
+  overflow: visible;
+  cursor: crosshair;
+  touch-action: none;
+}
+.sparkline-line {
+  fill: none;
+  stroke: var(--chart-series-1);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.sparkline-area {
+  fill: color-mix(in srgb, var(--chart-series-1) 14%, transparent);
+}
+.sparkline-cursor {
+  stroke: var(--md-sys-color-outline);
+  stroke-width: 1;
+}
+.sparkline-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--chart-series-1);
+  box-shadow: 0 0 0 2px var(--md-sys-color-surface-container-low);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.sparkline-tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  display: flex;
+  gap: 8px;
+  transform: translateX(-50%);
+  z-index: 5;
+}
+.sparkline-tip span {
+  opacity: 0.75;
+  font-family: var(--font-mono);
+}
+.sparkline-tip.is-left {
+  transform: translateX(-92%);
+}
+.sparkline-empty {
+  display: grid;
+  place-items: center;
+  border-radius: var(--md-sys-shape-medium);
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface-variant);
+}

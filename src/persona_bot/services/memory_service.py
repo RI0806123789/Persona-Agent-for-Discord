@@ -45,6 +45,7 @@ from persona_bot.utils.storage import (
     load_json_file,
     write_json_file,
 )
+from persona_bot.utils.usage_graph import UsageTracker, log_tokens_safely
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +62,11 @@ __all__ = [
 
 
 class MemoryService:
-    def __init__(self, genai_client: Any, db: Database) -> None:
+    def __init__(self, genai_client: Any, db: Database, usage: UsageTracker | None = None) -> None:
         self._genai_client = genai_client
         self._db = db
+        # 記憶のルーティング・圧縮で消費したトークンを記録する（#480）。None なら記録しない。
+        self._usage = usage
         self.io_lock = asyncio.Lock()
         self.flush_lock = asyncio.Lock()
         # 記憶圧縮の連続失敗回数をユーザー別に数える（あるユーザーの失敗が
@@ -188,6 +191,7 @@ class MemoryService:
                 generate_content, self._genai_client, model=ROUTER_MODEL_NAME, contents=router_prompt,
                 timeout=ROUTER_TIMEOUT_SECONDS,
             )
+            log_tokens_safely(self._usage, "記憶ルーティング", getattr(response, "usage_metadata", None))
             _, _, parsed = read_json_response(response, required_keys=("category",))
             return normalize_memory_category((parsed or {}).get("category"))
         except Exception as error:
@@ -490,6 +494,8 @@ class MemoryService:
             generate_content, self._genai_client, model=ROUTER_MODEL_NAME, contents=compactor_prompt,
             timeout=MEMORY_COMPACT_TIMEOUT_SECONDS,
         )
+        # ブロックや JSON の失敗でも API は消費しているため、結果の検査より先に記録する。
+        log_tokens_safely(self._usage, "記憶圧縮", getattr(response, "usage_metadata", None))
 
         # Gemini がプロンプトをブロックした場合を検知
         reason_name, _, parsed = read_json_response(response, required_keys=("profile", "projects"))

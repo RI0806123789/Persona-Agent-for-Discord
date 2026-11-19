@@ -37,6 +37,7 @@ from persona_bot.services.genai_client import generate_content, generate_json_co
 from persona_bot.utils.storage import read_json_response
 from persona_bot.utils.timeutil import format_prompt_now, resolve_timezone, timezone_label
 from persona_bot.utils.normalization import normalize_memory_category
+from persona_bot.utils.usage_graph import UsageTracker, log_tokens_safely
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +56,14 @@ class ContentModerator:
         *,
         model_name: str = MODERATION_MODEL_NAME,
         timeout: float = MODERATION_TIMEOUT_SECONDS,
+        usage: UsageTracker | None = None,
     ) -> None:
         self._genai_client = genai_client
         self._ng_filter = ng_filter
         self._model_name = model_name
         self._timeout = timeout
+        # 毎メッセージ走る判定の消費トークンを記録する（#480）。None なら記録しない。
+        self._usage = usage
         # リマインダーの相対表現（「30分後」など）を絶対日時へ直させるための基準時刻に使う。
         # ここで一度だけ解決しておく — メッセージごとに組み立てると、タイムゾーンデータが
         # 無い環境では毎回例外になり、fail-open のはずのモデレーションが
@@ -99,6 +103,9 @@ class ContentModerator:
                 timeout=self._timeout,
                 response_schema=schema,
             )
+            # 応答を受け取った時点で記録する（プロンプトがブロックされた判定も API を消費している）。
+            # 会話件数（User ( 行）には数えず、記録の失敗は判定に影響させない。
+            log_tokens_safely(self._usage, "モデレーション", getattr(response, "usage_metadata", None))
 
             # Gemini がプロンプト自体をブロックした場合
             # → コンテンツが不適切だと Gemini が判断したので unsafe 扱い
