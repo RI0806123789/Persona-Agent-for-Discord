@@ -123,29 +123,32 @@ DEPLOY_REMOTE = "origin"
 # 起動できたと判断するログ（ボットの on_ready が出す「ログイン成功: <ボット名>」）
 LOGIN_SUCCESS_TEXT = "ログイン成功"
 
-_SAFE_BRANCH = re.compile(r"^[A-Za-z0-9._/-]+$")
-_COMMIT = re.compile(r"^[0-9a-f]{40}$")
-_SAFE_PYTHON = re.compile(r"^[A-Za-z0-9._/@+-]+$")
+# ★ 3つとも `fullmatch` で使う（`^…$` と `match` の組み合わせにしない）。`$` は末尾の改行の直前にも
+#   一致するため、"main\n" のような末尾に改行の付いた値が検証を通ってしまう（#479）。
+#   SAFE_SERVICE_NAME（_check_safe_name）と同じく、アンカーを書かずに文字列全体を照合する。
+_SAFE_BRANCH = re.compile(r"[A-Za-z0-9._/-]+")
+_COMMIT = re.compile(r"[0-9a-f]{40}")
+_SAFE_PYTHON = re.compile(r"[A-Za-z0-9._/@+-]+")
 
 # サーバーの現在時刻（UNIX 秒）。再起動より後のログだけを読むための基準にする
 SERVER_TIME_COMMAND = "date +%s"
 
 
 def check_branch(branch: str) -> str:
-    if not _SAFE_BRANCH.match(branch) or ".." in branch or branch.startswith(("-", "/")):
+    if not _SAFE_BRANCH.fullmatch(branch) or ".." in branch or branch.startswith(("-", "/")):
         raise ValueError(f"使えない文字を含むブランチ名です: {branch!r}")
     return branch
 
 
 def check_commit(commit: str) -> str:
     """コミットは 40 桁の16進数（git rev-parse の出力）だけを受け付ける。"""
-    if not _COMMIT.match(commit):
+    if not _COMMIT.fullmatch(commit):
         raise ValueError(f"コミットの形ではありません: {commit!r}")
     return commit
 
 
 def check_python(python: str) -> str:
-    if not _SAFE_PYTHON.match(python) or ".." in python.split("/"):
+    if not _SAFE_PYTHON.fullmatch(python) or ".." in python.split("/"):
         raise ValueError(f"使えない文字を含む Python の場所です: {python!r}")
     return python
 

@@ -1060,6 +1060,51 @@ class DbTableScriptTests(unittest.TestCase):
         self.assertEqual((result["offset"], result["limit"]), (0, db_table.MAX_LIMIT))
 
 
+class DbTableEntryPointTests(unittest.TestCase):
+    """db_table.py の main の入口（引数の不足と、省略できる引数の既定値。#479）。"""
+
+    def run_main(self, argv):
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            db_table.main(argv)
+        lines = out.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        return json.loads(lines[0])
+
+    def test_missing_arguments_explain_the_real_usage_not_blacklist_json(self) -> None:
+        for argv in ([], ["--db-table"], ["--db-table", "/srv/bot/data/memory/bot.db"]):
+            with self.subTest(argv=argv):
+                result = self.run_main(argv)
+                self.assertEqual(len(result["errors"]), 1)
+                message = result["errors"][0]
+                self.assertIn("引数が足りません", message)
+                # db_summary.py の文言（blacklist.json）を持ち込まない。必須なのは bot.db の場所とテーブル名
+                self.assertNotIn("blacklist", message)
+                self.assertIn("bot.db", message)
+                self.assertIn("テーブル名", message)
+
+    def test_missing_arguments_return_the_same_shape_as_a_normal_result(self) -> None:
+        normal = db_table.collect("/nonexistent/bot.db", "feedback")
+        result = self.run_main(["--db-table"])
+        self.assertEqual(set(result), set(normal))
+        self.assertEqual((result["columns"], result["rows"], result["total"], result["users"]), ([], [], 0, {}))
+        self.assertEqual((result["offset"], result["limit"]), (0, 50))
+
+    def test_optional_paging_arguments_keep_their_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = str(Path(directory) / "missing.db")
+            for argv, expected in (
+                (["--db-table", missing, "feedback"], (0, 50)),
+                (["--db-table", missing, "feedback", "9"], (0, 50)),  # 件数が無いときは開始位置も既定へ戻す
+                (["--db-table", missing, "feedback", "9", "bad"], (0, 50)),
+                (["--db-table", missing, "feedback", "7", "20"], (7, 20)),
+            ):
+                with self.subTest(argv=argv[2:]):
+                    result = self.run_main(argv)
+                    self.assertEqual((result["offset"], result["limit"]), expected)
+                    self.assertEqual(result["table"], "feedback")
+                    self.assertEqual(result["errors"], ["bot.db が見つかりません。"])
+
+
 class DbSummaryEntryPointTests(unittest.TestCase):
     """db_summary.py を直接 import して使うときの入口（#413）。"""
 
