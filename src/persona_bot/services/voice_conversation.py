@@ -200,6 +200,15 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
     def stopped(self) -> bool:
         return self._stopped
 
+    @property
+    def end_requested(self) -> bool:
+        """ボイス接続の喪失（見回りが検知）で、会話の終了を求めたか。
+
+        開始の途中（同意パネルの投稿を待つ間）はまだサービスへ登録されておらず、見回りが予約した
+        `end()` は何もせずに戻る。開始処理がこの値を見て、開始を失敗にする（#476）。
+        """
+        return self._end_requested
+
     async def start(self) -> None:
         """Live へ接続し、受信と見回りを始める。接続できなければ LiveUnavailableError。"""
         await self._live.start()
@@ -651,9 +660,15 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
         if getattr(content, "interrupted", None):
             self._awaiting_interrupt_ack = False
             previous = self._transcript_state.interrupted
-            if previous is not None and not previous.discarded and self._playback_state.owner is previous:
+            playing = self._playback_state.owner
+            if previous is not None and not previous.discarded and playing is previous:
                 # 割り込みを確かめている間。届いている分は流し切る（確定したらフェードアウトさせる）。
                 self._finish_held_previous(previous)
+            elif playing is not None and playing is self._current:
+                # 確認の期限切れで待つのをやめた後に、打ち切りの通知が遅れて届いた（#476）。いま鳴っているのは
+                # 最後に話し始めた発言（_current）への返答。発言が始まるたびに _current は差し替わるので、
+                # その後に新しい発言は無く、この通知が打ち切ったのはこの返答ではない。後続の返答を止めない。
+                logger.debug("音声会話: 遅れて届いた打ち切りの通知を、後続の返答には適用しませんでした。")
             else:
                 # 文字起こしで割り込みを確定し、前の返答をすでにフェードアウトさせていることがある。
                 # 遅れて届いたこの通知で絞り切る前に切らない（#465）。
@@ -695,13 +710,25 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
             # 打ち切られた返答は記憶に使わない（cut_off）が、流している分の安全性は確かめる。
             self._spawn_judge(self._judge_output(previous), label="音声会話の出力判定（割り込まれた返答）")
 
+    def _resolve_interrupt_ack(self) -> None:
+        """割り込みの確認待ちを終える（返答の終わり・確認の期限切れ）。
+
+        割り込まれた前の返答は流し切り、その発言の入力の文字起こしの帰属も閉じる。閉じないと、次の人の
+        文字起こしが見回りの期限まで捨てられ、残った `interrupted` の返答の文字が回り込みの照合
+        （`_recent_echo_text`）に居座る（#476）。
+        """
+        self._awaiting_interrupt_ack = False
+        previous = self._transcript_state.interrupted
+        if previous is not None and not previous.discarded and self._playback_state.owner is previous:
+            self._finish_held_previous(previous)
+        self._close_transcript(previous)
+        self._transcript_state.interrupted = None
+
     def _accepting_response(self) -> _Utterance | None:
         """いま届いた応答を受け取る発言。受け取らない（捨てる）なら None。"""
         if self._awaiting_interrupt_ack and self._now() >= self._interrupt_ack_deadline:
-            self._awaiting_interrupt_ack = False
-            previous = self._transcript_state.interrupted
-            if previous is not None and not previous.discarded and self._playback_state.owner is previous:
-                self._finish_held_previous(previous)
+            # 打ち切りの通知が来ないまま期限が過ぎた。待つのをやめる。
+            self._resolve_interrupt_ack()
         if self._awaiting_interrupt_ack or self._speaker_state.speaking or not self._gate_open:
             return None
         current = self._current
@@ -862,12 +889,7 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
     def _on_turn_complete(self) -> None:
         if self._awaiting_interrupt_ack:
             # 割り込まれた古い返答の終わり。新しい発言の返答はこの後に届く。
-            self._awaiting_interrupt_ack = False
-            previous = self._transcript_state.interrupted
-            if previous is not None and not previous.discarded and self._playback_state.owner is previous:
-                self._finish_held_previous(previous)
-            self._close_transcript(previous)
-            self._transcript_state.interrupted = None
+            self._resolve_interrupt_ack()
             return
         stale = self._transcript_state.interrupted
         if stale is not None and stale is self._transcript_state.blocked:

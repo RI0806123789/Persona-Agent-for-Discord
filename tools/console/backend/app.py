@@ -219,6 +219,10 @@ async def _run_service_control(service: str, action: str, label: str) -> Command
                 timeout=SERVICE_CONTROL_TIMEOUT_SECONDS, wait_for_exit=True,
                 on_waiting=_mark_service_completion_pending,
             )
+        except NotConnectedError:
+            # 送信前の未接続（run の入口の接続確認）は、遠隔コマンドをまだ送っていない。ジョブの確認へ進むと
+            # その確認も未接続で失敗し、終了未確認（command_state_unknown）を恒久的に立ててしまう（#467）。
+            raise
         except (SshError, asyncio.CancelledError):
             # 通信断・終了通知なしでは追加コマンドを送らない。既知の終了後の
             # 期限超過・中断は、失敗を返す前にもsystemd側の残留ジョブを確かめる。

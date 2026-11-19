@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import asyncssh
 import app
 import remote_commands as rc
-from ssh_session import CommandResult, CommandStateUnknownError, SshError, SshSession
+from ssh_session import CommandResult, CommandStateUnknownError, NotConnectedError, SshError, SshSession
 from test_connection_lifecycle import profile
 
 
@@ -188,6 +188,32 @@ class ServiceCompletionTests(unittest.IsolatedAsyncioTestCase):
             await app._run_service_control("bot; id", "stop", "停止")
         self.assertFalse(self.session.command_state_unknown)
         self.connection.create_process.assert_not_awaited()
+
+    async def test_not_connected_before_sending_does_not_mark_command_state_unknown(self):
+        """コマンド送信前の未接続は、終了未確認として扱わず、ジョブの確認にも進まない（#467）。"""
+        self.session._conn = None
+        with self.assertRaises(NotConnectedError):
+            await app._run_service_control("bot", "stop", "停止")
+        self.assertFalse(self.session.command_state_unknown)
+        self.assertFalse(app._service_completion_pending)
+        self.assertFalse(app._connection_snapshot()["state_unknown"])
+        self.connection.create_process.assert_not_awaited()
+        self.connection.run.assert_not_awaited()
+        app._invalidate_insights.assert_not_called()
+
+    async def test_disconnect_right_after_precheck_keeps_service_operations_available(self):
+        """確認を通った直後の切断（送信前の NotConnectedError）の後も、再接続すれば次の操作を受け付ける（#467）。"""
+        with patch.object(self.session, "run", new=AsyncMock(side_effect=NotConnectedError("架空の未接続"))):
+            with self.assertRaises(NotConnectedError):
+                await app.control_service("stop", self.target)
+        self.assertFalse(self.session.command_state_unknown)
+        self.assertFalse(app._connection_snapshot()["state_unknown"])
+        self.assertFalse(app._connection_change_lock.locked())
+        self.connection.run.assert_not_awaited()
+        # バックエンドを起動し直さなくても、更新操作が 409（状態不明）で拒否され続けない。
+        self.exit_ready.set()
+        self.job_ready.set()
+        self.assertTrue((await app.control_service("restart", self.target))["ok"])
 
     async def test_cancellation_with_unexpected_command_error_keeps_unknown_and_cancel(self):
         async def fail(**kwargs):

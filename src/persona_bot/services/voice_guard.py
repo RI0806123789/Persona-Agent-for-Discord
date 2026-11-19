@@ -74,11 +74,14 @@ def _channel_id(voice_state: Any) -> int | None:
 
 
 def _stop_playback(voice_client: Any) -> None:
-    """再生中の読み上げを止める。移動先で古い音声を最後まで流さないため。"""
+    """再生中の読み上げを止める。移動先で古い音声を最後まで流さないため。
+
+    一時停止中の音声も止める（audio/playback.py の PlaybackController.stop と判定をそろえる。#476）。
+    """
     if not isinstance(voice_client, discord.VoiceClient):
         return
     try:
-        if voice_client.is_playing():
+        if voice_client.is_playing() or voice_client.is_paused():
             voice_client.stop()
     except Exception as error:
         logger.error("ボイス接続の保護: 再生の停止に失敗しました。", exc_info=error)

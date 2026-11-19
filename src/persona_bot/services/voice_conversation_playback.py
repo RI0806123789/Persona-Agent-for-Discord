@@ -99,8 +99,13 @@ class VoicePlaybackMixin:
         ★ _start_playback は先に _playback_started を立てるため、未接続などで早期に戻ると
         _playback と _playback_started が残り、_bot_speaking() が真に張り付く。
         別の音源に入れ替わっていれば、その音源の状態には触れない。
+
+        ★ ロックや prepare を待つ間に割り込みが確定すると、この音源は現在の音源ではなく
+        フェードアウト中（fading）へ移っている。play() していないので after も呼ばれず、
+        _on_playback_finished が来ないため fading が残り、以後のすべての再生開始が
+        LIVE_PLAYBACK_FADE_WAIT_SECONDS 待たされる。ここで解放する（#476）。
         """
-        if self._playback_state.source is source:
+        if self._playback_state.source is source or self._playback_state.fading is source:
             source.abort()
             self._on_playback_finished(source)
 
