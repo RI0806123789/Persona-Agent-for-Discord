@@ -111,7 +111,9 @@ class DeployRunner:
             try:
                 await await_shielded(recovery, CancellationState(canceled=True))
             except Exception as error:  # noqa: BLE001 — 復旧の失敗で元のキャンセルと終了記録を失わない
-                detail = f"中断後の復旧で想定外のエラーが発生しました（{type(error).__name__}: {error}）。サーバーの状態を確かめてください。"
+                # 例外の本文は接続先・パスを含みうるため、画面向けの記録にもログにも出さない（型名だけ。#467）
+                logger.error("デプロイの中断後の復旧で想定外のエラーが発生しました（%s）", type(error).__name__)
+                detail = f"中断後の復旧で想定外のエラーが発生しました（{type(error).__name__}）。サーバーの状態を確かめてください。"
                 if self.session.command_state_unknown or isinstance(error, CommandStateUnknownError):
                     self._finish_unknown(detail)
                 else:

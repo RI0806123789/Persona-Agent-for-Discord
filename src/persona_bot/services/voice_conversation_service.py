@@ -152,6 +152,11 @@ class VoiceConversationService:
                     # パネルの投稿を待つ間に Live が終わった。未登録のため end() は何もしないので、
                     # 声に応答しない会話を登録せず、ここで開始を失敗にする。
                     raise LiveUnavailableError(quota=conversation.live_closed_reason == CLOSED_QUOTA)
+                if conversation.end_requested:
+                    # パネルの投稿を待つ間にボイス接続が切れた（切断・外部からの移動）。見回りが予約した
+                    # end() も未登録のため何もしないので、切断済みの接続の会話を登録せず、ここで開始を失敗にする
+                    # （登録すると end_requested のまま二度と終了が起動せず、Live の接続と枠が残る。#476）。
+                    raise LiveUnavailableError(quota=False)
             except BaseException:
                 await wait_for_cleanup(conversation.stop(), label="音声会話の開始失敗の後片付け")
                 raise

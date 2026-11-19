@@ -764,7 +764,9 @@ class DeployTest(unittest.IsolatedAsyncioTestCase):
         """中断後の巻き戻しが例外でも失敗を確定し、通知・排他解放後にキャンセルを伝える。"""
         manager = DeployManager()
         finished = Mock()
-        with patch.object(DeployRunner, "_rollback", new=AsyncMock(side_effect=RuntimeError("復旧の解析に失敗"))) as rollback:
+        with patch.object(
+            DeployRunner, "_rollback", new=AsyncMock(side_effect=RuntimeError("復旧の解析に失敗")),
+        ) as rollback, self.assertLogs("deploy", level="ERROR") as logs:
             async with self.hold_command("git merge --ff-only") as gate:
                 record = manager.start(self.session, self.profile, on_finished=finished, **FAST)
                 await asyncio.wait_for(gate.started.wait(), timeout=5)
@@ -776,6 +778,10 @@ class DeployTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record.status, "failed")
         self.assertIsNotNone(record.finished_at)
         self.assertIn("RuntimeError", record.message)
+        # 例外の本文（接続先・パスを含みうる）は画面向けの記録にもログにも出さず、型名だけを残す（#467）
+        self.assertNotIn("復旧の解析に失敗", record.message)
+        self.assertTrue(any("RuntimeError" in line for line in logs.output))
+        self.assertFalse(any("復旧の解析に失敗" in line for line in logs.output))
         self.assertTrue(manager._task.cancelled())
         self.assertFalse(manager.active)
         self.assertFalse(manager.running)
@@ -795,7 +801,9 @@ class DeployTest(unittest.IsolatedAsyncioTestCase):
             self.session.command_state_unknown = True
             raise RuntimeError("復旧の後片付けに失敗")
 
-        with patch.object(DeployRunner, "_recover_canceled", new=AsyncMock(side_effect=recover)):
+        with patch.object(
+            DeployRunner, "_recover_canceled", new=AsyncMock(side_effect=recover),
+        ), self.assertLogs("deploy", level="ERROR") as logs:
             async with self.hold_command("git merge --ff-only") as gate:
                 record = manager.start(self.session, self.profile, on_finished=finished, **FAST)
                 await asyncio.wait_for(gate.started.wait(), timeout=5)
@@ -806,6 +814,10 @@ class DeployTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record.status, "unknown")
         self.assertIsNotNone(record.finished_at)
         self.assertIn("RuntimeError", record.message)
+        # 状態不明の記録でも例外の本文は載せない（#467）
+        self.assertNotIn("復旧の後片付けに失敗", record.message)
+        self.assertTrue(any("RuntimeError" in line for line in logs.output))
+        self.assertFalse(any("復旧の後片付けに失敗" in line for line in logs.output))
         self.assertTrue(manager._task.cancelled())
         self.assertFalse(manager.active)
         self.assertFalse(manager.running)

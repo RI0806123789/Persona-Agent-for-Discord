@@ -125,6 +125,19 @@ class VoiceGuardTests(unittest.IsolatedAsyncioTestCase):
         self.voice_client.disconnect.assert_not_awaited()
         self.assertEqual(self.guard.home_channel_id(1), HOME_ID)
 
+    async def test_manual_move_also_stops_a_paused_playback(self) -> None:
+        """一時停止中の音声も、移動先で残さず止める（PlaybackController.stop と判定をそろえる。#476）。"""
+        self.voice_client.is_playing.return_value = False
+        self.voice_client.is_paused.return_value = True
+        await self.connect_then_move()
+        self.voice_client.stop.assert_called_once()
+
+    async def test_manual_move_does_not_stop_when_nothing_is_playing(self) -> None:
+        self.voice_client.is_playing.return_value = False
+        self.voice_client.is_paused.return_value = False
+        await self.connect_then_move()
+        self.voice_client.stop.assert_not_called()
+
     async def test_own_connections_disconnects_and_unchanged_updates_are_not_moves(self) -> None:
         self.event(None, self.home)                  # /join・配信の開始
         self.event(self.home, self.home)             # ミュート・発言者の切り替え

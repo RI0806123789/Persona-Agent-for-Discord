@@ -426,6 +426,49 @@ class ResponseTests(ConversationTestBase):
         self.assertIsNone(self.conversation._playback_state.source)
         self.assertFalse(self.conversation._playback_state.started)
 
+    async def test_source_faded_out_before_it_starts_playing_is_released(self):
+        """再生の開始待ちの間に割り込みが確定しても、未再生の音源を fading に残さない（#476）。
+
+        play() に到達しない音源は after が呼ばれず、残った fading が以後すべての再生開始を待たせる。
+        """
+        for waiting_on in ("lock", "prepare"):
+            with self.subTest(waiting_on=waiting_on):
+                self.voice_client.play.reset_mock()
+                await self.complete_utterance()
+                controller = self.conversation._playback_controller
+                gate = asyncio.Event()
+
+                async def slow_prepare(voice_client):
+                    await gate.wait()
+
+                patcher = patch.object(controller, "prepare", slow_prepare) if waiting_on == "prepare" else None
+                if patcher:
+                    patcher.start()
+                if waiting_on == "lock":
+                    await controller.lock.acquire()
+                try:
+                    task = asyncio.create_task(self.conversation._on_live_message(
+                        live_message(model_turn=audio_turn(bytes(24000))),
+                    ))
+                    await self.settle()
+                    source = self.conversation._playback_state.source
+                    self.assertIsNotNone(source)
+                    self.assertTrue(self.conversation._playback_state.started)
+                    # 開始待ちの間に割り込みが確定し、音源はフェードアウト中へ移る
+                    self.conversation._fade_out_playback()
+                    self.assertIs(self.conversation._playback_state.fading, source)
+                finally:
+                    if waiting_on == "lock":
+                        controller.lock.release()
+                    gate.set()
+                    if patcher:
+                        patcher.stop()
+                await asyncio.wait_for(task, 2)
+                self.voice_client.play.assert_not_called()
+                self.assertTrue(source.aborted)
+                self.assertIsNone(self.conversation._playback_state.fading)
+                self.assertIsNone(self.conversation._playback_state.source)
+
     async def test_failed_playback_does_not_record_latency(self):
         await self.complete_utterance()
         self.voice_client.play.side_effect = discord.ClientException("架空の再生失敗")
@@ -935,6 +978,47 @@ class ResponseTests(ConversationTestBase):
         self.voice_client.play.reset_mock()
         await self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(24000))))
         self.voice_client.play.assert_called_once()
+
+    async def test_interrupt_ack_timeout_clears_the_interrupted_state_and_a_late_notice_keeps_the_next_reply(self):
+        """確認の期限切れで割り込みの状態を片付け、遅れて届いた通知で後続の返答を止めない（#476）。"""
+        await self.complete_utterance()
+        await self.respond(complete=False)
+        previous = self.conversation._current
+        self.speak(USER_B, self.barge_in_frames())
+        self.assertTrue(self.conversation._awaiting_interrupt_ack)
+        self.assertIs(self.conversation._transcript_state.interrupted, previous)
+        self.advance(constants.LIVE_VAD_SILENCE_MS / 1000 + 0.1)
+        self.conversation.tick()
+        next_turn = self.conversation._current
+        self.assertIsNot(next_turn, previous)
+        self.advance(constants.LIVE_PLAYBACK_STALL_SECONDS)
+        self.voice_client.play.reset_mock()
+
+        await self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(24000))))
+
+        self.voice_client.play.assert_called_once()
+        source = self.voice_client.play.call_args.args[0]
+        # 待つのをやめた時点で、割り込まれた発言の入力の帰属を閉じ、interrupted を残さない
+        self.assertFalse(self.conversation._awaiting_interrupt_ack)
+        self.assertIsNone(self.conversation._transcript_state.interrupted)
+        self.assertTrue(previous.transcript_closed)
+        self.assertIs(self.conversation._playback_state.owner, next_turn)
+        # 遅れて届いた打ち切りの通知は、いま鳴っている後続の返答を止めない
+        await self.conversation._on_live_message(live_message(interrupted=True))
+        self.assertFalse(source.aborted)
+        self.assertIs(self.conversation._playback_state.owner, next_turn)
+        self.assertIs(self.conversation._playback_state.source, source)
+
+    async def test_interrupted_notice_still_stops_a_reply_that_was_not_the_last_utterance(self):
+        """遅れた通知の無視は、最後に話し始めた発言への返答に限る。それ以外の再生は従来どおり止める。"""
+        await self.complete_utterance()
+        await self.respond(complete=False)
+        source = self.voice_client.play.call_args.args[0]
+        # 新しい発言が始まった（_current が差し替わった）後に、前の返答の再生が残っている状態
+        self.conversation._current = None
+        await self.conversation._on_live_message(live_message(interrupted=True))
+        self.assertTrue(source.aborted)
+        self.assertIsNone(self.conversation._playback_state.source)
 
     async def test_pause_discards_the_reply_in_progress(self):
         await self.complete_utterance()
@@ -1680,6 +1764,44 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn(1, service._reserved)
                 if captured["conversation"].panel_view is not None:
                     captured["conversation"].panel_view.stop()  # stop() を差し替えたため、ここで止める
+
+    async def test_voice_disconnect_while_the_panel_is_posted_fails_the_start(self):
+        """開始の途中（パネルの投稿を待つ間）にボイス接続が切れたら、残留する会話を登録しない（#476）。
+
+        見回りが予約する end() は未登録の会話には何もしないので、開始処理が終了の要求を見て失敗にする。
+        """
+        service = self.make_service()
+        self.assertTrue(service.reserve(1))
+        # 切断済み（guild.voice_client が会話の接続と一致しない）
+        guild = SimpleNamespace(id=1, me=object(), voice_client=None)
+        captured = {}
+
+        async def send(*args, **kwargs):
+            conversation = captured["conversation"]
+            self.assertFalse(conversation.end_requested)
+            conversation.tick()  # 見回りが切断を検知する
+            return SimpleNamespace(edit=AsyncMock())
+
+        channel = SimpleNamespace(id=CHANNEL_ID, members=[], send=AsyncMock(side_effect=send))
+
+        async def fake_start(conversation):
+            captured["conversation"] = conversation
+
+        with patch.object(VoiceConversation, "start", fake_start), \
+                patch.object(VoiceConversation, "stop", AsyncMock()) as stop, \
+                patch.object(voice_conversation_service, "can_bot_send_messages", Mock(return_value=True)):
+            with self.assertRaises(LiveUnavailableError) as raised:
+                await service.start(guild, Mock(channel=channel), channel, SimpleNamespace(
+                    prompt_file="", grounding_enabled=False,
+                ))
+            await asyncio.sleep(0)  # tick が予約した end() は未登録の会話に触らない
+        self.assertFalse(raised.exception.quota)
+        self.assertTrue(captured["conversation"].end_requested)
+        stop.assert_awaited_once()
+        self.assertIsNone(service.get(1))
+        self.assertNotIn(1, service._reserved)
+        if captured["conversation"].panel_view is not None:
+            captured["conversation"].panel_view.stop()  # stop() を差し替えたため、ここで止める
 
     async def test_start_fails_when_the_consent_panel_cannot_be_posted(self):
         """同意パネルが無いと誰も同意できないため、開始を失敗にして接続と枠を残さない。"""
