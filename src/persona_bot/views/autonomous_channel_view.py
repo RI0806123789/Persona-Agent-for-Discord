@@ -25,7 +25,7 @@ from persona_bot.core.app_state import GuildSettings
 from persona_bot.services.autonomous_stage import can_use_stage, can_use_voice, find_channel
 from persona_bot.utils.select_options import limit_keeping_selected
 from persona_bot.views.view_parts import (
-    authorize_administrator_operation, begin_panel_operation, edit_panel_message, BackButton,
+    authorize_administrator_operation, edit_panel_message, BackButton,
     HubFactory, PanelView, select_option_text,
 )
 

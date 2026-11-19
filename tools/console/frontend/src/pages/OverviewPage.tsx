@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { LoadingIndicator } from "../components/expressive";
 import { Icon } from "../components/Icon";
 import { Button, Card, InlineError, Sparkline, SplitButton, Stat, StatusChip } from "../components/ui";
@@ -176,7 +177,9 @@ const COOKIE_PATH = (() => {
 
 export function RecentLogs({ logs, onNavigate }: { logs: LogEntry[]; onNavigate: (page: PageId) => void }) {
   const privacy = usePrivacy();
-  const recent = prepareLogEntries(logs, privacy).slice(-8);
+  // 概要は毎秒再描画される（経過時間の表示のため）。ログも伏せ字も変わらないなら、最大3000行の分類と
+  // 伏せ字の変換をやり直さない。保持行すべてを判定してから末尾を切り出す順序は変えない（#478）。
+  const recent = useMemo(() => prepareLogEntries(logs, privacy).slice(-8), [logs, privacy]);
   return (
     <Card
       title="最近のログ"

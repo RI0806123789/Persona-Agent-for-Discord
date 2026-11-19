@@ -116,8 +116,8 @@ class SettingsEntryTests(unittest.IsolatedAsyncioTestCase):
                 self.addCleanup(hub.stop)
                 interaction = make_interaction(admin=admin, guild=self.guild)
                 interaction.response.is_done = Mock(return_value=True)
-                with patch.object(functions_view, "refresh_persona_catalog", AsyncMock()):
-                    await child(hub, functions_view.OpenSettingsButton).callback(interaction)
+                # ペルソナ一覧の読み直しは setUp で settings_view 側を差し替えてある（#477）。
+                await child(hub, functions_view.OpenSettingsButton).callback(interaction)
                 panel = interaction.edit_original_response.await_args.kwargs["view"]
                 self.addCleanup(panel.stop)
                 # ハブを開いた時点ではなく、押した時点の権限で決める
