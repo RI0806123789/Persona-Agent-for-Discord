@@ -87,6 +87,22 @@ class AutoTopicServiceTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(self.prompt.call_args.args[0].name, "prompt_maid.txt")
                     self.assertEqual(self.gemini.generate.await_args.args[1], "new-model")
 
+    async def test_leaving_the_server_during_topic_generation_posts_nothing(self):
+        """話題の生成を待つ間に退出したら、古い設定のまま投稿も記録もしない（#466）。"""
+        async def generate(*args, **kwargs):
+            self.state.forget_guild(1)
+            return "架空の話題", None, []
+
+        self.gemini.generate.side_effect = generate
+        await self.service._run_pending_checks_for_guild(self.settings)
+        self.assertFalse(self.settings.is_active)
+        self.channel.send.assert_not_awaited()
+        self.assertNotIn(10, self.settings.auto_topic_posted_at)
+        # 無効になった設定では、見回りは生成も始めない。
+        self.gemini.generate.reset_mock()
+        await self.service._run_pending_checks_for_guild(self.settings)
+        self.gemini.generate.assert_not_awaited()
+
     async def test_topic_and_anniversary_pass_current_block_check_to_history(self):
         for kind in ("topic", "anniversary"):
             with self.subTest(kind=kind):
@@ -643,6 +659,32 @@ class AnniversaryChannelTests(unittest.IsolatedAsyncioTestCase):
                 await self.celebrate()
                 self.channels[10].send.assert_awaited_once()
                 self.assert_recorded(True)
+
+    async def test_leaving_the_server_during_generation_does_not_post_with_the_old_settings(self):
+        """生成を待つ間に退出したら、古い設定で投稿しない。再参加後は新しい設定が1回だけ祝う（#466）。"""
+        old_settings = self.settings
+
+        async def generate(*args, **kwargs):
+            self.state.forget_guild(1)  # 待つ間にサーバーから退出した
+            return "架空のお祝い", None, []
+
+        self.gemini.generate.side_effect = generate
+        await self.celebrate()
+        self.assertFalse(old_settings.is_active)
+        for channel in self.channels.values():
+            channel.send.assert_not_awaited()
+        self.assertNotIn("11:誕生日", old_settings.anniversary_posted_dates)
+
+        # 同じ日に再参加した新しい設定は、改めて判断してお祝いする（古い設定と重ならない）。
+        self.gemini.generate.side_effect = None
+        new_settings = self.state.get_guild(1)
+        self.assertIsNot(new_settings, old_settings)
+        new_settings.auto_topic_enabled = True
+        new_settings.auto_topic_channels[10] = datetime.now(timezone.utc) - timedelta(hours=1)
+        await self.celebrate()
+        await self.celebrate()
+        self.channels[10].send.assert_awaited_once()
+        self.assertEqual(new_settings.anniversary_posted_dates.get("11:誕生日"), self.TODAY)
 
     async def test_disabling_anniversary_during_wait_does_not_record_or_generate_later_users(self):
         for stage in ("member", "history", "generation", "moderation"):

@@ -59,7 +59,7 @@ from persona_bot.config.constants import (
     LIVE_VAD_ENERGY_THRESHOLD,
     LIVE_VAD_SILENCE_MS,
 )
-from persona_bot.core.background import spawn, wait_for_cleanup
+from persona_bot.core.background import spawn, wait_for_cleanup, wait_for_task
 from persona_bot.services.live_session import CLOSED_QUOTA, LiveOptions, LiveSession
 from persona_bot.services.voice_barge_in import (
     INTERRUPTION_SPEECH, RecentSpeech, classify_interruption, is_echo_text,
@@ -180,11 +180,17 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
         # Live の接続が再接続できずに終わった理由（CLOSED_QUOTA / CLOSED_FAILED）。終わっていなければ None。
         self.live_closed_reason: str | None = None
         self._tasks: list[asyncio.Task[Any]] = []
+        # 入出力の AI 判定のタスク（#465）。終わったものは自分で外れ、stop() が残りを止めて回収する。
+        self._judge_tasks: set[asyncio.Task[Any]] = set()
+        # 後片付けの共有タスク。最初の stop() が起動し、以後の stop() も同じ完了を待つ（#465）。
+        self._stop_task: asyncio.Task[Any] | None = None
         self._latencies: list[float] = []
         self.panel_message: Any = None
         self.panel_view: Any = None
         self._panel_update_task: asyncio.Task[Any] | None = None
         self._panel_updated_at = float("-inf")
+        # 更新の実行中（編集の通信を待つ間）に、パネルの表示が変わる変化があったか（#465）。
+        self._panel_dirty = False
 
     # ==================================================================
     # 開始・終了
@@ -206,16 +212,36 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
         self._update_gate()
 
     async def stop(self) -> None:
-        """受信・再生・Live をまとめて止める（何度呼んでもよい）。切断はしない。"""
-        if self._stopped:
+        """受信・再生・Live をまとめて止める（何度呼んでもよい）。切断はしない。
+
+        後片付けは最初の呼び出しが起動する1つの共有タスクで行い、どの呼び出しもその完了を待つ（#465）。
+        呼び出し側が途中でキャンセルされても、後片付け（Live の切断・同意パネルの終了表示）は最後まで進み、
+        キャンセルは完了後に伝わる。後から呼んだ側も同じ完了を待つ。
+        ★ 以前は先に `_stopped` を立ててから本体を await していたため、途中で止まると二度目の呼び出しが
+        すぐ戻り、Live の接続と同意パネルが片付かないまま残った。
+        """
+        task = self._stop_task
+        if task is None:
+            # 入出力の受け付けは、後片付けの完了を待たずにこの時点で止める。
+            self._stopped = True
+            task = self._stop_task = spawn(
+                self._finish_stop(asyncio.current_task()), label="音声会話の停止", _protected=True,
+            )
+        if task is asyncio.current_task():
+            # 後片付けの中から呼ばれた（自分の完了を待つと止まる）。
             return
-        self._stopped = True
+        await wait_for_task(task)
+
+    async def _finish_stop(self, caller: asyncio.Task[Any] | None) -> None:
+        """stop() の後片付けの本体（共有タスクで1回だけ実行する）。"""
+        # stop() を呼んだタスク自身は止めない・待たない（自分を待って止まらないため）。
+        excluded = {caller, asyncio.current_task()}
         if self._current is not None:
             self._discard_response(self._current, "音声会話の停止")
-        current = asyncio.current_task()
-        for task in self._tasks:
-            if task is not current:
-                task.cancel()
+        # 見回り・送信に加えて、入出力の AI 判定（過去の発言の分も）を止めて回収する。
+        owned = [task for task in [*self._tasks, *self._judge_tasks] if task not in excluded]
+        for task in owned:
+            task.cancel()
         self._log_echo_stats()
         try:
             if self._receiver is not None:
@@ -229,9 +255,9 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
         self._speaker_state.reservations.clear()
         self._recent_output.clear()
         await wait_for_cleanup(self._live.close(), label="音声会話の Live の切断")
-        await asyncio.gather(*(task for task in self._tasks if task is not current), return_exceptions=True)
+        await asyncio.gather(*owned, return_exceptions=True)
         panel_task = self._panel_update_task
-        if panel_task is not None and panel_task is not current:
+        if panel_task is not None and panel_task not in excluded:
             # ★ キャンセルを要求するだけでは、実行中の「会話中です」の編集の通信が残り、
             # 直後の終了表示の編集と順序が入れ替わりうる。終わるまで待ってから終了表示にする。
             panel_task.cancel()
@@ -239,6 +265,20 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
         self._log_latency()
         self._log_barge_in_stats()
         await self._finish_panel()
+
+    def _spawn_judge(self, coro: Any, *, label: str) -> asyncio.Task[Any] | None:
+        """入出力の AI 判定を起動し、stop() で止めて回収できるよう追跡する（#465）。
+
+        追跡しないと、次の発言へ移った後の過去の発言の判定や出力判定が、会話の終了後も Gemini の応答を
+        待って残る。停止後は起動しない（None を返す）。
+        """
+        if self._stopped:
+            coro.close()
+            return None
+        task = spawn(coro, label=label)
+        self._judge_tasks.add(task)
+        task.add_done_callback(self._judge_tasks.discard)
+        return task
 
     def _log_barge_in_stats(self) -> None:
         """割り込みの判定の件数（しきい値の実験用。#409）。本文・話者は出さない。"""
@@ -354,7 +394,12 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
         # 割り込みを確かめている最中で一時停止した場合も、待ちを解消しておく。
         # 残したままだと、再開後の新しい発話の返答が前の割り込み待ちで破棄されてしまう。
         self._awaiting_interrupt_ack = False
-        self._transcript_state.interrupted = None
+        # ★ ただし、文字起こしを遮断している割り込まれた発言（blocked）への参照は残す（#465）。
+        # 消すと、後から届く打ち切りの通知・返答の終わりで遮断を解けず、再開後の発話の文字起こしが
+        # 見回りの期限まで捨てられる。遮断そのものは解かない（一時停止の前の遅れた断片を、
+        # 再開後に話し始めた人へ付けない）。
+        if self._transcript_state.interrupted is not self._transcript_state.blocked:
+            self._transcript_state.interrupted = None
 
     @property
     def is_open(self) -> bool:
@@ -482,7 +527,7 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
                 # 破棄済みの発言の帰属待ちに阻まれて捨てられ、その発言が記憶から外れる。
                 self._close_transcript(utterance)
             else:
-                utterance.input_task = spawn(self._judge_input(utterance), label="音声会話の入力判定")
+                utterance.input_task = self._spawn_judge(self._judge_input(utterance), label="音声会話の入力判定")
         # 待っていた人に、少しの間だけ優先して話す機会を渡す。
         self._speaker_state.extend_reservations(now)
 
@@ -610,7 +655,9 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
                 # 割り込みを確かめている間。届いている分は流し切る（確定したらフェードアウトさせる）。
                 self._finish_held_previous(previous)
             else:
-                self._abort_playback()
+                # 文字起こしで割り込みを確定し、前の返答をすでにフェードアウトさせていることがある。
+                # 遅れて届いたこの通知で絞り切る前に切らない（#465）。
+                self._abort_playback(keep_fading=True)
             # 割り込まれた発言は、生成が始まった時点で入力を処理し終えている。
             self._close_transcript(previous)
             self._transcript_state.interrupted = None
@@ -646,7 +693,7 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
         if previous.response_started and not previous.response_complete:
             previous.response_complete = True
             # 打ち切られた返答は記憶に使わない（cut_off）が、流している分の安全性は確かめる。
-            spawn(self._judge_output(previous), label="音声会話の出力判定（割り込まれた返答）")
+            self._spawn_judge(self._judge_output(previous), label="音声会話の出力判定（割り込まれた返答）")
 
     def _accepting_response(self) -> _Utterance | None:
         """いま届いた応答を受け取る発言。受け取らない（捨てる）なら None。"""
@@ -693,7 +740,7 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
                 elif (utterance.input_task is not None and utterance.input_task.done()
                         and not utterance.violation_recorded and not self._stopped):
                     # 入力の AI 判定が済んだ後に続きが届いた。増えた分も判定し直す。
-                    utterance.input_task = spawn(self._judge_input(utterance), label="音声会話の入力の再判定")
+                    utterance.input_task = self._spawn_judge(self._judge_input(utterance), label="音声会話の入力の再判定")
         if finished:
             self._close_transcript(utterance)
 
@@ -772,7 +819,9 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
             if self._playback_state.source is not None and self._playback_state.owner is not utterance and not self._playback_state.source.aborted:
                 self._fade_out_playback()
             else:
-                self._abort_playback()
+                # 割り込みの確定でフェードアウト中の前の返答は、絞り切らせる（#465）。
+                # 新しい音源の再生開始（_start_playback）が、フェードの終わりを上限付きで待つ。
+                self._abort_playback(keep_fading=True)
             self._playback_state.source = LivePlaybackSource(stall_frames=_PLAYBACK_STALL_FRAMES, reference=self._echo_reference)
             self._playback_state.owner = utterance
             self._playback_state.started = False
@@ -820,6 +869,12 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
             self._close_transcript(previous)
             self._transcript_state.interrupted = None
             return
+        stale = self._transcript_state.interrupted
+        if stale is not None and stale is self._transcript_state.blocked:
+            # 一時停止で割り込みの確認待ちを解いた後に届いた返答の終わり（#465）。返答が終わった時点で、
+            # それより前に話し始めた割り込まれた発言の入力は処理し終えているので、遮断を解く。
+            self._close_transcript(stale)
+            self._transcript_state.interrupted = None
         utterance = self._current
         if utterance is None or utterance.ended_at is None or not utterance.response_started:
             return
@@ -828,7 +883,7 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
         if utterance.response_complete:
             return
         utterance.response_complete = True
-        spawn(self._judge_output(utterance), label="音声会話の出力判定")
+        self._spawn_judge(self._judge_output(utterance), label="音声会話の出力判定")
 
     def _on_live_reconnected(self) -> None:
         # 新しい接続は、切れる前の発話の区切りを知らない。途中の発言と返答は捨てる。

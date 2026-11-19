@@ -122,12 +122,14 @@ class AutoTopicService(AnniversaryMixin):
         # 分からない上に、うるさいだけになる。既に自分から喋っている間は、
         # 話題提供の側を黙らせる（/functions のパネルで2つのトグルを1枚にまとめて
         # いるのと同じ「競合させない」という方針）。
-        if guild_settings.autonomous_session is not None:
+        if guild_settings.autonomous_session is not None or not guild_settings.is_active:
             return
 
         # ループ中に辞書を更新する可能性があるためスナップショットを走査する
         for channel_id in list(guild_settings.auto_topic_channels):
-            if not guild_settings.auto_topic_enabled or guild_settings.autonomous_session is not None:
+            # 前のチャンネルの投稿を待つ間にサーバーから退出した設定（is_active が偽）では続けない（#466）。
+            if (not guild_settings.auto_topic_enabled or guild_settings.autonomous_session is not None
+                    or not guild_settings.is_active):
                 return
             if not self._topic_is_due(guild_settings, channel_id):
                 continue
@@ -163,8 +165,13 @@ class AutoTopicService(AnniversaryMixin):
     def _topic_is_due(
         guild_settings: GuildSettings, channel_id: int, *, last_activity: datetime | None = None,
     ) -> bool:
-        """現在の投稿条件を確認し、生成開始後に活動が更新された話題も見送る。"""
-        if not guild_settings.auto_topic_enabled or guild_settings.autonomous_session is not None:
+        """現在の投稿条件を確認し、生成開始後に活動が更新された話題も見送る。
+
+        生成の前後・送信の前に呼ばれる。待つ間にサーバーから退出した設定（`is_active` が偽）でも
+        投稿しない（#466。再参加後は新しい設定が改めて判断する）。
+        """
+        if (not guild_settings.auto_topic_enabled or guild_settings.autonomous_session is not None
+                or not guild_settings.is_active):
             return False
         current_activity = guild_settings.auto_topic_channels.get(channel_id)
         if current_activity is None or (last_activity is not None and current_activity != last_activity):

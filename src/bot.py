@@ -105,7 +105,7 @@ autonomous = AutonomousService(
 client.add_shutdown_callback(autonomous.stop_all_sessions)
 # 管理者などにボットを別のボイスチャンネルへ移されたとき、接続先を守る（#171）。
 voice_guard = VoiceGuard(client, autonomous)
-reminders = ReminderService(client, database, ng_filter)
+reminders = ReminderService(client, database, ng_filter, is_blocked=blacklist.is_blocked)
 feedback = FeedbackService(client, database)
 # 集計パネル（会話統計 → 👍 フィードバック）は機能ハブ経由で生成されるため、
 # UI 層がこのインスタンスを引けるよう既定として登録しておく。

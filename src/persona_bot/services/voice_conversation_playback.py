@@ -117,12 +117,18 @@ class VoicePlaybackMixin:
             self._playback_state.owner = None
             self._playback_state.started = False
 
-    def _abort_playback(self) -> None:
-        """再生を即座に止める（会話の終了・違反の検出・一時停止など）。フェードアウト中の音源も止める。"""
-        fading, self._playback_state.fading = self._playback_state.fading, None
-        if fading is not None:
-            fading.abort()
-            self._stop_player(fading)
+    def _abort_playback(self, *, keep_fading: bool = False) -> None:
+        """再生を即座に止める（会話の終了・違反の検出・一時停止など）。フェードアウト中の音源も止める。
+
+        `keep_fading` が真なら、割り込みの確定でフェードアウトさせている音源には触れず、絞り切らせる（#465）。
+        遅れて届いた打ち切りの通知（interrupted）や、次の返答の最初の音声で使う — これらは
+        終了・違反・一時停止とは違い、すでに確定した割り込みのフェードアウトを途中で切る理由が無い。
+        """
+        if not keep_fading:
+            fading, self._playback_state.fading = self._playback_state.fading, None
+            if fading is not None:
+                fading.abort()
+                self._stop_player(fading)
         source = self._playback_state.source
         if source is None:
             return

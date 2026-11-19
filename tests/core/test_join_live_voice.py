@@ -171,6 +171,78 @@ class JoinLiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("発言者になれなかった", reply)
         voice_client.disconnect.assert_awaited_once_with(force=True)
 
+    async def test_restart_disconnects_when_the_slot_is_taken_while_stopping(self):
+        """始め直しで旧会話の停止を待つ間に最後の枠を取られたら、保護と接続を残さない（#465）。"""
+        voice_client = FakeLiveVoiceClient(None, self.channel)
+        self.guild.voice_client = voice_client
+        self.live.get.return_value = SimpleNamespace(stopped=False, voice_client=voice_client, channel_id=30)
+        first = object()
+        self.live.reserve.side_effect = [first, None]
+        self.assertEqual(await self.join(), NOTICE_LIVE_CAPACITY)
+        self.live.stop.assert_awaited_once()
+        voice_client.disconnect.assert_awaited_once_with(force=True)
+        self.voice_guard.adopt.assert_called_once_with(1, 20)
+        self.voice_guard.release.assert_called_with(1)
+        self.live.start.assert_not_awaited()
+
+    async def cancel_during_stage_promotion(self):
+        """ステージの発言者への昇格を待つ間に /join を中断する。"""
+        entered, resume = asyncio.Event(), asyncio.Event()
+
+        async def wait(*args):
+            entered.set()
+            await resume.wait()
+
+        with patch("persona_bot.core.voice_commands.enable_stage_speaker", new=AsyncMock(side_effect=wait)):
+            task = asyncio.create_task(self.join())
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, 2)
+            finally:
+                resume.set()
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def test_cancellation_during_stage_promotion_cleans_up_every_path(self):
+        """昇格を待つ間に中断しても、保護・接続・予約を残さない（#465。新規・始め直し・継続の3経路）。"""
+        for path in ("new", "restart", "running"):
+            with self.subTest(path=path):
+                self.use_stage_channel()
+                self.voice_guard.reset_mock()
+                self.live.release_reservation.reset_mock()
+                self.live.stop.reset_mock()
+                self.live.reserve.side_effect = None
+                FakeLiveVoiceClient.created.clear()
+                existing = None
+                if path == "new":
+                    self.guild.voice_client = None
+                    self.live.get.return_value = None
+                else:
+                    existing = FakeLiveVoiceClient(None, self.channel)
+                    self.guild.voice_client = existing
+                    if path == "restart":
+                        self.live.get.return_value = None  # 接続はあるが会話が動いていない
+                    else:
+                        self.live.get.return_value = SimpleNamespace(
+                            stopped=False, voice_client=existing, channel_id=20,
+                        )
+
+                await self.cancel_during_stage_promotion()
+
+                voice_client = existing if existing is not None else self.created[0]
+                voice_client.disconnect.assert_awaited_once_with(force=True)
+                self.voice_guard.release.assert_called_with(1)
+                self.live.start.assert_not_awaited()
+                if path == "running":
+                    # 動いていた会話も止める（声を出せないまま会話を続けさせない）。
+                    self.live.stop.assert_awaited_once()
+                    self.live.release_reservation.assert_not_called()
+                else:
+                    self.live.release_reservation.assert_called_with(1, reservation=self.live.reserve.return_value)
+
     async def test_same_channel_reuses_a_running_conversation(self):
         voice_client = FakeLiveVoiceClient(None, self.channel)
         self.guild.voice_client = voice_client

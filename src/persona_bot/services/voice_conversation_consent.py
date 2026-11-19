@@ -42,6 +42,7 @@ class VoiceConsentMixin:
         _now: Callable[[], float]
         _panel_update_task: asyncio.Task[Any] | None
         _panel_updated_at: float
+        _panel_dirty: bool
 
         def _update_gate(self) -> None: ...
         def _pause(self) -> None: ...
@@ -98,17 +99,27 @@ class VoiceConsentMixin:
             return
         task = self._panel_update_task
         if task is not None and not task.done():
+            # 実行中の更新に任せる。編集の通信を待つ間に届いた変化は、その本文に入っていないので
+            # 印を付け、編集が終わった後にもう一度更新させる（#465。印が無いと取りこぼす）。
+            self._panel_dirty = True
             return
         self._panel_update_task = spawn(self._update_panel_later(), label="音声会話の同意パネルの更新")
 
     async def _update_panel_later(self) -> None:
-        delay = self._panel_updated_at + LIVE_CONSENT_PANEL_UPDATE_SECONDS - self._now()
-        if delay > 0:
-            await asyncio.sleep(delay)
-        if self._stopped:
-            return
-        self._panel_updated_at = self._now()
-        await self._edit_panel()
+        while True:
+            delay = self._panel_updated_at + LIVE_CONSENT_PANEL_UPDATE_SECONDS - self._now()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            if self._stopped:
+                return
+            # ここで組み立てる本文に、ここまでの変化はすべて入る。印はこの直前に下ろす
+            # （編集の通信を待つ間に届いた変化だけが、次の周回の対象になる）。
+            self._panel_dirty = False
+            self._panel_updated_at = self._now()
+            await self._edit_panel()
+            # 判定から戻るまでの間に await を挟まない（新しい要求はタスクが終わるまで印だけを付ける）。
+            if not self._panel_dirty or self._stopped:
+                return
 
     async def _edit_panel(self, *, view: Any = ...) -> None:
         message = self.panel_message

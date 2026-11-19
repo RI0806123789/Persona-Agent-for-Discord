@@ -815,6 +815,59 @@ class ResponseTests(ConversationTestBase):
         self.assertTrue(source.aborted)
         self.assertEqual(source.read(), b"")
 
+    async def test_late_interrupted_notice_does_not_cut_a_confirmed_fade(self):
+        """文字起こしで割り込みを確定した後に届いた打ち切りの通知で、フェードアウトを切らない（#465）。"""
+        await self.complete_utterance()
+        # A の文字起こしが閉じていれば、B の文字起こしは通知の前に届いて割り込みを確定できる。
+        await self.transcript("", finished=True)
+        await self.respond(complete=False)
+        source = self.voice_client.play.call_args.args[0]
+        self.drain()
+        self.speak(USER_B, self.barge_in_frames())
+        await self.transcript("ちょっと待って")
+        self.assertTrue(source.fading)
+        self.assertIs(self.conversation._playback_state.fading, source)
+
+        await self.conversation._on_live_message(live_message(interrupted=True))
+
+        self.assertFalse(source.aborted)
+        self.assertIs(self.conversation._playback_state.fading, source)
+        self.voice_client.stop.assert_not_called()
+        frames = []
+        while chunk := source.read():
+            frames.append(chunk)
+        self.assertEqual(len(frames), constants.LIVE_BARGE_IN_FADE_MS // 20)
+
+    async def test_next_reply_waits_for_the_fade_instead_of_cutting_it(self):
+        """フェードアウト中に次の返答の最初の音声が届いても切らず、絞り切ってから次を流す（#465）。"""
+        source, _ = await self.start_reply_and_barge_in()
+        after_first = self.voice_client.play.call_args.kwargs["after"]
+        await self.conversation._on_live_message(live_message(interrupted=True))
+        await self.transcript("ちょっと待って")
+        self.assertIs(self.conversation._playback_state.fading, source)
+        self.advance(constants.LIVE_VAD_SILENCE_MS / 1000 + 0.1)
+        self.conversation.tick()
+        self.voice_client.play.reset_mock()
+
+        pending = asyncio.create_task(
+            self.conversation._on_live_message(live_message(model_turn=audio_turn(bytes(24000)))),
+        )
+        await self.settle()
+        # 新しい返答は、フェードアウトが鳴り終わるのを待っている。前の返答は切っていない。
+        self.assertFalse(source.aborted)
+        self.assertIs(self.conversation._playback_state.fading, source)
+        self.voice_client.play.assert_not_called()
+        frames = []
+        while chunk := source.read():
+            frames.append(chunk)
+        self.assertEqual(len(frames), constants.LIVE_BARGE_IN_FADE_MS // 20)
+        after_first(None)  # 再生スレッドからの終了の通知
+        await asyncio.wait_for(pending, 2)
+
+        self.assertIsNone(self.conversation._playback_state.fading)
+        self.voice_client.play.assert_called_once()
+        self.assertIsNot(self.voice_client.play.call_args.args[0], source)
+
     async def test_stop_logs_barge_in_counts_without_text_or_ids(self):
         """しきい値の実験用に件数だけを出す。文字起こしの本文・話者の ID は出さない（#409）。"""
         await self.start_reply_and_barge_in()
@@ -1048,6 +1101,38 @@ class TranscriptOwnershipTests(ConversationTestBase):
         await self.respond()
         self.service.memory.append_pending_log.assert_not_awaited()
 
+    async def test_close_signal_after_a_pause_unblocks_the_next_speaker(self):
+        """割り込みの途中で一時停止しても、後から届く合図で遮断を解き、再開後の発話を欠かさない（#465）。"""
+        for signal in ("interrupted", "turn_complete"):
+            with self.subTest(signal=signal):
+                await self.asyncSetUp()
+                await self.barge_in()
+                previous = self.conversation._transcript_state.blocked
+                self.assertEqual(previous.user_id, USER_A)
+                # 同意していない人が入ってきて一時停止する。
+                newcomer = member(USER_C)
+                self.channel.members.append(newcomer)
+                self.conversation.handle_member_update(
+                    newcomer, SimpleNamespace(channel=None), SimpleNamespace(channel=self.channel),
+                )
+                self.assertFalse(self.conversation.is_open)
+                # 一時停止の前の遅れた断片を、再開後の人へ付けないよう、遮断はまだ解かない。
+                self.assertIs(self.conversation._transcript_state.blocked, previous)
+
+                await self.conversation._on_live_message(live_message(**{signal: True}))
+                self.assertIsNone(self.conversation._transcript_state.blocked)
+                self.assertTrue(previous.transcript_closed)
+
+                self.conversation.grant_voice(USER_C)
+                self.assertTrue(self.conversation.is_open)
+                self.advance(constants.LIVE_ECHO_GUARD_SECONDS + 1)
+                self.speak(USER_C, self.start_frames())
+                await self.transcript("架空のCの発言")
+                current = self.conversation._current
+                self.assertEqual(current.user_id, USER_C)
+                self.assertEqual(current.input_text, "架空のCの発言")
+                self.assertFalse(current.transcript_incomplete)
+
     async def test_third_speaker_during_ambiguity_loses_the_middle_transcript(self):
         await self.barge_in()
         middle = self.conversation._current
@@ -1119,6 +1204,105 @@ class LifecycleTests(ConversationTestBase):
         self.assertEqual(order, ["update-start"])
         await self.conversation.stop()
         self.assertEqual(order, ["update-start", "update-cancelled", "final"])
+
+    async def test_stop_cancels_and_collects_judges_of_past_turns(self):
+        """次の発言へ移った後の過去の入力判定と、出力判定も stop() で止めて回収する（#465）。"""
+        self.consent_all()
+        never = asyncio.Event()
+
+        async def wait_forever(*args, **kwargs):
+            await never.wait()
+
+        self.moderator.judge_voice_input.side_effect = wait_forever
+        self.moderator.judge_voice_turn.side_effect = wait_forever
+        await self.complete_utterance(USER_A, "架空の質問")
+        await self.transcript(finished=True)
+        past_input = self.conversation._current.input_task
+        # 返答（音声は流さない。ペルソナの声が出ていると、次の短い発話が割り込みの候補として留められる）。
+        await self.conversation._on_live_message(live_message(
+            output_transcription=SimpleNamespace(text="架空の返答"), turn_complete=True,
+        ))
+        await self.complete_utterance(USER_B, "架空の次の質問")  # 次の発言へ移る
+        await self.settle()
+        judges = set(self.conversation._judge_tasks)
+        self.assertIn(past_input, judges)
+        self.assertEqual(len(judges), 3)  # A の入力・A の出力・B の入力
+
+        await asyncio.wait_for(self.conversation.stop(), 2)
+
+        self.assertTrue(all(task.done() for task in judges))
+        self.assertEqual(self.conversation._judge_tasks, set())
+        self.service.memory.append_pending_log.assert_not_awaited()
+
+    async def test_stop_finishes_cleanup_even_if_the_caller_is_cancelled(self):
+        """呼び出し側が途中でキャンセルされても後片付けを最後まで行い、二度目の呼び出しも同じ完了を待つ（#465）。"""
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_close():
+            entered.set()
+            await release.wait()
+            self.live.connected = False
+
+        self.live.close = slow_close
+        panel = SimpleNamespace(edit=AsyncMock())
+        self.conversation.panel_message = panel
+        self.conversation.panel_view = Mock()
+
+        first = asyncio.create_task(self.conversation.stop())
+        await asyncio.wait_for(entered.wait(), 2)
+        first.cancel()
+        await self.settle()
+        self.assertFalse(first.done())  # 後片付けを待っている
+        second = asyncio.create_task(self.conversation.stop())
+        await self.settle()
+        self.assertFalse(second.done())
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(first, 2)
+        await asyncio.wait_for(second, 2)
+
+        self.assertFalse(self.live.connected)
+        panel.edit.assert_awaited_once()
+        self.assertIsNone(panel.edit.await_args.kwargs["view"])
+        await self.conversation.stop()  # 終わった後の呼び出しは何もしない
+        panel.edit.assert_awaited_once()
+
+    async def start_blocked_panel_edit(self):
+        """同意パネルの編集を始め、最初の編集の通信を止めておく。"""
+        self.contents = []
+        self.panel_entered, self.panel_release = asyncio.Event(), asyncio.Event()
+
+        async def edit(**kwargs):
+            self.contents.append(kwargs["content"])
+            if len(self.contents) == 1:
+                self.panel_entered.set()
+                await self.panel_release.wait()
+
+        self.conversation.panel_message = SimpleNamespace(edit=edit)
+        self.conversation._panel_updated_at = -1e9
+        self.conversation._schedule_panel_update()
+        await asyncio.wait_for(self.panel_entered.wait(), 2)
+
+    async def test_change_during_a_panel_edit_is_shown_after_it(self):
+        """編集の通信を待つ間の同意・入退出を取りこぼさず、終わった後に最新の状態で更新する（#465）。"""
+        from persona_bot.views.voice_consent_view import build_consent_panel_text
+
+        await self.start_blocked_panel_edit()
+        self.consent_all()  # 通信の途中で全員の同意がそろう
+        self.assertTrue(self.conversation.is_open)
+        self.advance(constants.LIVE_CONSENT_PANEL_UPDATE_SECONDS + 1)
+        self.panel_release.set()
+        await asyncio.wait_for(self.conversation._panel_update_task, 2)
+        self.assertEqual(len(self.contents), 2)
+        self.assertNotEqual(self.contents[0], self.contents[1])
+        self.assertEqual(self.contents[1], build_consent_panel_text(self.conversation))
+        self.assertFalse(self.conversation._panel_dirty)
+
+    async def test_panel_is_edited_once_without_changes_during_the_edit(self):
+        await self.start_blocked_panel_edit()
+        self.panel_release.set()
+        await asyncio.wait_for(self.conversation._panel_update_task, 2)
+        self.assertEqual(len(self.contents), 1)
 
     async def test_usage_is_logged_without_text(self):
         usage = SimpleNamespace(total_token_count=10)
