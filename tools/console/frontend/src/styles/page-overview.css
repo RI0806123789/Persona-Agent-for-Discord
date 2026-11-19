@@ -1,0 +1,157 @@
+/* 概要ページ。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ------------------------------------------------------------ 概要ページ */
+
+.hero {
+  border-radius: var(--md-sys-shape-extra-large);
+  background: color-mix(in srgb, var(--tone-container) 28%, var(--md-sys-color-surface-container-low));
+  transition: background var(--spring-effects-slow);
+}
+.hero-layout {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(180px, 1.2fr);
+  align-items: center;
+  gap: 24px;
+}
+.hero-shape {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 112px;
+  height: 112px;
+  color: var(--on-tone-container);
+}
+.hero-shape > .icon {
+  position: relative; /* 絶対配置の形（svg）より手前に描く */
+  z-index: 1;
+}
+.hero-shape svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.hero-shape path {
+  fill: var(--tone-container);
+  transition: fill var(--spring-effects-slow);
+}
+/* 稼働中はクッキーの形がゆっくり回る（M3 Expressive の形のライブラリ） */
+.hero-shape.is-alive svg {
+  animation: shape-rotate 24s linear infinite;
+}
+@keyframes shape-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.hero-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.hero-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.hero-unit,
+.hero-figure-label,
+.hero-desc {
+  color: var(--md-sys-color-on-surface-variant);
+}
+.hero-figure {
+  white-space: nowrap;
+}
+.hero-spark {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.insight-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 1199px) {
+  .insight-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.insight-grid .m3-stat {
+  padding: 14px 16px;
+  border-radius: var(--md-sys-shape-large);
+  background: var(--md-sys-color-surface-container);
+}
+.insight-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.insight-source {
+  margin-left: auto;
+}
+
+.mini-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mini-log li {
+  display: grid;
+  grid-template-columns: 64px 64px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--md-sys-shape-medium);
+}
+.mini-log li.log-error {
+  background: color-mix(in srgb, var(--md-sys-color-error-container) 55%, transparent);
+}
+.mini-log time {
+  color: var(--md-sys-color-on-surface-variant);
+}
+.mini-log-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.level {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: var(--md-sys-shape-full);
+  font: 600 11px/20px var(--font-plain);
+  text-align: center;
+  white-space: nowrap;
+}
+.level-error {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+.level-warn {
+  background: var(--md-custom-warning-container);
+  color: var(--md-custom-on-warning-container);
+}
+.level-info {
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.level-system {
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+}

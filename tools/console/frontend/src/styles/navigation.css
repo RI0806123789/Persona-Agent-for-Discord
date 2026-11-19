@@ -1,0 +1,477 @@
+/* ナビゲーションレールとトップアプリバー。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ------------------------------------------------------------ ナビゲーションレール */
+
+.m3-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: var(--rail-collapsed);
+  padding: 20px 0 16px;
+  overflow: hidden;
+  transition: width var(--spring-spatial-default);
+}
+
+.m3-rail-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0 20px;
+  min-height: 48px;
+}
+.m3-rail-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--md-sys-color-primary);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity var(--spring-effects-default);
+}
+.m3-rail-brand .title-medium {
+  color: var(--md-sys-color-on-surface);
+}
+
+/* FAB（折りたたみ: 56×56 / 展開: ラベル付き） */
+.m3-fab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  width: 56px;
+  height: 56px;
+  margin: 12px 20px 20px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--md-sys-shape-large);
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  box-shadow: var(--md-elevation-1);
+  cursor: pointer;
+  overflow: hidden;
+  align-self: flex-start;
+  transition:
+    width var(--spring-spatial-default),
+    border-radius var(--spring-spatial-fast),
+    box-shadow var(--spring-effects-default);
+}
+.m3-fab::before,
+.m3-btn::before,
+.m3-icon-btn::before,
+.m3-rail-indicator::before,
+.m3-nav-bar-indicator::before,
+.m3-list-item::before,
+.m3-menu-item::before,
+.m3-split-leading::before,
+.m3-split-trailing::before,
+.m3-connected-group button::before,
+.m3-conn-chip::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--spring-effects-fast);
+}
+.m3-fab:hover:not(:disabled) {
+  box-shadow: var(--md-elevation-3);
+}
+.m3-fab:hover:not(:disabled)::before {
+  opacity: 0.08;
+}
+.m3-fab:active:not(:disabled) {
+  border-radius: var(--md-sys-shape-extra-large);
+}
+.m3-fab:active:not(:disabled)::before {
+  opacity: 0.12;
+}
+.m3-fab:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.m3-fab-label {
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity var(--spring-effects-default);
+}
+
+.m3-rail-items {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  padding: 0 12px;
+}
+
+.m3-rail-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0 6px;
+  border: 0;
+  background: none;
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer;
+}
+.m3-rail-indicator {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  width: 56px;
+  height: 32px;
+  border-radius: var(--md-sys-shape-full);
+  transition:
+    width var(--spring-spatial-default),
+    height var(--spring-spatial-default),
+    background var(--spring-effects-default);
+}
+/* 選ばれた項目の丸い背景（アクティブインジケーター）。中心から広がって現れる */
+.m3-rail-indicator::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--md-sys-color-secondary-container);
+  transform: scaleX(0.4);
+  opacity: 0;
+  z-index: -1;
+  transition:
+    transform var(--spring-spatial-default),
+    opacity var(--spring-effects-fast);
+}
+.m3-rail-indicator {
+  z-index: 0;
+}
+.m3-rail-item:hover .m3-rail-indicator::before {
+  opacity: 0.08;
+}
+.m3-rail-item:active .m3-rail-indicator::before {
+  opacity: 0.12;
+}
+.m3-rail-item.is-active {
+  color: var(--md-sys-color-on-surface);
+}
+.m3-rail-item.is-active .m3-rail-indicator {
+  color: var(--md-sys-color-on-secondary-container);
+}
+.m3-rail-item.is-active .m3-rail-indicator::after {
+  transform: none;
+  opacity: 1;
+}
+.m3-rail-item.is-active .m3-rail-label {
+  font-weight: 700;
+}
+.m3-rail-label-inline {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  transition:
+    max-width var(--spring-spatial-default),
+    opacity var(--spring-effects-fast);
+}
+.m3-rail-label {
+  white-space: nowrap;
+  transition: opacity var(--spring-effects-fast);
+}
+
+.m3-rail-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: auto;
+  padding: 0 12px;
+}
+.m3-env {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px;
+  border-radius: var(--md-sys-shape-large);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.m3-env > div {
+  display: none;
+  flex-direction: column;
+  min-width: 0;
+}
+.m3-env strong {
+  color: var(--md-sys-color-on-surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m3-env-tag {
+  color: var(--md-custom-success);
+}
+.m3-env.is-production {
+  background: var(--md-custom-serious-container);
+  color: var(--md-custom-on-serious-container);
+}
+.m3-env.is-production .m3-env-tag,
+.m3-env.is-production strong {
+  color: var(--md-custom-on-serious-container);
+}
+.m3-rail-help {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 40px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--md-sys-shape-full);
+  background: none;
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer;
+}
+.m3-rail-help:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.m3-rail-help .label-large,
+.m3-rail-help .m3-kbd {
+  display: none;
+}
+
+/* 展開したレール。常設は 1200px 以上でだけ（App が is-expanded を付ける）、モーダルは常に展開する */
+.m3-rail.is-expanded {
+  width: var(--rail-expanded);
+  align-items: stretch;
+}
+.m3-rail.is-expanded .m3-rail-brand,
+.m3-rail.is-expanded .m3-fab-label {
+  opacity: 1;
+}
+.m3-rail.is-expanded .m3-fab {
+  width: calc(100% - 40px);
+}
+.m3-rail.is-expanded .m3-rail-item {
+  padding: 0;
+}
+.m3-rail.is-expanded .m3-rail-indicator {
+  justify-content: flex-start;
+  gap: 12px;
+  width: 100%;
+  height: 56px;
+  padding: 0 16px;
+}
+.m3-rail.is-expanded .m3-rail-label-inline {
+  max-width: 180px;
+  opacity: 1;
+}
+.m3-rail.is-expanded .m3-rail-label {
+  display: none;
+}
+.m3-rail.is-expanded .m3-env {
+  justify-content: flex-start;
+}
+.m3-rail.is-expanded .m3-env > div {
+  display: flex;
+}
+.m3-rail.is-expanded .m3-rail-help {
+  justify-content: flex-start;
+}
+.m3-rail.is-expanded .m3-rail-help .label-large,
+.m3-rail.is-expanded .m3-rail-help .m3-kbd {
+  display: inline-flex;
+}
+.m3-rail.is-expanded .m3-rail-help .m3-kbd {
+  margin-left: auto;
+}
+
+/* 画面の上に重ねて開く、広げたレール（1200px 未満）。左から滑り込み、背景を暗くする */
+.m3-modal-rail-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: transparent;
+  visibility: hidden;
+  transition:
+    background var(--spring-effects-default),
+    visibility 0s linear var(--spring-spatial-default-duration);
+}
+.m3-modal-rail-scrim.is-open {
+  visibility: visible;
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 32%, transparent);
+  transition:
+    background var(--spring-effects-default),
+    visibility 0s;
+}
+.m3-rail.is-modal {
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 100%;
+  max-width: calc(100vw - 56px);
+  border-radius: 0 var(--md-sys-shape-large) var(--md-sys-shape-large) 0;
+  background: var(--md-sys-color-surface-container);
+  box-shadow: var(--md-elevation-2);
+  overflow-y: auto;
+  transform: translateX(-100%);
+  transition: transform var(--spring-spatial-default);
+}
+.m3-modal-rail-scrim.is-open .m3-rail.is-modal {
+  transform: none;
+}
+
+/* 狭い画面のナビゲーションバー */
+.m3-nav-bar {
+  display: none;
+}
+
+/* ------------------------------------------------------------ トップアプリバー */
+
+.m3-top-app-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  padding: 20px 24px 16px;
+}
+.m3-top-app-bar-title p {
+  color: var(--md-sys-color-on-surface-variant);
+}
+.m3-top-app-bar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+.m3-divider-vertical {
+  width: 1px;
+  height: 24px;
+  margin: 0 4px;
+  background: var(--md-sys-color-outline-variant);
+}
+
+.m3-conn-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px 0 14px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-full);
+  background: var(--md-sys-color-surface-container-low);
+  color: var(--md-sys-color-on-surface);
+  cursor: pointer;
+  overflow: hidden;
+}
+.m3-conn-chip:hover::before {
+  opacity: 0.08;
+}
+.m3-conn-chip .mono {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m3-conn-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--md-sys-color-outline);
+  transition: background var(--spring-effects-default);
+}
+.m3-conn-chip.is-connected .m3-conn-dot {
+  --tone: var(--md-custom-success);
+  background: var(--md-custom-success);
+  animation: dot-pulse 2.6s ease-out infinite;
+}
+.m3-conn-chip.is-connecting .m3-conn-dot {
+  background: var(--md-custom-warning);
+  animation: breathe 1.2s ease-in-out infinite;
+}
+.m3-conn-rtt {
+  padding-left: 8px;
+  border-left: 1px solid var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+/* 接続先の選択（押すと M3 のメニューが開く） */
+.m3-menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+.m3-select-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  max-width: 280px;
+  padding: 0 8px 0 12px;
+  border: 0;
+  border-radius: var(--md-sys-shape-full);
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface);
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-radius var(--spring-spatial-fast);
+}
+.m3-select-button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--spring-effects-fast);
+}
+.m3-select-button:hover:not(:disabled)::before {
+  opacity: 0.08;
+}
+.m3-select-button.is-open {
+  border-radius: var(--md-sys-shape-medium);
+}
+.m3-select-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.m3-select-button .m3-tag {
+  margin-left: 0;
+}
+.m3-select-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m3-select-arrow {
+  color: var(--md-sys-color-on-surface-variant);
+  transition: transform var(--spring-spatial-default);
+}
+.m3-select-button.is-open .m3-select-arrow {
+  transform: rotate(180deg);
+}
+
+.m3-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 24px 8px;
+  padding: 12px 16px;
+  border-radius: var(--md-sys-shape-large);
+}
+.m3-banner.is-error {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+.m3-banner.is-production {
+  background: var(--md-custom-serious-container);
+  color: var(--md-custom-on-serious-container);
+}

@@ -1,0 +1,60 @@
+/* サーバーページ。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ------------------------------------------------------------ サーバーページ */
+
+.guild-card {
+  gap: 20px;
+}
+.guild-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.guild-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--md-sys-shape-large);
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  font-size: 24px;
+  font-weight: 600;
+}
+.guild-avatar.is-dm {
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+}
+.guild-title {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.guild-title h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.settings-list li {
+  display: grid;
+  grid-template-columns: 24px 120px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+.settings-list .icon {
+  color: var(--md-sys-color-primary);
+}
+.settings-label {
+  color: var(--md-sys-color-on-surface-variant);
+}

@@ -6,6 +6,8 @@
 
 `config/test_constants_layout.py` は、`constants.py` を領域別の `constants_*.py` へ分けても、領域モジュールの名前が `constants` から同じオブジェクトのまま取れること、どの名前も1か所でだけ定義されること、領域モジュールが何も import しないこと（循環参照を作らない）、`patch.multiple("persona_bot.config.constants", ...)` が領域モジュールの名前にも効くこと、管理コンソールが AST で読む6つの定数が `constants.py` に直接の代入として残ることを確認する。`core/test_guild_state_store.py` は、`app_state.py` が DB に対して呼ぶメソッドがすべて `GuildStateStore` に書いてあり、`Database` の同名メソッドと引数名が食い違わないことを確認する（型の確認ツールが CI に無いための代わり）。`services/test_module_split.py` は、`agent_thread_state.py` への分割後も従来の import 先とロガー名が変わらないことを確認する。
 
+画面側（#481）では `tools/console/frontend/tests/styles-layout.test.mjs` が、`styles.css` が `styles/` のファイルを決まった順に `@import` するだけであること、取りこぼしがないこと、画面幅の調整が各ページより後・動きを減らす設定が最後であること、各ファイルが規則の途中で切れていないことを確認する。ビルドした CSS は分割前と同じハッシュ（`index-DeMYDDPI.css`）になり、出力がバイト単位で一致することを手元で確かめた。
+
 ## 遠隔集計の読込境界・終了処理の防御（#396・#397）
 
 `tools/console/backend/tests/test_remote_collection.py` は、遠隔スクリプトをimportしてもargvの解釈・設定読込・DB・外部通信・JSON出力を行わないこと、連続した収集で行・エラー・設定・期限が混ざらないこと、従来の標準入力CLIの引数とJSON出力を保つことを確認する。ページング・設定解決・表示名取得の既存テストも、ASTで関数を作り直さず通常のimportと呼出しで実行する。

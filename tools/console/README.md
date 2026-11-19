@@ -283,7 +283,7 @@ SSH設定に接続ユーザー名を任せている場合も、`bot_dir`のホ�
 | 600〜1199px | 折りたたんだレール。`[` で、広げたレールを画面の上に重ねて開く |
 | 600px 未満 | 下部のナビゲーションバーと、右下の FAB。左上のメニューボタン（または `[`）で、重ねるレールも開ける |
 
-公式の Web 向け M3 Expressive コンポーネントは無いため、部品は仕様をもとに自前で組んでいます（`frontend/src/components/`、`frontend/src/styles.css`）。
+公式の Web 向け M3 Expressive コンポーネントは無いため、部品は仕様をもとに自前で組んでいます（`frontend/src/components/`、スタイルは `frontend/src/styles.css` が `frontend/src/styles/` の各ファイルを決まった順に読み込む）。
 
 ## キーボード操作（Vim 風）
 
@@ -401,7 +401,8 @@ tools/console/
    ├─ viewTransition.ts          ページ・テーマ・伏せ字の切り替えをビュー遷移でつなぐ
    ├─ components/                レール・トップアプリバー・メニュー・M3 の部品（ui.tsx / expressive.tsx）・ダイアログ・スナックバー
    ├─ pages/                     概要 / ログ / サービス操作 / データ / サーバー / SSH 接続（DeployCard.tsx は共通のデプロイ表示、DbTableDetail.tsx はテーブルの中身）
-   └─ styles.css                 形・文字のトークンとスタイル
+   ├─ styles.css                 スタイルの入口。styles/ のファイルを @import するだけ（読み込む順番がカスケードの順番。入れ替えない）
+   └─ styles/                    トークン・骨組み・ナビゲーション・ボタン・部品・各ページ・ダイアログ・画面幅の調整（responsive）・動きを減らす設定（motion。最後）
 ```
 
 ## 今後の候補

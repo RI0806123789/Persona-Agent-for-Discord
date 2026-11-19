@@ -1,0 +1,454 @@
+/* データページ（テーブルの中身を含む）。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ------------------------------------------------------------ データページ */
+
+.schema-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.bar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* 行の内側の余白ぶん外へ出し、文字の頭をカードの本文にそろえる */
+  margin: 0 -8px;
+  padding: 0;
+  list-style: none;
+}
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) minmax(0, 1fr) 64px 20px;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--md-sys-shape-medium);
+}
+/* 中身を開けるテーブルの行（押すと下に中身のカードが開く） */
+.bar-row.is-button {
+  position: relative;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--spring-effects-fast), border-radius var(--spring-spatial-fast);
+}
+.bar-row.is-button:hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+}
+.bar-row.is-button:active {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent);
+}
+.bar-row.is-selected {
+  border-radius: var(--md-sys-shape-large);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+.bar-row.is-selected:hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-secondary-container) 8%, var(--md-sys-color-secondary-container));
+}
+.bar-row.is-selected .muted {
+  color: inherit;
+}
+.bar-row-icon {
+  color: var(--md-sys-color-on-surface-variant);
+}
+.bar-row.is-selected .bar-row-icon {
+  color: inherit;
+}
+.bar-label {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+.bar-track {
+  height: 12px;
+  border-radius: 0 var(--md-sys-shape-extra-small) var(--md-sys-shape-extra-small) 0;
+  overflow: hidden;
+  border-left: 1px solid var(--md-sys-color-outline-variant);
+}
+.bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 0 var(--md-sys-shape-extra-small) var(--md-sys-shape-extra-small) 0;
+  background: var(--chart-series-1);
+  transition: width var(--spring-spatial-slow);
+}
+.bar-value {
+  text-align: right;
+}
+.status-counts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.split-bar {
+  display: flex;
+  gap: 2px;
+  height: 12px;
+}
+.split-good {
+  border-radius: var(--md-sys-shape-extra-small) 0 0 var(--md-sys-shape-extra-small);
+  background: var(--chart-series-1);
+}
+.split-bad {
+  border-radius: 0 var(--md-sys-shape-extra-small) var(--md-sys-shape-extra-small) 0;
+  background: var(--chart-bad);
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+.swatch-good {
+  background: var(--chart-series-1);
+}
+.swatch-bad {
+  background: var(--chart-bad);
+}
+.trend {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 24px;
+}
+.trend-bars {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  align-items: end;
+  gap: 12px;
+  height: 180px;
+  border-bottom: 1px solid var(--md-sys-color-outline);
+}
+.trend-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  height: 100%;
+  outline: none;
+}
+.trend-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: min(44px, 70%);
+  transition: height var(--spring-spatial-slow);
+}
+.trend-stack > :first-child {
+  border-radius: var(--md-sys-shape-extra-small) var(--md-sys-shape-extra-small) 0 0;
+}
+.trend-bad {
+  background: var(--chart-bad);
+}
+.trend-good {
+  background: var(--chart-series-1);
+}
+.trend-col:hover .trend-stack,
+.trend-col:focus-visible .trend-stack {
+  filter: brightness(1.1);
+}
+.trend-label {
+  position: absolute;
+  top: calc(100% + 6px);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.trend-tip {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  transform: translate(-50%, -90%);
+  transition: opacity var(--spring-effects-fast), transform var(--spring-spatial-fast);
+  z-index: 4;
+}
+.trend-col:hover .trend-tip,
+.trend-col:focus-visible .trend-tip {
+  opacity: 1;
+  transform: translate(-50%, -105%);
+}
+
+/* ------------------------------------------------------------ データページ: テーブルの中身 */
+
+.db-detail-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.db-detail-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.db-range {
+  margin-left: auto;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.db-pager {
+  display: inline-flex;
+  gap: 4px;
+}
+.db-table-wrap {
+  /* 開いた行の中身を、表の全幅ではなく見えている幅に収めるため（.db-fields の 100cqi） */
+  container-type: inline-size;
+  transition: opacity var(--spring-effects-default);
+}
+/* 次のページを取り寄せている間は、今の行を薄く残す（表が消えて位置が飛ばないように） */
+.db-table-wrap.is-loading {
+  opacity: 0.5;
+}
+.db-table td {
+  vertical-align: top;
+}
+.db-table .db-row {
+  cursor: pointer;
+}
+.db-table .db-row.is-open {
+  background: var(--md-sys-color-surface-container);
+}
+.db-table .db-row.is-open td {
+  border-bottom-color: transparent;
+}
+.db-expand-cell {
+  width: 40px;
+  padding-right: 0 !important;
+}
+.db-expand .icon {
+  transition: transform var(--spring-spatial-fast);
+}
+.db-expand[aria-expanded="true"] .icon {
+  transform: rotate(180deg);
+}
+.db-cell {
+  max-width: 320px;
+}
+/* 一覧では長い本文を1行に収める（全部は行を開いて見る） */
+.db-clip {
+  display: block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-cell.kind-isoTime,
+.db-cell.kind-logTime,
+.db-cell.kind-unixTime,
+.db-cell.kind-date,
+.db-cell.kind-status,
+.db-cell.kind-model {
+  white-space: nowrap;
+}
+.db-user {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+/* 余白は伸び縮みする中身の側に置く（td に置くと、閉じきるまで余白の分だけ残る） */
+.db-row-detail > td {
+  padding: 0 !important;
+  background: var(--md-sys-color-surface-container);
+}
+.db-row-detail-body {
+  padding: 4px 12px 20px 52px;
+}
+/* テーブルを切り替えたときは、中身のカードがふっと入れ替わる */
+.db-detail {
+  animation: content-in var(--spring-effects-slow) both;
+}
+
+/* デプロイの「コマンドと出力」などの開閉（<details>）も、高さを伸び縮みさせる。
+   ::details-content と interpolate-size に対応したブラウザだけで動き、ほかはこれまでどおりすぐ開く */
+details {
+  interpolate-size: allow-keywords;
+}
+details::details-content {
+  height: 0;
+  overflow: clip;
+  transition:
+    height var(--spring-spatial-default),
+    content-visibility var(--spring-spatial-default-duration) allow-discrete;
+}
+details[open]::details-content {
+  height: auto;
+}
+.db-fields {
+  /* 狭い画面で表が横にはみ出しても、開いた行の中身は見えている所に留め、その幅で折り返す */
+  position: sticky;
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px 24px;
+  max-width: calc(100cqi - 64px);
+  margin: 0;
+}
+.db-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.db-field.is-wide {
+  grid-column: 1 / -1;
+}
+.db-field dt {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+.db-field-key {
+  font: 400 12px/1 var(--font-mono);
+  color: var(--md-sys-color-outline);
+}
+.db-field dd {
+  margin: 0;
+  min-width: 0;
+}
+.db-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.db-error {
+  color: var(--md-sys-color-error);
+}
+.db-json {
+  margin: 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+  border-radius: var(--md-sys-shape-medium);
+  background: var(--md-sys-color-surface-container-highest);
+  font: 400 13px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.db-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.db-meter-track {
+  width: 64px;
+  height: 8px;
+  overflow: hidden;
+  border-radius: var(--md-sys-shape-extra-small);
+  background: var(--md-sys-color-surface-container-highest);
+}
+.db-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--md-sys-shape-extra-small);
+  background: var(--chart-series-1);
+}
+.db-meter .mono {
+  min-width: 2.5ch;
+  text-align: right;
+}
+.db-hourly {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 560px;
+  margin: 0;
+}
+.db-hourly-bars {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  align-items: end;
+  gap: 2px;
+  height: 96px;
+  border-bottom: 1px solid var(--md-sys-color-outline);
+}
+.db-hourly-col {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  outline: none;
+}
+.db-hourly-bar {
+  width: 100%;
+  min-height: 0;
+  border-radius: var(--md-sys-shape-extra-small) var(--md-sys-shape-extra-small) 0 0;
+  background: var(--chart-series-1);
+  transition: height var(--spring-spatial-slow);
+}
+.db-hourly-col:hover .db-hourly-bar,
+.db-hourly-col:focus-visible .db-hourly-bar {
+  filter: brightness(1.15);
+}
+.db-hourly-col:focus-visible {
+  box-shadow: 0 0 0 2px var(--md-sys-color-secondary);
+}
+.db-hourly-tip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  opacity: 0;
+  transform: translate(-50%, 4px);
+  transition: opacity var(--spring-effects-fast), transform var(--spring-spatial-fast);
+  z-index: 4;
+}
+.db-hourly-col:hover .db-hourly-tip,
+.db-hourly-col:focus-visible .db-hourly-tip {
+  opacity: 1;
+  transform: translate(-50%, -4px);
+}
+.db-hourly-axis {
+  display: flex;
+  justify-content: space-between;
+}
+.db-samples {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.db-samples ol {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 24px;
+}
+.db-analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.db-analysis-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.db-big-five {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 6px 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.db-big-five li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}

@@ -1,0 +1,183 @@
+/* 骨組み（レール + メイン領域）・ページの出現・開閉・ビュー遷移・グリッド。
+   styles.css から分割した（#481）。読み込む順番は styles.css が決める。 */
+/* ------------------------------------------------------------ 骨組み（レール + 角丸のメイン領域） */
+
+.app {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  height: 100vh;
+}
+
+/* 本番に接続している間は、画面の上端に色の帯を出し続ける */
+.app.is-production::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 4px;
+  background: var(--md-custom-serious);
+  z-index: 60;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin: 8px 8px 8px 0;
+  height: calc(100vh - 16px);
+  border-radius: var(--md-sys-shape-extra-large);
+  background: var(--md-sys-color-surface);
+  overflow: hidden;
+}
+
+.content {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 24px 48px;
+  scroll-behavior: smooth;
+}
+
+.page {
+  max-width: 1600px;
+  margin: 0 auto;
+  animation: page-in var(--spring-spatial-slow) both;
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 16px;
+  align-items: stretch;
+}
+
+.grid > * {
+  animation: card-in var(--spring-spatial-slow) both;
+}
+.grid > *:nth-child(2) { animation-delay: 40ms; }
+.grid > *:nth-child(3) { animation-delay: 80ms; }
+.grid > *:nth-child(4) { animation-delay: 120ms; }
+.grid > *:nth-child(5) { animation-delay: 160ms; }
+.grid > *:nth-child(6) { animation-delay: 200ms; }
+.grid > *:nth-child(7) { animation-delay: 240ms; }
+.grid > *:nth-child(n + 8) { animation-delay: 280ms; }
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+}
+
+/* カードの中身（読み込み中の表示から、届いたデータへの入れ替わりなど）は、ふっと現れる */
+.m3-card-body > * {
+  animation: content-in var(--spring-effects-slow) both;
+}
+@keyframes content-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* 一覧の行は、上から1行ずつ少し遅れて浮かび上がる（--row-index は描画側が渡す。遅れは 12 行目で頭打ち） */
+.db-table tbody tr.db-row,
+.bar-list > li {
+  animation: row-in var(--spring-spatial-default) both;
+  animation-delay: calc(min(var(--row-index, 0), 12) * 24ms);
+}
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* ------------------------------------------------------------ 開閉（components/Collapse.tsx） */
+
+/* 高さを 0 から本来の高さへ伸ばす。跳ねないばね（Standard）なので、行き過ぎずに止まる */
+.m3-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--spring-spatial-default),
+    opacity var(--spring-effects-default);
+}
+.m3-collapse.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+/* 最初に描かれたとき（開いた状態で現れたとき）も、0 から伸ばす */
+@starting-style {
+  .m3-collapse.is-open {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+/* 伸び縮みの間だけ中身を切り取る。少し外へはみ出すフォーカスの枠は残す */
+.m3-collapse-inner {
+  min-height: 0;
+  overflow: clip;
+  overflow-clip-margin: 6px;
+}
+.m3-collapse.is-settled > .m3-collapse-inner {
+  overflow: visible;
+}
+.grid > .m3-collapse {
+  animation: none;
+}
+
+/* ------------------------------------------------------------ ビュー遷移（viewTransition.ts） */
+
+/* ページの切り替え: レールなどはそのままにして、前のページだけを少し奥へ引きながら薄く消す。
+   新しいページは、上の page-in / card-in でカードが順に浮かび上がる */
+:root[data-view-transition="page"] .content {
+  view-transition-name: page-content;
+}
+:root[data-view-transition="page"]::view-transition-old(root),
+:root[data-view-transition="page"]::view-transition-new(root),
+:root[data-view-transition="page"]::view-transition-group(page-content),
+:root[data-view-transition="page"]::view-transition-new(page-content) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+:root[data-view-transition="page"]::view-transition-old(page-content) {
+  animation: page-out var(--spring-effects-default) both;
+  mix-blend-mode: normal;
+}
+@keyframes page-out {
+  to {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
+
+/* テーマ・配色・伏せ字の切り替え: 画面全体を、前の写しから溶け込ませる */
+:root[data-view-transition="theme"]::view-transition-group(*),
+:root[data-view-transition="privacy"]::view-transition-group(*) {
+  animation-duration: var(--spring-effects-slow-duration);
+}
+:root[data-view-transition="theme"]::view-transition-old(*),
+:root[data-view-transition="theme"]::view-transition-new(*),
+:root[data-view-transition="privacy"]::view-transition-old(*),
+:root[data-view-transition="privacy"]::view-transition-new(*) {
+  animation-duration: var(--spring-effects-slow-duration);
+  animation-timing-function: var(--spring-effects-slow-easing);
+}
+
+.span-3 { grid-column: span 3; }
+.span-4 { grid-column: span 4; }
+.span-5 { grid-column: span 5; }
+.span-6 { grid-column: span 6; }
+.span-7 { grid-column: span 7; }
+.span-8 { grid-column: span 8; }
+.span-12 { grid-column: span 12; }
