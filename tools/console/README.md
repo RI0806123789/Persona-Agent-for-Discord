@@ -399,8 +399,8 @@ tools/console/
    ├─ theme/theme.ts             シード色から M3 の配色を生成
    ├─ theme/motion.ts            ばねの物理計算から動きのトークン（linear()）を生成
    ├─ viewTransition.ts          ページ・テーマ・伏せ字の切り替えをビュー遷移でつなぐ
-   ├─ components/                レール・トップアプリバー・メニュー・M3 の部品（ui.tsx / expressive.tsx）・ダイアログ・スナックバー
-   ├─ pages/                     概要 / ログ / サービス操作 / データ / サーバー / SSH 接続（DeployCard.tsx は共通のデプロイ表示、DbTableDetail.tsx はテーブルの中身）
+   ├─ components/                レール・トップアプリバー・メニュー・M3 の部品（ui.tsx は primitives/ のカード・ボタン・状態表示・スパークラインを再公開する入口。expressive.tsx）・ダイアログ・スナックバー
+   ├─ pages/                     概要 / ログ / サービス操作 / データ / サーバー / SSH 接続（DeployCard.tsx は共通のデプロイ表示。OverviewCards.tsx は概要のカード、DataSummaryParts.tsx はデータの集計カード、DbTableDetail.tsx はテーブルの中身の取り寄せ・ページ送り、DbCells.tsx はそのセルと開いた行の描画）
    ├─ styles.css                 スタイルの入口。styles/ のファイルを @import するだけ（読み込む順番がカスケードの順番。入れ替えない）
    └─ styles/                    トークン・骨組み・ナビゲーション・ボタン・部品・各ページ・ダイアログ・画面幅の調整（responsive）・動きを減らす設定（motion。最後）
 ```

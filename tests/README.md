@@ -6,7 +6,7 @@
 
 `config/test_constants_layout.py` は、`constants.py` を領域別の `constants_*.py` へ分けても、領域モジュールの名前が `constants` から同じオブジェクトのまま取れること、どの名前も1か所でだけ定義されること、領域モジュールが何も import しないこと（循環参照を作らない）、`patch.multiple("persona_bot.config.constants", ...)` が領域モジュールの名前にも効くこと、管理コンソールが AST で読む6つの定数が `constants.py` に直接の代入として残ることを確認する。`core/test_guild_state_store.py` は、`app_state.py` が DB に対して呼ぶメソッドがすべて `GuildStateStore` に書いてあり、`Database` の同名メソッドと引数名が食い違わないことを確認する（型の確認ツールが CI に無いための代わり）。`services/test_module_split.py` は、`agent_thread_state.py` への分割後も従来の import 先とロガー名が変わらないことを確認する。
 
-画面側（#481）では `tools/console/frontend/tests/styles-layout.test.mjs` が、`styles.css` が `styles/` のファイルを決まった順に `@import` するだけであること、取りこぼしがないこと、画面幅の調整が各ページより後・動きを減らす設定が最後であること、各ファイルが規則の途中で切れていないことを確認する。ビルドした CSS は分割前と同じハッシュ（`index-DeMYDDPI.css`）になり、出力がバイト単位で一致することを手元で確かめた。
+画面側（#481）では `tools/console/frontend/tests/styles-layout.test.mjs` が、`styles.css` が `styles/` のファイルを決まった順に `@import` するだけであること、取りこぼしがないこと、画面幅の調整が各ページより後・動きを減らす設定が最後であること、各ファイルが規則の途中で切れていないことを確認する。ビルドした CSS は分割前と同じハッシュ（`index-DeMYDDPI.css`）になり、出力がバイト単位で一致することを手元で確かめた。`component-layout.test.mjs` は、`components/ui.tsx` が `primitives/` を `export *` で再公開するだけの入口であること、基本部品が従来の名前を1か所ずつで公開すること、`redactNode` が `InlineError` / `Notice` と同じファイルにあること、ページから切り出した部品（`OverviewCards`・`DataSummaryParts`・`DbCells`）の公開する名前と、テストが名前で探す `ServiceHero`・`TableRows` が元のページに残ることを確かめる。ページの分割に合わせて、`connection.test.mjs`（`DbTableDetail` の描く `CellValue` を実体の `DbCells` から読み込む）と `dbTables.test.mjs`（「表に無い依存は失敗」の厳格な表へ `./DbCells` を追加）の依存表を更新した。
 
 ## 遠隔集計の読込境界・終了処理の防御（#396・#397）
 
