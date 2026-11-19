@@ -77,6 +77,47 @@ class DocumentTemporaryFileTests(unittest.IsolatedAsyncioTestCase):
         self.assert_no_files()
         self.gemini.upload_file.assert_awaited_once()
 
+    async def test_temporary_file_creation_and_removal_run_off_the_event_loop_thread(self) -> None:
+        """一時ファイルの作成・書き込み・削除は別スレッドで行い、イベントループを塞がない（#480）。"""
+        loop_thread = threading.get_ident()
+        threads: dict[str, int] = {}
+        # setUp が差し替えた生成関数（一時フォルダへ作る）に、呼ばれたスレッドの記録だけを重ねる。
+        factory = document_service.tempfile.NamedTemporaryFile
+        create_in_root = factory.side_effect
+        original_unlink = Path.unlink
+
+        def create(**kwargs):
+            threads["create"] = threading.get_ident()
+            return create_in_root(**kwargs)
+
+        def unlink(path, *args, **kwargs):
+            threads["unlink"] = threading.get_ident()
+            return original_unlink(path, *args, **kwargs)
+
+        factory.side_effect = create
+        with patch.object(Path, "unlink", unlink):
+            await self.process()
+        self.assertEqual(set(threads), {"create", "unlink"})
+        self.assertNotIn(loop_thread, threads.values())
+        self.assert_no_files()
+
+    async def test_oversize_download_never_creates_a_temporary_file(self) -> None:
+        self.attachment.read.return_value = b"12345"
+        self.attachment.size = 1
+        with patch.object(document_service, "MAX_DOCUMENT_SIZE_BYTES", 4):
+            with self.assertRaisesRegex(DocumentUserError, "上限"):
+                await self.process()
+        document_service.tempfile.NamedTemporaryFile.assert_not_called()
+        self.assert_no_files()
+
+    async def test_creation_failure_after_the_file_exists_removes_it(self) -> None:
+        """作成後の書き込みに失敗した一時ファイルは、ワーカーが自分で削除してから例外を返す。"""
+        with patch.object(Path, "write_bytes", side_effect=OSError("架空の書き込み失敗")):
+            with self.assertRaisesRegex(OSError, "書き込み失敗"):
+                await self.service._download_to_temp_file(self.attachment, ".txt")
+        document_service.tempfile.NamedTemporaryFile.assert_called_once()
+        self.assert_no_files()
+
     async def test_summary_records_tokens_without_conversation_snapshot(self) -> None:
         usage = SimpleNamespace(total_token_count=17)
         self.service._usage = SimpleNamespace(log_tokens=Mock(), log_snapshot=Mock())

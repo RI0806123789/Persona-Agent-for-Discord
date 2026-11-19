@@ -92,3 +92,21 @@ class UsageTracker:
             axis.grid(True)
 
             return save_figure_to_buffer(figure)
+
+
+def log_tokens_safely(usage: UsageTracker | None, context_label: str, usage_info: Any | None) -> None:
+    """内部の Gemini 呼び出しのトークンを記録する。記録の失敗や未接続で呼出元の処理を止めない。
+
+    モデレーション・記憶・文書など、会話の本処理に付随する呼び出し元が使う。
+    UsageTracker.log_tokens は「User (」行を出さないので会話件数には数えない。
+    計測は付随的な処理のため、usage が None（未接続）でも usage_info が空でも何もせず、
+    記録で例外が出てもログに型名だけを残して戻る（本文・値は出さない）。
+    特に ContentModerator._judge_verdict は全体を except Exception で包んでおり、
+    記録の失敗がそのまま「判定不能」に化けるため、この入口を通して判定と切り離す。
+    """
+    if usage is None or not usage_info:
+        return
+    try:
+        usage.log_tokens(context_label, usage_info)
+    except Exception as error:
+        logger.warning("トークンの記録に失敗しました: %s", type(error).__name__)

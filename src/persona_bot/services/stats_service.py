@@ -38,6 +38,7 @@ from persona_bot.services.stats_normalization import (  # noqa: F401（BIG_FIVE_
 )
 from persona_bot.utils.storage import extract_json_object
 from persona_bot.utils.timeutil import as_utc, parse_iso_datetime, resolve_timezone, timezone_label, utc_now_iso
+from persona_bot.utils.usage_graph import UsageTracker, log_tokens_safely
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +68,11 @@ class StatsService:
     （呼び出し箇所が増えたときのチェック漏れを防ぐため）。
     """
 
-    def __init__(self, db: Database, gemini: Any) -> None:
+    def __init__(self, db: Database, gemini: Any, usage: UsageTracker | None = None) -> None:
         self._db = db
         self.gemini = gemini
+        # 話題・性格の解析で消費したトークンを記録する（#480）。None なら記録しない。
+        self._usage = usage
         # { user_id: { user_name, total_count, hourly[24], first_seen, last_seen,
         #              recent_samples[], analysis{ topics, big_five, personality, computed_at },
         #              opt_out } }
@@ -378,13 +381,15 @@ class StatsService:
         try:
             # 話題・性格推定はユーザーが選択中のペルソナ/モデルとは無関係な内部解析
             # タスクのため、記憶ルーティング等と同じ固定モデル（ROUTER_MODEL_NAME）を使う。
-            text, _usage, _sources = await self.gemini.generate(
+            text, usage_info, _sources = await self.gemini.generate(
                 prompt,
                 ROUTER_MODEL_NAME,
                 images=None,
                 timeout=STATS_ANALYSIS_TIMEOUT_SECONDS,
                 grounding=False,
             )
+            # 解析結果の検査より先に記録する。発言サンプル・解析本文は渡さず、数だけを残す。
+            log_tokens_safely(self._usage, "会話統計", usage_info)
             parsed = extract_json_object(text or "", required_keys=("topics", "big_five", "personality"))
             if not parsed:
                 logger.warning("会話統計の解析結果を JSON として解釈できませんでした。")

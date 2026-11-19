@@ -319,7 +319,9 @@ AGENT_CHILD_FALLBACK_NAME = "サブエージェント"
 # personas.json の agent.avatar_url（子のアイコンの画像 URL）の長さの上限。
 AGENT_AVATAR_URL_MAX_CHARS = 2048
 
-# UsageTracker が保持するトークン履歴の上限（リングバッファ）
+# UsageTracker が保持するトークン履歴の上限（リングバッファ）。
+# 応答の生成だけでなく、モデレーション・記憶・統計の内部呼び出しも1回ずつ数える（#480）ため、
+# 通常の会話1件で2〜3件（入力判定・応答・応答判定）を使う。グラフが遡れる会話数はその分だけ短い。
 MAX_USAGE_HISTORY = 500
 
 # matplotlib で日本語ラベルを描くためのフォント候補（先頭から見つかったものを使う）。
