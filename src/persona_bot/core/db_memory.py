@@ -108,6 +108,19 @@ class MemoryDbMixin(DbMixinBase):
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def pending_count(self, user_id: str) -> int:
+        """指定ユーザーの、まだ記憶へ圧縮していない一時ログの件数を返す（本文は読まない）。
+
+        記憶の可視化（#484）で「まだ記憶に反映されていない会話」の件数だけを見せるために使う。
+        `(user_id, id)` の索引（スキーマ13）で数えるので、全件を走査しない。
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS count FROM pending_log WHERE user_id = ?",
+                (str(user_id),),
+            ).fetchone()
+        return int(row["count"]) if row is not None else 0
+
     def pending_clear_upto(self, user_id: str, max_id: int) -> None:
         """指定ユーザーの一時ログのうち、id が max_id 以下の行だけを削除する。
 

@@ -2,7 +2,9 @@ import discord
 from discord import ui
 
 from persona_bot.config.constants import STATS_RECENT_SAMPLES_MAX
+from persona_bot.services.memory_service import MemoryService
 from persona_bot.services.stats_service import StatsService
+from persona_bot.views.memory_graph_view import MemoryGraphButton
 from persona_bot.views.view_parts import (
     begin_current_panel_operation, edit_panel_message, BackButton,
     HubFactory, PanelView,
@@ -13,6 +15,7 @@ def _build_status_text(
     collect_enabled: bool,
     *,
     delete_confirmed: bool = False,
+    memory_available: bool = False,
 ) -> str:
     """統計プライバシーパネルの表示テキストを組み立てる。"""
     state_display = "✅ ON（記録します）" if collect_enabled else "🔕 OFF（記録しません）"
@@ -30,6 +33,11 @@ def _build_status_text(
         "プロジェクト記憶）は別機能のため、この設定では消えません。",
         "※ この設定はあなた専用で、他の人（管理者を含む）からは見えません。",
     ]
+    if memory_available:
+        lines.append(
+            "・**🧠 記憶を見る**: ボットが覚えているあなたの記憶（プロフィール・プロジェクト・文書の要約・記念日）を、"
+            "つながりの図（HTML ファイル）にしてあなただけに送ります。閲覧専用で、記憶は変わりません。"
+        )
     if delete_confirmed:
         lines.append(
             "⚠️ **もう一度 🗑️ を押すと、あなたの統計データ（発言回数・時間帯・"
@@ -129,6 +137,7 @@ class StatsPrivacyView(PanelView):
     設定は「実行者本人の分だけ」を対象にする。ON/OFF は確定を押すまで
     反映しない（AutoTopicView と同じ一時選択値方式）。データ削除は opt-out とは
     独立した操作で、2回押しの確認を挟む。
+    `memory` を渡すと、本人の記憶を図にして受け取る 🧠 記憶を見る（#484）も出す（row 2）。
     パネル自体はエフェメラル（本人だけに見える）で表示される想定。
     """
 
@@ -139,6 +148,7 @@ class StatsPrivacyView(PanelView):
         viewer_id: str,
         viewer_name: str,
         make_hub: HubFactory | None = None,
+        memory: MemoryService | None = None,
     ) -> None:
         super().__init__(
             timeout_notice=(
@@ -151,6 +161,8 @@ class StatsPrivacyView(PanelView):
         self.viewer_name = viewer_name
         # 「戻る」ボタンが機能パネルを再生成するための生成関数
         self.make_hub = make_hub
+        # 🧠 記憶を見る が本人の記憶を読むためのサービス（None ならボタンを出さない）。
+        self.memory = memory
 
         # 一時選択値（現在の設定を初期値にする）。UI は「収集する/しない」で
         # 見せるため、内部の opt_out（停止するか）とは真偽が反転している点に注意。
@@ -166,10 +178,13 @@ class StatsPrivacyView(PanelView):
         self.add_item(StatsPrivacyConfirmButton())
         self.add_item(StatsDataDeleteButton(self.delete_confirmed))
         self.add_item(BackButton(row=1))
+        if self.memory is not None:
+            self.add_item(MemoryGraphButton(row=2))
 
     def build_preview(self) -> str:
         """現在の一時選択値からパネル表示テキストを組み立てる。"""
         return _build_status_text(
             self.temp_collect_enabled,
             delete_confirmed=self.delete_confirmed,
+            memory_available=self.memory is not None,
         )

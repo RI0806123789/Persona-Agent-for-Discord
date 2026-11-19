@@ -836,5 +836,62 @@ class CompactionFailureCountTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service._compact_fail_count["test-user"], MEMORY_COMPACT_MAX_FAILURES)
 
 
+class UserSnapshotTests(unittest.IsolatedAsyncioTestCase):
+    """記憶の可視化（#484）が読む、本人1人分の記憶の写し。"""
+
+    async def asyncSetUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        root = Path(self.directory.name)
+        self.projects_path = root / "projects.json"
+        paths = patch.multiple(
+            memory_service, MEMORY_DIR=root,
+            PROFILE_MEMORY_PATH=root / "profile.json", PROJECTS_MEMORY_PATH=self.projects_path,
+        )
+        paths.start()
+        self.addCleanup(paths.stop)
+        self.db = Database(root / "bot.db")
+        self.db.initialize()
+        self.addCleanup(self.db.close)
+        self.service = MemoryService(None, self.db)
+
+    async def test_snapshot_contains_only_the_requested_user_and_changes_nothing(self):
+        self.db.profile_replace_all("test-user", {"呼び名": "架空の本人", ANNIVERSARY_PROFILE_KEY: []})
+        self.db.profile_replace_all("other-user", {"呼び名": "架空の他人"})
+        summary = {"document_name": "架空.pdf", "summary": "架空の要約"}
+        write_json_file(self.projects_path, {**default_projects_memory(), "users": {
+            "test-user": {"架空の研究": {"状況": "進行中"}, "document_summaries": [summary]},
+            "other-user": {"他人の研究": "秘密"},
+        }})
+        for index in range(3):
+            await self.service.append_pending_log("test-user", f"架空の質問{index}", "架空の応答")
+        await self.service.append_pending_log("other-user", "他人の質問", "他人の応答")
+        before_projects = self.projects_path.read_bytes()
+
+        snapshot = await self.service.load_user_snapshot("test-user")
+
+        self.assertEqual(snapshot.profile, {"呼び名": "架空の本人", ANNIVERSARY_PROFILE_KEY: []})
+        self.assertEqual(snapshot.projects, {"架空の研究": {"状況": "進行中"}})
+        self.assertEqual(snapshot.document_summaries, [summary])
+        self.assertEqual(snapshot.pending_count, 3)
+        self.assertNotIn("架空の他人", json.dumps(snapshot.__dict__, ensure_ascii=False))
+        self.assertNotIn("他人の研究", json.dumps(snapshot.__dict__, ensure_ascii=False))
+        # 読み取りだけで、記憶・会話ログ・ファイルを変えない。
+        self.assertEqual(self.projects_path.read_bytes(), before_projects)
+        self.assertEqual(len(self.db.pending_fetch_entries("test-user")), 3)
+        self.assertFalse(self.service.io_lock.locked())
+
+    async def test_unknown_user_and_broken_slices_are_empty(self):
+        write_json_file(self.projects_path, {**default_projects_memory(), "users": {
+            "broken-user": ["不正な形"], "summary-user": {"document_summaries": "不正な形"},
+        }})
+        for user_id in ("unknown-user", "broken-user", "summary-user"):
+            with self.subTest(user_id=user_id):
+                snapshot = await self.service.load_user_snapshot(user_id)
+                self.assertEqual((snapshot.profile, snapshot.projects, snapshot.document_summaries,
+                                  snapshot.pending_count), ({}, {}, [], 0))
+        self.assertEqual(self.db.pending_count("unknown-user"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

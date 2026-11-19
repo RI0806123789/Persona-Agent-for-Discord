@@ -27,6 +27,7 @@ from persona_bot.utils.discord_helpers import is_administrator, is_bot_owner, re
 from persona_bot.views.functions_view import FunctionsView
 from persona_bot.views.view_parts import edit_panel_message
 from persona_bot.services.gemini_service import GeminiService
+from persona_bot.services.memory_service import MemoryService
 from persona_bot.services.ng_word_service import NgWordFilter
 from persona_bot.services.reminder_service import ReminderService
 from persona_bot.services.stats_service import StatsService
@@ -80,6 +81,7 @@ def register_commands(
     voice_guard: VoiceGuard | None = None,
     task_owner: TaskOwner | None = None,
     voice_conversation: VoiceConversationService | None = None,
+    memory: MemoryService | None = None,
 ) -> None:
     tree.on_error = handle_command_error
     command_tasks = task_owner if task_owner is not None else TaskOwner()
@@ -130,6 +132,8 @@ def register_commands(
         view = FunctionsView(
             guild_settings, usage, ng_filter, blacklist, gemini, moderator, stats, reminders,
             is_admin=is_admin, is_owner=is_bot_owner(interaction),
+            # 🔒 統計プライバシー → 🧠 記憶を見る（#484）。None ならボタンを出さない。
+            memory=memory,
         )
         # 機能パネルは本人だけに見えるよう ephemeral で送信する
         if deferred:

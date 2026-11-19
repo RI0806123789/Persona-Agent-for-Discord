@@ -10,6 +10,7 @@ from persona_bot.services.blacklist_service import BlacklistService
 from persona_bot.services.content_moderator import ContentModerator
 from persona_bot.utils.discord_helpers import is_administrator, is_bot_owner, is_current_bot_owner
 from persona_bot.services.gemini_service import GeminiService
+from persona_bot.services.memory_service import MemoryService
 from persona_bot.views.help_view import HelpView, resolve_bot_name
 from persona_bot.services.ng_word_service import NgWordFilter
 from persona_bot.services.reminder_service import ReminderService, ReminderStorageError
@@ -280,6 +281,8 @@ class StatsPrivacyButton(ui.Button):
             viewer_id=str(interaction.user.id),
             viewer_name=interaction.user.display_name,
             make_hub=hub.clone,
+            # 🧠 記憶を見る（#484）。ハブの5行は埋まっているので、このパネルに置いている。
+            memory=hub.memory,
         )
         # 同じ（エフェメラルな）メッセージを統計プライバシーパネルに差し替える
         await swap_panel(interaction, hub, privacy_view, privacy_view.build_preview())
@@ -335,6 +338,7 @@ class FunctionsView(PanelView):
         *,
         is_admin: bool = False,
         is_owner: bool = False,
+        memory: MemoryService | None = None,
     ) -> None:
         super().__init__(
             timeout_notice=(
@@ -354,6 +358,8 @@ class FunctionsView(PanelView):
         self.reminders = reminders
         self.is_admin = is_admin
         self.is_owner = is_owner
+        # 🔒 統計プライバシー → 🧠 記憶を見る（#484）が本人の記憶を読むためのサービス。None なら出さない。
+        self.memory = memory
 
         self._add_all_items()
 
@@ -391,6 +397,7 @@ class FunctionsView(PanelView):
             self.reminders,
             is_admin=is_administrator(interaction.user),
             is_owner=is_bot_owner(interaction),
+            memory=self.memory,
         )
 
     def build_preview(self) -> str:
@@ -404,7 +411,9 @@ class FunctionsView(PanelView):
             "・📊 グラフ / 🔄 NGワード再読込 … その場で実行",
             f"・🔍 Google検索: {grounding_display} … ボタンでその場で切替（サーバーでは管理者のみ）",
             "・❓ 使い方 … 会話のしかたと各機能の説明を表示",
-            "・🔒 統計プライバシー … 会話統計の収集停止・データ削除（あなた自身の分だけ）",
+            "・🔒 統計プライバシー … 会話統計の収集停止・データ削除"
+            + ("・🧠 記憶の確認" if self.memory is not None else "")
+            + "（あなた自身の分だけ）",
         ]
         if self.is_owner:
             lines.append("・🚫 ブロック解除 … ボット所有者専用")

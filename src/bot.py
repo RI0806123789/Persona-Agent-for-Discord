@@ -132,6 +132,8 @@ register_commands(
     voice_guard=voice_guard,
     task_owner=client.background_tasks,
     voice_conversation=voice_conversation,
+    # /functions → 🔒 統計プライバシー → 🧠 記憶を見る（#484）が本人の記憶を読む。
+    memory=memory,
 )
 
 

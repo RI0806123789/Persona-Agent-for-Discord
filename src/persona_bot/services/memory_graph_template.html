@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- 外部への通信を一切させない（記憶を持っていることが第三者へ漏れないように）。記憶の可視化（#484） -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>記憶のつながり</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f6f3;
+    --surface: #ffffff;
+    --text: #1f2328;
+    --muted: #5b6270;
+    --border: #d8dbe0;
+    --edge: #bcc2cc;
+    --accent: #3a6bd4;
+    --notice-bg: #fff6e0;
+    --notice-border: #e8c46a;
+    --c-root: #3a6bd4;
+    --c-category: #7656d1;
+    --c-key: #23907f;
+    --c-value: #7d8799;
+    --c-document: #b96d1f;
+    --c-anniversary: #c94673;
+    --c-info: #687080;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #15171b;
+      --surface: #1d2026;
+      --text: #e6e8eb;
+      --muted: #a2a9b6;
+      --border: #333842;
+      --edge: #4b525e;
+      --accent: #7ea3f6;
+      --notice-bg: #2c2615;
+      --notice-border: #7a6420;
+      --c-root: #7ea3f6;
+      --c-category: #a690f1;
+      --c-key: #4fc4b2;
+      --c-value: #9aa4b6;
+      --c-document: #e3a35e;
+      --c-anniversary: #ee82a6;
+      --c-info: #9ca3af;
+    }
+  }
+  /* ブラウザの既定の文字サイズを小さくしている環境でも読めるようにする。 */
+  html { font-size: max(100%, 16px); }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", "Noto Sans JP", sans-serif;
+    line-height: 1.6;
+  }
+  header, main { max-width: 1280px; margin: 0 auto; padding: 0 16px; }
+  header { padding-top: 20px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .meta { color: var(--muted); margin: 0; font-size: 0.9rem; }
+  .meta span + span::before { content: "／"; margin: 0 6px; }
+  .notices { margin: 12px 0 0; display: grid; gap: 8px; }
+  .notice {
+    margin: 0;
+    padding: 8px 12px;
+    border: 1px solid var(--notice-border);
+    background: var(--notice-bg);
+    border-radius: 8px;
+    font-size: 0.9rem;
+  }
+  .notice.is-plain { border-color: var(--border); background: var(--surface); }
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: 16px;
+    margin: 16px 0;
+  }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+  }
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    min-width: 0;
+  }
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .toolbar input {
+    flex: 1 1 160px;
+    min-width: 0;
+    font: inherit;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+  }
+  button {
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: background-color 160ms ease-out, border-color 160ms ease-out;
+  }
+  button:hover { border-color: var(--accent); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .search-status { color: var(--muted); font-size: 0.85rem; width: 100%; margin: 0; }
+  .search-status:empty { display: none; }
+  .graph-area { position: relative; height: min(72vh, 760px); min-height: 380px; }
+  svg#graph {
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+    cursor: grab;
+    user-select: none;
+  }
+  svg#graph.is-dragging { cursor: grabbing; }
+  #viewport { opacity: 0; }
+  #viewport.is-ready { opacity: 1; animation: fade-in 600ms ease-out backwards; }
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  .edge { stroke: var(--edge); stroke-width: 1.4; transition: opacity 200ms ease-out, stroke 200ms ease-out; }
+  .edge.is-path, .edge.is-child { stroke: var(--accent); stroke-width: 2.2; }
+  .edge.is-dim { opacity: 0.18; }
+  .node { cursor: pointer; transition: opacity 200ms ease-out; }
+  .node circle { fill: var(--c-value); stroke: var(--surface); stroke-width: 2; }
+  .node text {
+    fill: var(--text);
+    font-size: 13px;
+    paint-order: stroke;
+    stroke: var(--surface);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+  }
+  .node.kind-root circle { fill: var(--c-root); }
+  .node.kind-root text { font-size: 17px; font-weight: 700; }
+  .node.kind-category circle { fill: var(--c-category); }
+  .node.kind-category text { font-size: 15px; font-weight: 700; }
+  .node.kind-key circle { fill: var(--c-key); }
+  .node.kind-document circle { fill: var(--c-document); }
+  .node.kind-anniversary circle { fill: var(--c-anniversary); }
+  .node.kind-info circle { fill: var(--c-info); }
+  .node.kind-info text { fill: var(--muted); font-style: italic; }
+  .node.is-selected circle { stroke: var(--accent); stroke-width: 4; }
+  .node.is-path circle, .node.is-child circle { stroke: var(--accent); stroke-width: 3; }
+  .node.is-match circle { stroke: var(--accent); stroke-width: 4; }
+  .node.is-dim { opacity: 0.25; }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .legend span::before {
+    content: "";
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+    background: var(--dot);
+  }
+  .detail { padding: 14px 16px; position: sticky; top: 16px; align-self: start; }
+  .detail h2 { font-size: 1.1rem; margin: 0 0 4px; overflow-wrap: anywhere; }
+  .detail .path { color: var(--muted); font-size: 0.85rem; margin: 0 0 10px; overflow-wrap: anywhere; }
+  .detail .body {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    margin: 0 0 12px;
+    font-size: 0.95rem;
+  }
+  .detail h3 { font-size: 0.9rem; margin: 12px 0 6px; color: var(--muted); }
+  .detail .links { display: flex; flex-wrap: wrap; gap: 6px; }
+  .detail .links button { max-width: 100%; text-align: left; overflow-wrap: anywhere; }
+  .hint { color: var(--muted); font-size: 0.85rem; margin: 12px 0 0; }
+  details.outline { margin: 0 0 24px; padding: 4px 16px 12px; }
+  details.outline summary { cursor: pointer; font-weight: 700; padding: 8px 0; }
+  .outline ul { list-style: none; margin: 0; padding-left: 18px; border-left: 1px solid var(--border); }
+  .outline > ul { padding-left: 0; border-left: none; }
+  .outline li { margin: 2px 0; }
+  .outline button {
+    border: none;
+    background: none;
+    padding: 2px 6px;
+    text-align: left;
+    overflow-wrap: anywhere;
+    max-width: 100%;
+  }
+  .outline button[aria-current="true"] { background: var(--bg); outline: 1px solid var(--accent); }
+  .outline li.is-hidden { display: none; }
+  footer { max-width: 1280px; margin: 0 auto; padding: 0 16px 24px; color: var(--muted); font-size: 0.85rem; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    #viewport.is-ready { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>記憶のつながり</h1>
+  <p class="meta"><span id="generated-at"></span><span id="memory-count"></span></p>
+  <div class="notices" id="notices">
+    <p class="notice">このファイルには、ボットが覚えているあなたの記憶が入っています。他の人に渡したり、公開の場所へ置いたりしないでください。</p>
+    <p class="notice is-plain">線は「分類 → 項目 → 中身」という記憶の保存のされ方を表しています。ボットが推測した関連ではありません。閲覧専用で、ここから記憶を消したり直したりはできません。間違いに気づいたら、ボットとの会話で正しい内容を伝えてください（次に記憶をまとめるときの材料になりますが、確実に直るとは限りません）。</p>
+  </div>
+</header>
+<main>
+  <div class="layout">
+    <section class="panel" aria-label="記憶の図">
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="記憶を検索（/ キー）" aria-label="記憶を検索">
+        <button type="button" id="zoom-in" aria-label="拡大">＋</button>
+        <button type="button" id="zoom-out" aria-label="縮小">－</button>
+        <button type="button" id="fit">全体を表示</button>
+        <p class="search-status" id="search-status" aria-live="polite"></p>
+      </div>
+      <div class="graph-area" id="graph-area">
+        <svg id="graph" role="img" aria-label="記憶のつながりの図。同じ内容を下の一覧でも読めます。">
+          <g id="viewport"><g id="edges"></g><g id="nodes"></g></g>
+        </svg>
+      </div>
+      <div class="legend" aria-hidden="true">
+        <span style="--dot: var(--c-root)">あなた</span>
+        <span style="--dot: var(--c-category)">分類</span>
+        <span style="--dot: var(--c-key)">項目</span>
+        <span style="--dot: var(--c-value)">中身</span>
+        <span style="--dot: var(--c-document)">文書</span>
+        <span style="--dot: var(--c-anniversary)">記念日</span>
+        <span style="--dot: var(--c-info)">案内</span>
+      </div>
+    </section>
+    <aside class="panel detail" aria-live="polite">
+      <h2 id="detail-title"></h2>
+      <p class="path" id="detail-path"></p>
+      <p class="body" id="detail-body"></p>
+      <div id="detail-parent-block">
+        <h3>ひとつ上</h3>
+        <div class="links" id="detail-parent"></div>
+      </div>
+      <div id="detail-children-block">
+        <h3>つながっている項目</h3>
+        <div class="links" id="detail-children"></div>
+      </div>
+      <p class="hint">図の操作: ドラッグで移動・ホイール（または ＋／－）で拡大縮小・点をクリックで詳細・点のドラッグで位置を変更。キー操作: ＋／－ 拡大縮小、0 全体を表示、/ 検索、Esc 選択の解除。</p>
+    </aside>
+  </div>
+  <details class="panel outline" open>
+    <summary>一覧で見る</summary>
+    <ul id="outline"></ul>
+  </details>
+</main>
+<footer>Persona Agent for Discord — 記憶の可視化</footer>
+<script type="application/json" id="memory-data">__MEMORY_GRAPH_DATA__</script>
+<script>
+(() => {
+  "use strict";
+  // 記憶の文字列は利用者の発言や AI の出力から作られた任意の文字列。必ず textContent で表示し、
+  // 文字列を HTML として解釈させる代入・書き込みを使わないこと（tests/services/test_memory_graph.py が検出する）。
+  const $ = (id) => document.getElementById(id);
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const KINDS = new Set(["root", "category", "key", "value", "document", "anniversary", "info"]);
+  let data;
+  try {
+    data = JSON.parse($("memory-data").textContent || "{}");
+  } catch (error) {
+    $("detail-title").textContent = "記憶のデータを読み込めませんでした。";
+    return;
+  }
+  const meta = data.meta || {};
+  const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+  const byId = new Map();
+  const childIds = new Map();
+  for (const node of nodes) {
+    if (!KINDS.has(node.kind)) node.kind = "value";
+    byId.set(node.id, node);
+    childIds.set(node.id, []);
+  }
+  for (const node of nodes) {
+    if (node.parent && childIds.has(node.parent)) childIds.get(node.parent).push(node.id);
+  }
+  const root = nodes.find((node) => !node.parent);
+  if (!root) {
+    $("detail-title").textContent = "表示できる記憶がありません。";
+    return;
+  }
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // ---- 見出しと案内 ----
+  $("generated-at").textContent = `${meta.generatedAt || ""}（${meta.timezone || ""}）時点の記憶`;
+  $("memory-count").textContent = `記憶の項目: ${Number(meta.memoryNodeCount) || 0} 件`;
+  const addNotice = (text) => {
+    const paragraph = document.createElement("p");
+    paragraph.className = "notice";
+    paragraph.textContent = text;
+    $("notices").appendChild(paragraph);
+  };
+  if (Number(meta.pendingCount) > 0) {
+    addNotice(`まとめる前の会話が ${Number(meta.pendingCount)} 件あります。まだこの図には入っていません（しばらくすると記憶へまとめられます）。`);
+  }
+  if (meta.truncated) {
+    addNotice(`項目が多いため、最大 ${Number(meta.maxNodes) || 0} 件までを表示しています。表示しきれなかった記憶があります。`);
+  }
+
+  // ---- 配置（本人を中心に、分類・項目・中身を外側の輪へ並べる） ----
+  const leafCount = new Map();
+  const countLeaves = (id) => {
+    const kids = childIds.get(id);
+    let total = kids.length ? 0 : 1;
+    for (const kid of kids) total += countLeaves(kid);
+    leafCount.set(id, total);
+    return total;
+  };
+  countLeaves(root.id);
+  const maxDepth = nodes.reduce((deepest, node) => Math.max(deepest, Number(node.depth) || 0), 1);
+  // 一番外の輪で葉どうしが詰まりすぎない半径を確保しつつ、小さい記憶は小さくまとめる。
+  const ringStep = Math.max(110, (leafCount.get(root.id) * 30) / (2 * Math.PI) / maxDepth);
+  const place = (id, start, end) => {
+    const node = byId.get(id);
+    const middle = (start + end) / 2;
+    const radius = (Number(node.depth) || 0) * ringStep;
+    node.x = Math.cos(middle) * radius;
+    node.y = Math.sin(middle) * radius;
+    const total = leafCount.get(id) || 1;
+    let cursor = start;
+    for (const kid of childIds.get(id)) {
+      const span = (end - start) * (leafCount.get(kid) / total);
+      place(kid, cursor, cursor + span);
+      cursor += span;
+    }
+  };
+  place(root.id, -Math.PI / 2, Math.PI * 1.5);
+
+  const radiusOf = (node) => ({ root: 20, category: 13, info: 10, key: 9, document: 9, anniversary: 9 })[node.kind] || 7;
+  // 重なった点だけを押し広げる（一度だけ計算して落ち着いた位置から描く。表示中に揺れ動かさない）。
+  for (let iteration = 0; iteration < 80; iteration += 1) {
+    let moved = false;
+    for (let i = 0; i < nodes.length; i += 1) {
+      const a = nodes[i];
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const b = nodes[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let distance = Math.hypot(dx, dy);
+        const needed = radiusOf(a) + radiusOf(b) + 26;
+        if (distance >= needed) continue;
+        if (distance < 0.01) {
+          dx = Math.cos(j);
+          dy = Math.sin(j);
+          distance = 1;
+        }
+        const push = (needed - distance) / 2;
+        const ux = dx / distance;
+        const uy = dy / distance;
+        if (a !== root) { a.x -= ux * push; a.y -= uy * push; }
+        if (b !== root) { b.x += ux * push; b.y += uy * push; }
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+
+  // ---- 描画 ----
+  const svg = $("graph");
+  const viewport = $("viewport");
+  const make = (name, attributes = {}) => {
+    const element = document.createElementNS(SVG_NS, name);
+    for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, String(value));
+    return element;
+  };
+  const groups = new Map();
+  const labels = new Map();
+  const edgeOf = new Map();
+  for (const node of nodes) {
+    if (!node.parent || !byId.has(node.parent)) continue;
+    const line = make("line");
+    line.classList.add("edge");
+    $("edges").appendChild(line);
+    edgeOf.set(node.id, line);
+  }
+  for (const node of nodes) {
+    const group = make("g");
+    group.classList.add("node", `kind-${node.kind}`);
+    group.dataset.id = node.id;
+    const title = make("title");
+    title.textContent = node.path || node.label;
+    const circle = make("circle", { r: radiusOf(node) });
+    const text = make("text");
+    text.textContent = node.label;
+    group.append(title, circle, text);
+    $("nodes").appendChild(group);
+    groups.set(node.id, group);
+    labels.set(node.id, text);
+  }
+  const placeLabel = (node) => {
+    const text = labels.get(node.id);
+    const radius = radiusOf(node);
+    if (node === root) {
+      text.setAttribute("x", "0");
+      text.setAttribute("y", String(radius + 20));
+      text.setAttribute("text-anchor", "middle");
+      return;
+    }
+    // 中心から外へ向かう側に文字を置く（左半分の点は左へ伸ばす）。
+    const outward = Math.cos(Math.atan2(node.y - root.y, node.x - root.x)) >= 0;
+    text.setAttribute("x", String(outward ? radius + 6 : -(radius + 6)));
+    text.setAttribute("y", "4");
+    text.setAttribute("text-anchor", outward ? "start" : "end");
+  };
+  const updateEdge = (id) => {
+    const line = edgeOf.get(id);
+    if (!line) return;
+    const node = byId.get(id);
+    const parent = byId.get(node.parent);
+    line.setAttribute("x1", parent.x.toFixed(1));
+    line.setAttribute("y1", parent.y.toFixed(1));
+    line.setAttribute("x2", node.x.toFixed(1));
+    line.setAttribute("y2", node.y.toFixed(1));
+  };
+  const position = (node) => {
+    groups.get(node.id).setAttribute("transform", `translate(${node.x.toFixed(1)} ${node.y.toFixed(1)})`);
+    updateEdge(node.id);
+    for (const kid of childIds.get(node.id)) updateEdge(kid);
+  };
+  for (const node of nodes) {
+    position(node);
+    placeLabel(node);
+  }
+
+  // ---- 表示範囲（移動・拡大縮小） ----
+  const view = { x: 0, y: 0, k: 1 };
+  let frame = 0;
+  const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
+  const applyView = () => viewport.setAttribute("transform", `translate(${view.x.toFixed(1)} ${view.y.toFixed(1)}) scale(${view.k.toFixed(4)})`);
+  const stopAnimation = () => { if (frame) cancelAnimationFrame(frame); frame = 0; };
+  const svgSize = () => {
+    const rect = svg.getBoundingClientRect();
+    return { width: rect.width || 800, height: rect.height || 600 };
+  };
+  const animateTo = (target) => {
+    stopAnimation();
+    if (reduceMotion) {
+      Object.assign(view, target);
+      applyView();
+      return;
+    }
+    const from = { ...view };
+    const started = performance.now();
+    const duration = 380;
+    const step = (now) => {
+      const t = Math.min((now - started) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3); // 跳ね返らずに減速して止まる
+      view.x = from.x + (target.x - from.x) * eased;
+      view.y = from.y + (target.y - from.y) * eased;
+      view.k = from.k + (target.k - from.k) * eased;
+      applyView();
+      frame = t < 1 ? requestAnimationFrame(step) : 0;
+    };
+    frame = requestAnimationFrame(step);
+  };
+  const fitTarget = () => {
+    let minX = Infinity; let minY = Infinity; let maxX = -Infinity; let maxY = -Infinity;
+    for (const node of nodes) {
+      // 文字の分だけ横に余白を取る（おおよその幅）。
+      const labelWidth = Math.min(String(node.label).length, 20) * 11;
+      minX = Math.min(minX, node.x - labelWidth);
+      maxX = Math.max(maxX, node.x + labelWidth);
+      minY = Math.min(minY, node.y - 30);
+      maxY = Math.max(maxY, node.y + 30);
+    }
+    const { width, height } = svgSize();
+    const k = clamp(Math.min((width - 32) / Math.max(maxX - minX, 1), (height - 32) / Math.max(maxY - minY, 1)), 0.12, 1.4);
+    return { k, x: width / 2 - ((minX + maxX) / 2) * k, y: height / 2 - ((minY + maxY) / 2) * k };
+  };
+  const zoomAt = (factor, px, py) => {
+    const k = clamp(view.k * factor, 0.1, 4);
+    const ratio = k / view.k;
+    view.x = px - (px - view.x) * ratio;
+    view.y = py - (py - view.y) * ratio;
+    view.k = k;
+    applyView();
+  };
+  const zoomCenter = (factor) => {
+    stopAnimation();
+    const { width, height } = svgSize();
+    zoomAt(factor, width / 2, height / 2);
+  };
+  const centerOn = (node) => {
+    const { width, height } = svgSize();
+    const k = Math.max(view.k, 0.9);
+    animateTo({ k, x: width / 2 - node.x * k, y: height / 2 - node.y * k });
+  };
+
+  // ---- 選択と詳細 ----
+  let highlighted = [];
+  let selectedId = null;
+  const outlineButtons = new Map();
+  const clearHighlight = () => {
+    for (const element of highlighted) element.classList.remove("is-selected", "is-path", "is-child");
+    highlighted = [];
+    for (const button of outlineButtons.values()) button.removeAttribute("aria-current");
+  };
+  const mark = (element, name) => {
+    if (!element) return;
+    element.classList.add(name);
+    highlighted.push(element);
+  };
+  const linkButton = (id) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = byId.get(id).label;
+    button.addEventListener("click", () => select(id));
+    return button;
+  };
+  const showDetail = (node) => {
+    $("detail-title").textContent = node.label;
+    // 見出しと同じだけの経路（本人・分類）は繰り返さない。
+    $("detail-path").textContent = node.path && node.path !== node.label ? node.path : "";
+    $("detail-body").textContent = node.detail || "";
+    const parentBox = $("detail-parent");
+    parentBox.replaceChildren();
+    $("detail-parent-block").hidden = !node.parent;
+    if (node.parent && byId.has(node.parent)) parentBox.append(linkButton(node.parent));
+    const kids = childIds.get(node.id);
+    const childBox = $("detail-children");
+    childBox.replaceChildren(...kids.map(linkButton));
+    $("detail-children-block").hidden = kids.length === 0;
+  };
+  const select = (id, { center = true } = {}) => {
+    const node = byId.get(id);
+    if (!node) return;
+    clearHighlight();
+    selectedId = id;
+    mark(groups.get(id), "is-selected");
+    let current = node;
+    while (current.parent && byId.has(current.parent)) {
+      mark(edgeOf.get(current.id), "is-path");
+      current = byId.get(current.parent);
+      mark(groups.get(current.id), "is-path");
+    }
+    for (const kid of childIds.get(id)) {
+      mark(groups.get(kid), "is-child");
+      mark(edgeOf.get(kid), "is-child");
+    }
+    const outlineButton = outlineButtons.get(id);
+    if (outlineButton) outlineButton.setAttribute("aria-current", "true");
+    showDetail(node);
+    if (center) centerOn(node);
+  };
+  const clearSelection = () => {
+    clearHighlight();
+    selectedId = null;
+    showDetail(root);
+  };
+
+  // ---- 一覧（キーボードと読み上げでも全部を読めるようにする） ----
+  const outlineItems = new Map();
+  const buildOutline = (id) => {
+    const node = byId.get(id);
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = node.label;
+    button.title = node.path || "";
+    button.addEventListener("click", () => {
+      select(id);
+      $("graph-area").scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
+    });
+    item.appendChild(button);
+    outlineButtons.set(id, button);
+    outlineItems.set(id, item);
+    const kids = childIds.get(id);
+    if (kids.length) {
+      const list = document.createElement("ul");
+      for (const kid of kids) list.appendChild(buildOutline(kid));
+      item.appendChild(list);
+    }
+    return item;
+  };
+  $("outline").appendChild(buildOutline(root.id));
+
+  // ---- 検索 ----
+  let matches = [];
+  const runSearch = () => {
+    const query = $("search").value.trim().toLowerCase();
+    matches = [];
+    const visible = new Set();
+    for (const node of nodes) {
+      const hit = query !== "" && `${node.label}\n${node.path}\n${node.detail}`.toLowerCase().includes(query);
+      groups.get(node.id).classList.toggle("is-match", hit);
+      groups.get(node.id).classList.toggle("is-dim", query !== "" && !hit);
+      if (hit) {
+        matches.push(node.id);
+        // 一覧では、見つかった項目とその上の項目だけを残す。
+        let current = node;
+        visible.add(current.id);
+        while (current.parent && byId.has(current.parent)) {
+          current = byId.get(current.parent);
+          visible.add(current.id);
+        }
+      }
+    }
+    for (const line of edgeOf.values()) line.classList.toggle("is-dim", query !== "");
+    for (const [id, item] of outlineItems) item.classList.toggle("is-hidden", query !== "" && !visible.has(id));
+    $("search-status").textContent = query === ""
+      ? ""
+      : (matches.length ? `${matches.length} 件見つかりました（Enter で最初の項目へ移動）` : "見つかりませんでした");
+  };
+  $("search").addEventListener("input", runSearch);
+  $("search").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && matches.length) {
+      event.preventDefault();
+      select(matches[0]);
+    } else if (event.key === "Escape") {
+      $("search").value = "";
+      runSearch();
+      $("search").blur();
+    }
+  });
+
+  // ---- 操作（ドラッグ・ホイール・2本指での拡大縮小） ----
+  const pointers = new Map();
+  let drag = null;
+  let pinch = null;
+  const pinchState = () => {
+    const [first, second] = [...pointers.values()];
+    const rect = svg.getBoundingClientRect();
+    return {
+      distance: Math.hypot(first.x - second.x, first.y - second.y) || 1,
+      x: (first.x + second.x) / 2 - rect.left,
+      y: (first.y + second.y) / 2 - rect.top,
+    };
+  };
+  svg.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    stopAnimation();
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    try { svg.setPointerCapture(event.pointerId); } catch (error) { /* 取れなくても操作は続ける */ }
+    if (pointers.size === 2) {
+      drag = null;
+      pinch = pinchState();
+      return;
+    }
+    const target = event.target instanceof Element ? event.target.closest("g.node") : null;
+    drag = {
+      id: target ? target.dataset.id : null,
+      pointer: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      moved: false,
+    };
+  });
+  svg.addEventListener("pointermove", (event) => {
+    if (!pointers.has(event.pointerId)) return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pinch && pointers.size === 2) {
+      const next = pinchState();
+      zoomAt(next.distance / pinch.distance, next.x, next.y);
+      view.x += next.x - pinch.x;
+      view.y += next.y - pinch.y;
+      applyView();
+      pinch = next;
+      return;
+    }
+    if (!drag || drag.pointer !== event.pointerId) return;
+    if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 4) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      svg.classList.add("is-dragging");
+    }
+    const dx = event.clientX - drag.lastX;
+    const dy = event.clientY - drag.lastY;
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+    if (drag.id) {
+      const node = byId.get(drag.id);
+      node.x += dx / view.k;
+      node.y += dy / view.k;
+      position(node);
+      placeLabel(node);
+    } else {
+      view.x += dx;
+      view.y += dy;
+      applyView();
+    }
+  });
+  const endPointer = (event, cancelled) => {
+    pointers.delete(event.pointerId);
+    if (pointers.size < 2) pinch = null;
+    if (!drag || drag.pointer !== event.pointerId) return;
+    const finished = drag;
+    drag = null;
+    svg.classList.remove("is-dragging");
+    if (cancelled || finished.moved) return;
+    if (finished.id) select(finished.id, { center: false });
+    else if (selectedId) clearSelection();
+  };
+  svg.addEventListener("pointerup", (event) => endPointer(event, false));
+  svg.addEventListener("pointercancel", (event) => endPointer(event, true));
+  svg.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    stopAnimation();
+    const rect = svg.getBoundingClientRect();
+    zoomAt(Math.exp(-event.deltaY * 0.0015), event.clientX - rect.left, event.clientY - rect.top);
+  }, { passive: false });
+  $("zoom-in").addEventListener("click", () => zoomCenter(1.25));
+  $("zoom-out").addEventListener("click", () => zoomCenter(0.8));
+  $("fit").addEventListener("click", () => animateTo(fitTarget()));
+  document.addEventListener("keydown", (event) => {
+    const tag = event.target instanceof Element ? event.target.tagName : "";
+    if (tag === "INPUT" || tag === "TEXTAREA" || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key === "+" || event.key === "=") zoomCenter(1.25);
+    else if (event.key === "-") zoomCenter(0.8);
+    else if (event.key === "0") animateTo(fitTarget());
+    else if (event.key === "/") { event.preventDefault(); $("search").focus(); }
+    else if (event.key === "Escape") clearSelection();
+  });
+
+  // ---- 最初の表示 ----
+  Object.assign(view, fitTarget());
+  applyView();
+  showDetail(root);
+  viewport.classList.add("is-ready");
+})();
+</script>
+</body>
+</html>
