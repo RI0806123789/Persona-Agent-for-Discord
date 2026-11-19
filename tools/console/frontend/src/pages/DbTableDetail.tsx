@@ -71,8 +71,11 @@ export function DbTableDetail({
   const listColumns = columns.filter((column) => column.list || column.kind === "raw");
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
+  // 表示する範囲。行が0件のページ（取得の間に総行数が減ったなど）は 0–0 とし、「0–50 / 30 行」のように逆転させない。
   const from = rows.length ? (data?.offset ?? 0) + 1 : 0;
-  const to = (data?.offset ?? 0) + rows.length;
+  const to = rows.length ? (data?.offset ?? 0) + rows.length : 0;
+  // ページ送りの判定は表示とは別にする。0件のページでも、いまの位置から先へは進ませない（#478）。
+  const reachedEnd = (data?.offset ?? 0) + rows.length >= total;
 
   const toggle = (index: number) =>
     setExpanded((current) => {
@@ -118,7 +121,7 @@ export function DbTableDetail({
           <IconButton
             icon="chevronRight"
             label={`次の ${PAGE_SIZE} 行`}
-            disabled={loading || !data || to >= total}
+            disabled={loading || !data || reachedEnd}
             onClick={() => setOffset((data?.offset ?? 0) + PAGE_SIZE)}
           />
         </span>

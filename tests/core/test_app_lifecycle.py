@@ -1,5 +1,6 @@
 """起動時の状態復元と終了時の後片付けを確かめる（#68）。"""
 
+import ast
 import asyncio
 from contextlib import closing as closing_connection
 from pathlib import Path
@@ -50,6 +51,167 @@ class StartBackgroundOnceTests(unittest.TestCase):
         with self.assertRaises(AttributeError):
             BotState().start_background_once("memory_background_startd", start)
         start.assert_not_called()
+
+
+class SyncCommandsOnceTests(unittest.IsolatedAsyncioTestCase):
+    """スラッシュコマンドの同期は、on_ready が重複して届いても1回だけ行う（#477）。"""
+
+    async def test_overlapping_calls_sync_only_once(self) -> None:
+        state = BotState()
+        started, gate = asyncio.Event(), asyncio.Event()
+
+        async def slow_sync() -> None:
+            started.set()
+            await gate.wait()
+
+        sync = AsyncMock(side_effect=slow_sync)
+        first = asyncio.create_task(state.sync_commands_once(sync))
+        await started.wait()
+        # 1回目の通信待ちの間に、2回目の on_ready が届く
+        second = asyncio.create_task(state.sync_commands_once(sync))
+        await asyncio.sleep(0)
+        self.assertFalse(state.commands_synced)
+        gate.set()
+        self.assertEqual(await asyncio.gather(first, second), [True, False])
+        sync.assert_awaited_once()
+        self.assertTrue(state.commands_synced)
+
+    async def test_failed_sync_leaves_the_flag_unset_so_the_next_ready_retries(self) -> None:
+        state = BotState()
+        sync = AsyncMock(side_effect=[RuntimeError("架空の通信失敗"), None])
+        with self.assertRaises(RuntimeError):
+            await state.sync_commands_once(sync)
+        self.assertFalse(state.commands_synced)
+        self.assertTrue(await state.sync_commands_once(sync))
+        self.assertTrue(state.commands_synced)
+        self.assertEqual(sync.await_count, 2)
+        # 済んだ後は何もしない
+        self.assertFalse(await state.sync_commands_once(sync))
+        self.assertEqual(sync.await_count, 2)
+
+    async def test_stopping_prevents_a_sync_even_after_waiting_for_the_lock(self) -> None:
+        state = BotState()
+        stopping = [False]
+        gate = asyncio.Event()
+
+        async def failing_sync() -> None:
+            await gate.wait()
+            raise RuntimeError("架空の通信失敗")
+
+        first_sync, second_sync = AsyncMock(side_effect=failing_sync), AsyncMock()
+        first = asyncio.create_task(state.sync_commands_once(first_sync, is_stopping=lambda: stopping[0]))
+        await asyncio.sleep(0)  # 1回目がロックを持って通信を待つ
+        second = asyncio.create_task(state.sync_commands_once(second_sync, is_stopping=lambda: stopping[0]))
+        await asyncio.sleep(0)
+        stopping[0] = True  # ロックを待つ間に終了が始まる
+        gate.set()
+        with self.assertRaises(RuntimeError):
+            await first
+        self.assertFalse(await second)
+        second_sync.assert_not_awaited()
+        self.assertFalse(state.commands_synced)
+        # 終了中なら、最初から同期を始めない
+        self.assertFalse(await state.sync_commands_once(second_sync, is_stopping=lambda: True))
+        second_sync.assert_not_awaited()
+
+
+class OnReadyTests(unittest.IsolatedAsyncioTestCase):
+    """bot.py の on_ready（#477）。bot.py は import せず、関数だけを取り出して差し替えた部品で動かす。"""
+
+    def load_on_ready(self, *, stopping: bool = False, ensure_storage=None):
+        root = Path(__file__).resolve().parents[2]
+        tree = ast.parse((root / "src/bot.py").read_text(encoding="utf-8-sig"))
+        node = next(item for item in tree.body if isinstance(item, ast.AsyncFunctionDef) and item.name == "on_ready")
+        registered = {}
+
+        def register(callback):
+            registered[callback.__name__] = callback
+            return callback
+
+        self.client = SimpleNamespace(
+            event=register, user="架空のボット", background_tasks=SimpleNamespace(stopping=stopping),
+        )
+        self.loop = SimpleNamespace(start=Mock())
+        self.documents = SimpleNamespace(start_worker=Mock())
+        self.tree = SimpleNamespace(sync=AsyncMock())
+        self.state = BotState()
+        self.memory = SimpleNamespace(io_lock=asyncio.Lock(), ensure_storage=ensure_storage or Mock())
+        namespace = {
+            "client": self.client, "logger": Mock(), "memory": self.memory, "run_in_thread": run_in_thread,
+            "state": self.state, "documents": self.documents, "tree": self.tree,
+            "_periodic_loops": [("memory_background_started", self.loop)],
+        }
+        # on_ready だけを定義し、bot.py の設定読込・DB初期化・起動を実行しない。
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "bot-on-ready", "exec"), namespace)
+        return registered["on_ready"]
+
+    async def test_ready_starts_background_work_and_syncs_commands_once(self) -> None:
+        on_ready = self.load_on_ready()
+        await on_ready()
+        await on_ready()  # 再接続での重複発火
+        self.memory.ensure_storage.assert_called()
+        self.loop.start.assert_called_once_with()
+        self.documents.start_worker.assert_called_once_with()
+        self.tree.sync.assert_awaited_once()
+        self.assertTrue(self.state.commands_synced)
+
+    async def test_overlapping_ready_events_sync_commands_once(self) -> None:
+        on_ready = self.load_on_ready()
+        started, gate = asyncio.Event(), asyncio.Event()
+
+        async def slow_sync() -> None:
+            started.set()
+            await gate.wait()
+
+        self.tree.sync.side_effect = slow_sync
+        first = asyncio.create_task(on_ready())
+        await started.wait()
+        second = asyncio.create_task(on_ready())
+        # 2回目は保存先の準備を終えて、1回目の同期の完了を待つ
+        for _ in range(300):
+            if self.memory.ensure_storage.call_count >= 2:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        self.assertFalse(second.done())
+        gate.set()
+        await asyncio.gather(first, second)
+        self.tree.sync.assert_awaited_once()
+
+    async def test_failed_sync_is_retried_by_the_next_ready(self) -> None:
+        on_ready = self.load_on_ready()
+        self.tree.sync.side_effect = [RuntimeError("架空の通信失敗"), None]
+        with self.assertRaises(RuntimeError):
+            await on_ready()
+        self.assertFalse(self.state.commands_synced)
+        await on_ready()
+        self.assertTrue(self.state.commands_synced)
+        self.assertEqual(self.tree.sync.await_count, 2)
+        self.loop.start.assert_called_once_with()
+
+    async def test_shutdown_during_storage_preparation_stops_before_loops_and_sync(self) -> None:
+        holder = {}
+
+        def ensure_storage() -> None:
+            # 保存先の準備を待つ間に、終了が始まる
+            holder["client"].background_tasks.stopping = True
+
+        on_ready = self.load_on_ready(ensure_storage=Mock(side_effect=ensure_storage))
+        holder["client"] = self.client
+        await on_ready()
+        self.memory.ensure_storage.assert_called_once()
+        self.loop.start.assert_not_called()
+        self.documents.start_worker.assert_not_called()
+        self.tree.sync.assert_not_awaited()
+        self.assertFalse(self.state.commands_synced)
+        self.assertFalse(self.state.memory_background_started)
+
+    async def test_ready_after_shutdown_started_does_nothing(self) -> None:
+        on_ready = self.load_on_ready(stopping=True)
+        await on_ready()
+        self.memory.ensure_storage.assert_not_called()
+        self.loop.start.assert_not_called()
+        self.tree.sync.assert_not_awaited()
 
 
 class RestoreAttachTests(unittest.IsolatedAsyncioTestCase):

@@ -1,5 +1,4 @@
 import logging
-from typing import Callable
 
 import discord
 from discord import ui
@@ -10,7 +9,6 @@ from persona_bot.services.content_moderator import ContentModerator
 from persona_bot.utils.discord_helpers import (
     is_supported_message_channel,
     send_long_message,
-    split_message,
 )
 from persona_bot.services.summary_service import generate_channel_summary
 from persona_bot.services.gemini_service import GeminiService

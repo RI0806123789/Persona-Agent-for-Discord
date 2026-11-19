@@ -4,7 +4,7 @@ import asyncio
 from weakref import WeakValueDictionary
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from persona_bot.config.choices import (
     AUTO_TOPIC_INTERVAL_CHOICES,
@@ -338,6 +338,31 @@ class BotState:
     _guild_persist_locks: WeakValueDictionary[int, asyncio.Lock] = field(
         default_factory=WeakValueDictionary, repr=False, compare=False,
     )
+    # スラッシュコマンドの同期（通信）を1つずつにする。on_ready は再接続のたびに発火し、同期の通信待ちの間に
+    # 次の on_ready が届くことがある（#477）。
+    _commands_sync_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
+
+    async def sync_commands_once(
+        self, sync: Callable[[], Awaitable[Any]], *, is_stopping: Callable[[], bool] | None = None,
+    ) -> bool:
+        """スラッシュコマンドの同期を、まだ済んでいないときだけ1回行う（#477）。
+
+        `commands_synced` は同期が**終わった後**に立てるため、判定だけでは通信待ちの間に重複して届いた
+        `on_ready` が2回目の同期を始めてしまう。ロックで直列化し、ロックを取った後にもう一度確かめる。
+        同期が例外で終わったときは `commands_synced` を立てず、次の `on_ready` で再試行できる。
+
+        Args:
+            sync: 同期の本体（`tree.sync`）。
+            is_stopping: 真なら同期を始めない。ロックを待つ間に終了が始まった場合を拾う。
+        Returns:
+            同期したら True。済み・終了中で何もしなかったら False。
+        """
+        async with self._commands_sync_lock:
+            if self.commands_synced or (is_stopping is not None and is_stopping()):
+                return False
+            await sync()
+            self.commands_synced = True
+            return True
 
     def start_background_once(self, started_flag: str, start: Callable[[], Any]) -> bool:
         """`*_background_started` 系のフラグが未起動のときだけ start() を呼び、フラグを立てる（#414）。

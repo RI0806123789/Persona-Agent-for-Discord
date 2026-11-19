@@ -2,7 +2,6 @@ import logging
 import discord
 from discord import ui
 
-from persona_bot.config.personas import refresh_persona_catalog
 from persona_bot.core.app_state import GuildSettings
 from persona_bot.core.background import run_in_thread
 from persona_bot.views.auto_topic_view import AutoTopicView

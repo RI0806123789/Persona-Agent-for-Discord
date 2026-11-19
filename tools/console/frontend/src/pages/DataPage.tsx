@@ -84,6 +84,9 @@ export function DataPage({
   useEffect(() => {
     setSummary(null);
     setError(null);
+    // 取得の途中で切断・接続先の変更があると、cleanup が世代を進めるため、その取得の finally は
+    // loading を戻さない。ここで戻しておく（取得するなら load() がすぐに立て直す。#478）。
+    setLoading(false);
     if (connected) void load();
     return () => { requestId.current += 1; };
   }, [connected, load, refreshToken, connectionKey]);
@@ -91,6 +94,10 @@ export function DataPage({
   if (!connected) {
     return <NotConnected profile={selectedProfile} connecting={connecting} onConnect={onConnect} />;
   }
+
+  // 初回の取得に失敗した（集計がまだ1つも無い）。各カードを進捗や「未作成」の固定文のまま固めず、
+  // 取得できないことを示す（エラーは bot.db のカードの InlineError に出る。#478）。
+  const failed = !summary && error !== null;
 
   return (
     <div className="grid">
@@ -135,7 +142,7 @@ export function DataPage({
             <TableRows tables={summary.tables} openTable={openTable} onSelect={selectTable} />
             <span className="body-small muted">テーブルを選ぶと、その中身（行）を下に表示します。もう一度選ぶと閉じます。</span>
           </>
-        ) : summary ? (
+        ) : summary || failed ? (
           <span className="body-medium muted">取得できません</span>
         ) : (
           <WavyProgress label="集計しています" />
@@ -155,12 +162,12 @@ export function DataPage({
       </Collapse>
 
       <Card title="リマインダー / 文書キュー" icon="alarm" source="ssh" className="span-4">
-        <StatusCounts title="リマインダー" counts={summary ? summary.reminders_by_status ?? null : undefined} />
-        <StatusCounts title="文書処理キュー" counts={summary ? summary.queue_by_status ?? null : undefined} />
+        <StatusCounts title="リマインダー" counts={summary ? summary.reminders_by_status ?? null : failed ? null : undefined} />
+        <StatusCounts title="文書処理キュー" counts={summary ? summary.queue_by_status ?? null : failed ? null : undefined} />
       </Card>
 
       <Card title="返信への評価" icon="thumbUp" source="ssh" className="span-4">
-        <FeedbackSummary feedback={summary ? summary.feedback ?? null : undefined} />
+        <FeedbackSummary feedback={summary ? summary.feedback ?? null : failed ? null : undefined} />
       </Card>
 
       <Card title="ブラックリスト" icon="block" source="ssh" className="span-4">
@@ -169,6 +176,10 @@ export function DataPage({
             <Stat label="ブロック中" value={`${summary.blacklist.blocked} 人`} />
             <Stat label="違反記録あり" value={`${summary.blacklist.users} 人`} />
           </div>
+        ) : !summary && !failed ? (
+          <WavyProgress label="集計しています" />
+        ) : failed ? (
+          <span className="body-medium muted">取得できません</span>
         ) : (
           <span className="body-medium muted">違反記録は未作成、または取得できません。</span>
         )}
@@ -176,7 +187,7 @@ export function DataPage({
 
       <Card title="評価の推移（直近7日・日本時間）" icon="overview" source="ssh" className="span-12">
         {!summary ? (
-          <WavyProgress label="集計しています" />
+          failed ? <span className="body-medium muted">取得できません</span> : <WavyProgress label="集計しています" />
         ) : summary.feedback_by_day ? (
           <FeedbackTrend days={summary.feedback_by_day} />
         ) : (

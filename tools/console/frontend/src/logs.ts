@@ -94,3 +94,17 @@ export function classifyEntries(entries: LogEntry[]): LogLevel[] {
 export function displayMessage(entry: LogEntry): string {
   return entry.message.replace(LOGGING_PREFIX, "");
 }
+
+/**
+ * 検索語に一致する範囲 `[開始, 終了)` を、**元の文字列**での位置で返す（大文字小文字は区別しない）。
+ *
+ * ★ `text.toLowerCase()` の上で見つけた位置を元の文字列へそのまま使わないこと。小文字化で UTF-16 の長さが
+ *   変わる文字（例: "İ" U+0130 は "i̇" の2単位になる）があると、それより後ろの一致の位置がずれる（#478）。
+ *   正規表現の大文字小文字を無視する照合は、元の文字列の上で一致を探すので位置がずれない。
+ */
+export function findMatchRanges(text: string, query: string): Array<[number, number]> {
+  const needle = query.trim();
+  if (!needle) return [];
+  const pattern = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  return Array.from(text.matchAll(pattern), (match) => [match.index, match.index + match[0].length] as [number, number]);
+}

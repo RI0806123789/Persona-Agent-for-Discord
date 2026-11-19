@@ -16,10 +16,13 @@ from persona_bot.views.functions_view import FunctionsView, OpenSettingsButton, 
 from persona_bot.views.unblock_view import UnblockSelect
 from tests.helpers.discord_mocks import make_interaction, make_response
 from tests.helpers.member_helpers import make_member, make_owner_client
+from tests.helpers.persona_helpers import install_empty_persona_catalog
 
 
 class BlacklistPrivacyTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # キャラ設定パネルを開くとペルソナ一覧を差し替える。実際の prompts/ を読まず、一覧も元へ戻す。
+        install_empty_persona_catalog(self)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         path = Path(directory.name) / "blacklist.json"
@@ -77,8 +80,11 @@ class BlacklistPrivacyTests(unittest.IsolatedAsyncioTestCase):
                 hub = self.track(self.hub.clone(self.interaction(owner=owner)))
                 button = next(item for item in hub.children if isinstance(item, OpenSettingsButton))
                 interaction = self.interaction(owner=owner)
-                with patch("persona_bot.views.functions_view.refresh_persona_catalog", new=AsyncMock()):
+                # 一覧を読み直すのは settings_view（#477。functions_view のものは使われていなかった）。
+                # 差し替えが空振りして実際の prompts/ を読まないよう、呼ばれたことも確かめる。
+                with patch("persona_bot.views.settings_view.refresh_persona_catalog", new=AsyncMock()) as refresh:
                     await button.callback(interaction)
+                refresh.assert_awaited_once()
                 content = interaction.edit_original_response.await_args.kwargs["content"]
                 self.assertIn(expected, content)
                 self.assertNotIn("サーバーA利用者", content)

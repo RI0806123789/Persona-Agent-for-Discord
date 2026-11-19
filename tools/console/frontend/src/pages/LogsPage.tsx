@@ -4,7 +4,7 @@ import { Icon } from "../components/Icon";
 import { Button, ConnectedButtonGroup, IconButton, InlineError, StatusChip, type GroupOption } from "../components/ui";
 import { formatClock } from "../format";
 import type { LogStream } from "../useLogStream";
-import { LEVEL_LABELS, type LogLevel } from "../logs";
+import { LEVEL_LABELS, findMatchRanges, type LogLevel } from "../logs";
 import { prepareLogEntries } from "../logPresentation";
 import { redactError, usePrivacy } from "../privacy";
 import type { Profile } from "../types";
@@ -173,18 +173,14 @@ export function StreamIndicator({ stream }: { stream: LogStream }) {
 }
 
 function highlight(text: string, query: string): ReactNode {
-  const needle = query.trim();
-  if (!needle) return text;
-  const lower = text.toLowerCase();
-  const target = needle.toLowerCase();
+  const ranges = findMatchRanges(text, query);
+  if (!ranges.length) return text;
   const parts: ReactNode[] = [];
   let cursor = 0;
-  let index = lower.indexOf(target);
-  while (index !== -1) {
-    if (index > cursor) parts.push(text.slice(cursor, index));
-    parts.push(<mark key={index}>{text.slice(index, index + needle.length)}</mark>);
-    cursor = index + needle.length;
-    index = lower.indexOf(target, cursor);
+  for (const [start, end] of ranges) {
+    if (start > cursor) parts.push(text.slice(cursor, start));
+    parts.push(<mark key={start}>{text.slice(start, end)}</mark>);
+    cursor = end;
   }
   parts.push(text.slice(cursor));
   return parts;

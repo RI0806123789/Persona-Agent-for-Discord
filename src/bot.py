@@ -15,7 +15,7 @@ from persona_bot.services.affinity_service import AffinityService
 from persona_bot.services.agent_service import AgentService
 from persona_bot.services.auto_topic_service import AutoTopicService
 from persona_bot.services.autonomous_service import AutonomousService
-from persona_bot.core.background import make_guarded_loop, run_in_thread, spawn
+from persona_bot.core.background import make_guarded_loop, run_in_thread
 from persona_bot.services.blacklist_service import BlacklistService
 from persona_bot.core.bot_client import PersonaClient
 from persona_bot.core.commands import register_commands
@@ -206,6 +206,11 @@ async def on_ready() -> None:
     async with memory.io_lock:
         await run_in_thread(memory.ensure_storage)
 
+    # 保存先の準備を待つ間に終了が始まっていたら、見回りの起動もコマンドの同期もしない（#477）。
+    # この on_ready は終了処理の回収対象ではないので、待った後にもう一度確かめる必要がある。
+    if client.background_tasks.stopping:
+        return
+
     # 見回りループと常駐ワーカーは、起動済みなら何もしない（再接続での二重起動を防ぐ）。
     for started_flag, loop in _periodic_loops:
         state.start_background_once(started_flag, loop.start)
@@ -213,9 +218,8 @@ async def on_ready() -> None:
     # 参照を保持しないと GC で静かに止まり、添付ファイルが永久に処理されなくなる。
     state.start_background_once("document_worker_started", documents.start_worker)
 
-    if not state.commands_synced:
-        await tree.sync()
-        state.commands_synced = True
+    # 同期の通信待ちの間に on_ready が重複して届いても、同期は1回だけ（失敗したら次回に再試行）。
+    await state.sync_commands_once(tree.sync, is_stopping=lambda: client.background_tasks.stopping)
 
 
 @client.event
