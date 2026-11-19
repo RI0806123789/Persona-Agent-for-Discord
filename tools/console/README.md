@@ -327,6 +327,7 @@ npm run build   # 型チェック（tsc --noEmit）+ ビルド
 | `test_remote_commands.py` | コマンドの組み立て（ホワイトリスト・記号を含む名前の拒否・引用符）と、systemctl / free / df / git / journald の出力の読み取り |
 | `test_ssh_integration.py` | 模擬 SSH サーバーを空きポートで起動し、本物の SSH プロトコルで次を確かめる |
 | 画面`tests/log-stream.test.mjs` | エラー・正常終了・Origin拒絶後の自動再接続停止、理由とログの維持、手動再接続・古いイベントの破棄・SSH接続先切替・一時停止を実際のフックで検証 |
+| `test_module_split.py` | `deploy_runner.py`・`ssh_errors.py`・`routers/` への分割（#482）後も、従来の import 先（`from deploy import DeployRunner`・`from ssh_session import SshError`・`app.control_service` など）が同じオブジェクトを返し、切り出し先が元のモジュールを import しない（ルーターは `import app` もしない。`python app.py` ではモジュール名が `__main__` で、別のコピーが読み込まれて状態が二重になるため）ことを確認する。HTTP のルートが分割前と同じ14本であること、`patch.object(app, "session", …)` がルーターの `state` に届くこと、診断文と安全な文面が対で作られ作り直しても落ちないことも確認する |
 | `test_deploy.py` | デプロイ成功・依存更新・事前確認、SSH応答消失後の実HEAD照合と巻き戻し、旧PID／PID不明の起動ログ除外・新PIDの成功・待機中／確定直前のPID変更と自動再起動検出、巻き戻し後の起動確認、同時実行の拒否・コマンド引数の検証 |
 | `test_connection_lifecycle.py` | サービス操作同士・デプロイ開始・接続変更の直列化、待機後の接続先／デプロイ状態再確認、送信済み操作の再キャンセル時の待機とロック解放、待機中キャンセル・操作例外後の再操作、終了処理と再接続、起動ログ取得失敗の即時検知 |
 | `test_remote_scripts.py` | 一時フォルダに作った架空のボットで `insights.py`・DB 集計・テーブルの中身の取り出しを実行し、次を確かめる |
@@ -376,10 +377,15 @@ tools/console/
 │  ├─ ssh_config.example         ~/.ssh/config に書き足す Host の見本
 │  └─ sudoers.example            サーバーで起動・停止・再起動だけを許可する sudoers の見本
 ├─ backend/
-│  ├─ app.py                     API（FastAPI）。画面の配信も兼ねる
+│  ├─ app.py                     API（FastAPI）の組み立て・ミドルウェア・例外ハンドラ・共有状態（接続・デプロイ・ロック・キャッシュ）。画面の配信も兼ねる
+│  ├─ routers/                   ルート（エンドポイント）をドメイン別の APIRouter に分けたもの（system＝接続・状態・インサイト / logs＝ログと WebSocket / operations＝サービス操作とデプロイ / database＝DB）。context.py の state 越しに app.py の状態を読む
+│  ├─ console_messages.py        画面へ返す案内文のうち、状態を持たないもの（見本の接続先・sudo・ログ権限）
 │  ├─ managed_server.py          専用ランチャーの終了要求をuvicornの正常終了へ渡す
 │  ├─ ssh_session.py             SSH 接続の管理（asyncssh）・コマンド履歴
-│  ├─ deploy.py                  デプロイ・起動確認・失敗時の巻き戻しと、その記録
+│  ├─ ssh_errors.py              SSH のエラーの型と、診断文・伏せ字用の安全な文面の組み立て（純粋）
+│  ├─ deploy.py                  デプロイの管理（1つずつだけ走らせ、最後の記録と状態不明を保つ）。実行部の名前を再公開する
+│  ├─ deploy_runner.py           デプロイの実行（git pull・依存の更新・再起動・起動確認・失敗時の巻き戻し）
+│  ├─ deploy_models.py           デプロイの記録の形・手順の定義
 │  ├─ remote_commands.py         実行してよいコマンドと、出力の読み取り
 │  ├─ remote_scripts/insights.py サーバー側で動かす集計（Discord API・DB・ログ）
 │  ├─ remote_scripts/db_table.py サーバー側で動かす、bot.db の1つのテーブルの行の取り出し（読み取り専用）
@@ -389,6 +395,7 @@ tools/console/
 │  └─ tests/
 │     ├─ fake_ssh_server.py      自動テスト専用の模擬 SSH サーバー（鍵は一時フォルダに作る）
 │     ├─ test_deploy.py          デプロイと巻き戻しの回帰テスト
+│     ├─ test_module_split.py    deploy / ssh_errors / routers への分割（#482）の再公開・依存の向き・API の公開面の回帰テスト
 │     └─ test_*.py               SSH・コマンド・集計・設定などの回帰テスト
 └─ frontend/src/
    ├─ App.tsx                    全体の状態・定期更新・キーボード操作・画面幅の切り替え

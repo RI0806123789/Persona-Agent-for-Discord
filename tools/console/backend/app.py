@@ -6,6 +6,18 @@
 - 画面（React）からの要求を受けて、SSH でボットのサーバーにコマンドを送る
 - 送るコマンドは remote_commands.py に書いたものだけ（ホワイトリスト方式）
 - frontend/dist（npm run build の成果物）があれば、それも同じポートで配信する
+
+構成（#482）:
+- このファイル: アプリの組み立て・ミドルウェア・例外ハンドラ・**共有状態**（接続・デプロイ・ロック・インサイトの
+  キャッシュ・操作の記録）と、その状態を読み書きする補助。
+- routers/: ルート（エンドポイント）をドメインごとの APIRouter に分けたもの。ルートは共有状態を
+  `routers.context.state` 越しに、呼び出しのたびにこのファイルのモジュールから読み直す。
+- console_messages.py: 画面へ返す案内文のうち、状態を持たないもの。
+
+★ 共有状態をコンテナへまとめない（#461 の判断）。テストは `patch.object(app, "session", fake)` のように
+  このモジュールのグローバルを差し替えるので、ルートへ名前を取り込まず（`from app import session` をせず）、
+  `state` を通して読む。ルートから `import app` もしない（`python app.py` ではこのモジュールの名前が `__main__`
+  なので、別のコピーが読み込まれて状態が二重になる）。
 """
 
 from __future__ import annotations
@@ -14,27 +26,35 @@ import asyncio
 import itertools
 import json
 import os
-import time
+import sys
 from collections import deque
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
-from starlette.websockets import WebSocketDisconnect
 
-import asyncssh
-from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.websockets import WebSocketDisconnect  # noqa: F401  （テストが app.WebSocketDisconnect で参照する）
 
-from service_jobs import last_line as _last_line, wait_for_service_job
 import remote_commands as rc
-from async_utils import CancellationState, await_shielded
+from console_messages import (  # noqa: F401  （従来の名前で再公開する。テストが app._sudo_password_message などで参照する）
+    journal_error_message as _journal_error_message,
+    sudo_password_message as _sudo_password_message,
+    unset_profile_message as _unset_profile_message,
+)
 from deploy import DeployManager
-from local_repo import local_schema_version
 from managed_server import MANAGED_ENV, run_server
 from profiles import Profile, ProfileError, load_profiles
+from routers import database as database_routes, logs as logs_routes, operations as operations_routes, system as system_routes
+from routers.context import state
+from routers.database import get_db_summary, get_db_table  # noqa: F401  （従来の名前で再公開する）
+from routers.logs import get_logs, stream_logs  # noqa: F401
+from routers.operations import ServiceTarget, control_service, get_deploy, get_operations, start_deploy  # noqa: F401
+from routers.system import (  # noqa: F401
+    ConnectRequest, connect, disconnect, get_connection, get_history, get_insights, get_profiles, get_status,
+)
+from service_jobs import wait_for_service_job
 from ssh_session import CommandResult, CommandStateUnknownError, NotConnectedError, SshError, SshSession
 
 HOST = "127.0.0.1"
@@ -79,6 +99,10 @@ operations: deque[dict] = deque(maxlen=100)
 _operation_ids = itertools.count(1)
 _service_completion_pending = False
 
+# ルートが、このモジュールのグローバルを呼び出しのたびに読み直せるようにする。
+# `__main__`（python app.py）でも `app`（テスト）でも、自分自身を指す。
+state.bind(sys.modules[__name__])
+
 
 @app.middleware("http")
 async def require_client_header(request: Request, call_next):
@@ -113,23 +137,7 @@ async def handle_profile_error(_request: Request, error: ProfileError) -> JSONRe
     return JSONResponse({"detail": f"接続先の設定エラー: {error}"}, status_code=500)
 
 
-# ---------------------------------------------------------------- 接続
-
-
-class ConnectRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    profile_id: str
-
-
-@app.get("/api/profiles")
-def get_profiles() -> dict:
-    profiles, source = load_profiles()
-    return {"profiles": [profile.public_dict() for profile in profiles.values()], "source": source}
-
-
-@app.get("/api/connection")
-def get_connection() -> dict:
-    return _connection_snapshot()
+# ---------------------------------------------------------------- 接続の補助
 
 
 def _connection_snapshot() -> dict:
@@ -137,13 +145,6 @@ def _connection_snapshot() -> dict:
     return {**session.snapshot(), "state_unknown": (
         session.command_state_unknown or deploys.state_unknown or _service_completion_pending
     )}
-
-
-@app.post("/api/connect")
-async def connect(body: ConnectRequest) -> dict:
-    async with _connection_change_lock:
-        _reject_connection_change_during_deploy()
-        return await _connect(body)
 
 
 def _reject_connection_change_during_deploy() -> None:
@@ -171,244 +172,34 @@ async def _connect(body: ConnectRequest) -> dict:
     return _connection_snapshot()
 
 
-@app.post("/api/disconnect")
-async def disconnect() -> dict:
-    async with _connection_change_lock:
-        _reject_connection_change_during_deploy()
-        await session.disconnect()
-        return _connection_snapshot()
+def _connection_unchanged(generation: int, *, require_connected: bool = True) -> bool:
+    """コマンドを送った時点の接続のまま（世代が同じで、必要なら接続中）か（#461）。
+
+    世代は接続し直し・切断のたびに進む。切断だけで世代が進まない経路を見逃さないため、
+    結果を使う API は `require_connected` を既定のまま（接続中の確認つき）にする。
+    ログの取得・追跡は、接続の有無ではなく「取り始めた接続のままか」だけを見る。
+    """
+    return generation == session.generation and (not require_connected or session.connected)
 
 
-@app.get("/api/history")
-def get_history() -> dict:
-    return {"commands": session.history_list()}
-
-
-# ---------------------------------------------------------------- 状態
-
-
-@app.get("/api/status")
-async def get_status() -> dict:
-    profile = session.require_profile()
-    generation = session.generation
-    ping, service, resources, git = await asyncio.gather(
-        session.run(rc.PING_COMMAND, label="疎通確認"),
-        session.run(rc.service_show_command(profile.service), label="サービス状態"),
-        session.run(rc.RESOURCES_COMMAND, label="リソース"),
-        session.run(rc.git_command(profile.bot_dir), label="Git"),
-        return_exceptions=True,
-    )
-    if not _connection_unchanged(generation):
-        raise NotConnectedError("状態の取得中に SSH 接続が変わりました。接続先を確認して更新してください。")
-    if isinstance(ping, BaseException):
-        raise ping  # 疎通確認すら失敗 = 接続が使えない
-    if ping.exit_status != 0:
-        raise SshError("SSH の疎通確認に失敗しました。接続先の状態を確認してください。")
-
-    response: dict = {
-        "rtt_ms": ping.duration_ms,
-        "fetched_at": time.time(),
-        "service": None,
-        "service_error": None,
-        "resources": None,
-        "resources_error": None,
-        "git": None,
-        "git_error": None,
-    }
-
-    host_uptime = None
-    if isinstance(resources, BaseException):
-        response["resources_error"] = str(resources)
-    elif resources.exit_status != 0:
-        response["resources_error"] = "リソースを取得できませんでした。サーバーのコマンドと権限を確認してください。"
-    else:
-        response["resources"] = rc.parse_resources(resources.stdout)
-        host_uptime = response["resources"]["uptime_seconds"]
-
-    if isinstance(service, BaseException):
-        response["service_error"] = str(service)
-    else:
-        parsed = rc.parse_service_show(service.stdout, profile.service, host_uptime)
-        if parsed["load_state"] == "not-found":
-            response["service_error"] = f"サービス {profile.service} がサーバーに見つかりません（systemd に未登録）。"
-        elif service.exit_status != 0:
-            response["service_error"] = "サービス状態を取得できませんでした。systemd と読み取り権限を確認してください。"
-        response["service"] = parsed
-
-    if isinstance(git, BaseException):
-        response["git_error"] = str(git)
-    elif git.exit_status != 0:
-        response["git_error"] = _last_line(git.stderr) or "Git の情報を取得できませんでした。"
-    else:
-        try:
-            response["git"] = rc.parse_git(git.stdout)
-        except ValueError:
-            response["git_error"] = "Git の情報を解析できませんでした。"
-
-    return response
-
-
-@app.get("/api/logs")
-async def get_logs(lines: Annotated[int, Query(ge=1, le=rc.MAX_LOG_LINES)] = 200) -> dict:
-    profile = session.require_profile()
-    generation = session.generation
-    command = rc.journal_command(profile.service, lines=lines, follow=False, use_sudo=profile.journal_sudo)
-    result = await session.run(command, label="ログ取得")
-    if not _connection_unchanged(generation, require_connected=False):
-        raise NotConnectedError("ログの取得中に SSH 接続が変わりました。接続先を確認して更新してください。")
-    entries = [entry for line in result.stdout.splitlines() if (entry := rc.parse_journal_line(line))]
-    if result.exit_status != 0 and not entries:
-        raise SshError(_journal_error_message(result.stderr))
-    return {"entries": entries}
-
-
-@app.websocket("/api/logs/stream")
-async def stream_logs(websocket: WebSocket, lines: Annotated[int, Query(ge=1, le=rc.MAX_LOG_LINES)] = 100) -> None:
-    """journalctl -f の出力を、1件ずつ WebSocket で画面へ流す。"""
-    origin = websocket.headers.get("origin")
-    if origin not in ALLOWED_ORIGINS:
-        await websocket.close(code=1008)  # ほかのサイトからの接続は断る
-        return
-    await websocket.accept()
-
+async def _read_json_command(command: str, *, generation: int, changed: str, failed: str,
+                             malformed: str, require_connected: bool = True, validate=None, **options) -> dict:
+    """接続先の世代を確認し、遠隔スクリプトの最終行を読み取る。"""
+    result = await session.run(command, **options)
+    if not _connection_unchanged(generation, require_connected=require_connected):
+        raise NotConnectedError(changed)
+    if result.exit_status != 0:
+        raise SshError(failed)
     try:
-        profile = session.require_profile()
-        generation = session.generation
-        command = rc.journal_command(profile.service, lines=lines, follow=True, use_sudo=profile.journal_sudo)
-        process = await session.open_process(command, label="ログ追跡（ライブ）")
-        if not _connection_unchanged(generation, require_connected=False):
-            process.close()
-            with suppress(asyncio.TimeoutError, asyncssh.Error, OSError):
-                await asyncio.wait_for(process.wait_closed(), timeout=5)
-            raise NotConnectedError("ログの取得中に SSH 接続が変わりました。接続先を確認して更新してください。")
-    except SshError as error:
-        with suppress(WebSocketDisconnect, RuntimeError):
-            # 接続処理の生エラーには、画面が未収集の解決済みホスト名なども入りうる。
-            safe_message = error.safe_message or (
-                "ログの接続を開始できませんでした。SSHの接続設定と接続状態を確認してから再試行してください。"
-            )
-            await websocket.send_json({"type": "error", "message": str(error), "message_safe": safe_message})
-            await websocket.close()
-        return
-
-    async def pump() -> None:
-        """SSH → 画面 へ流し続ける。"""
-        try:
-            async for line in process.stdout:
-                if not _connection_unchanged(generation, require_connected=False):
-                    return
-                entry = rc.parse_journal_line(line)
-                if entry:
-                    await websocket.send_json({"type": "entry", "entry": entry})
-        except WebSocketDisconnect:
-            return
-        except (asyncssh.Error, OSError):
-            pass
-        stderr = ""
-        try:
-            stderr = await asyncio.wait_for(process.stderr.read(), timeout=1)
-        except (asyncio.TimeoutError, asyncssh.Error, OSError):
-            pass
-        message = _journal_error_message(stderr) if stderr.strip() else "ログの追跡が終了しました。"
-        with suppress(WebSocketDisconnect, RuntimeError):
-            await websocket.send_json({"type": "end", "message": message})
-
-    async def wait_for_client_close() -> None:
-        while True:
-            try:
-                message = await websocket.receive()
-            except WebSocketDisconnect:
-                return
-            if message["type"] == "websocket.disconnect":
-                return
-
-    pump_task = asyncio.create_task(pump())
-    client_task = asyncio.create_task(wait_for_client_close())
-    try:
-        await asyncio.wait({pump_task, client_task}, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        async def cleanup() -> None:
-            # 転送の終了待ちが再キャンセルされても、SSH側のjournalctlを残さない。
-            process.close()
-            for task in (pump_task, client_task):
-                task.cancel()
-            await asyncio.gather(pump_task, client_task, return_exceptions=True)
-            try:
-                await asyncio.wait_for(process.wait_closed(), timeout=5)
-            except (asyncio.TimeoutError, asyncssh.Error, OSError):
-                pass
-            with suppress(RuntimeError, WebSocketDisconnect):
-                await websocket.close()
-
-        cleanup_task = asyncio.create_task(cleanup())
-        state = CancellationState()
-        await await_shielded(cleanup_task, state)
-        if state.canceled:
-            raise asyncio.CancelledError
+        data = json.loads(result.stdout.strip().splitlines()[-1])
+        if not isinstance(data, dict) or (validate is not None and not validate(data)):
+            raise ValueError("結果が想定の形ではありません。")
+        return data
+    except (ValueError, IndexError) as error:
+        raise SshError(malformed) from error
 
 
-
-# ---------------------------------------------------------------- 操作
-
-
-class ServiceTarget(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    profile_id: str
-    connected_at: float
-
-
-@app.post("/api/service/{action}")
-async def control_service(action: str, body: ServiceTarget | None = None) -> dict:
-    if action not in rc.SERVICE_ACTIONS:
-        raise HTTPException(status_code=400, detail="許可されていない操作です。")
-    async with _connection_change_lock:
-        # 送信済みの操作は呼出元がキャンセルされても完了までロックを保つ。
-        # ロック待ちの間に変わった接続先とデプロイ状態は、実行直前に取り直す。
-        task = asyncio.create_task(_control_service(action, body))
-        state = CancellationState()
-        try:
-            operation = await await_shielded(task, state)
-        except Exception as error:
-            if state.canceled:
-                raise asyncio.CancelledError from error
-            raise
-        if state.canceled:
-            raise asyncio.CancelledError
-        return operation
-
-
-async def _control_service(action: str, body: ServiceTarget | None) -> dict:
-    session.require_command_completion()
-    if deploys.state_unknown:
-        raise HTTPException(status_code=409, detail="デプロイの状態不明のため、サービス操作を停止しています。サーバーの状態を確認してください。")
-    if deploys.running:
-        raise HTTPException(status_code=409, detail="デプロイを実行中です。終わってから操作してください。")
-    profile = session.require_profile()
-    if body is None or body.profile_id != profile.id or body.connected_at != session.connected_at:
-        raise HTTPException(status_code=409, detail="確認後に接続状態が変わりました。接続先を確認して操作をやり直してください。")
-    label = ACTION_LABELS[action]
-    result = await _run_service_control(profile.service, action, label)
-
-    ok = result.exit_status == 0
-    if ok:
-        message = f"{profile.service} を{label}しました。"
-    elif rc.needs_sudo_password(result.stderr):
-        message = _sudo_password_message(profile.username, profile.service)
-    else:
-        message = f"{label}に失敗しました: {_last_line(result.stderr) or f'終了コード {result.exit_status}'}"
-
-    operation = {
-        "id": next(_operation_ids),
-        "at": time.time(),
-        "profile_id": profile.id,
-        "environment": profile.environment,
-        "action": action,
-        "ok": ok,
-        "message": message,
-        "duration_ms": result.duration_ms,
-    }
-    operations.appendleft(operation)
-    return operation
+# ---------------------------------------------------------------- サービス操作の終了確認
 
 
 def _mark_service_completion_pending() -> None:
@@ -459,44 +250,7 @@ async def _wait_for_service_job(service: str) -> None:
     )
 
 
-@app.get("/api/operations")
-def get_operations() -> dict:
-    return {"operations": list(operations)}
-
-
-# ---------------------------------------------------------------- デプロイ
-
-
-def _deploy_snapshot() -> dict:
-    return {"deploy": deploys.current.to_dict() if deploys.current else None, "running": deploys.running}
-
-
-@app.get("/api/deploy")
-def get_deploy() -> dict:
-    """最後のデプロイの記録（実行中なら途中の状態）。画面はこれを取り直してステップごとの進み具合を出す。"""
-    return _deploy_snapshot()
-
-
-@app.post("/api/deploy")
-async def start_deploy(body: ServiceTarget | None = None) -> dict:
-    """接続中のサーバーへデプロイを始める（git pull → 依存の更新 → 再起動 → ヘルスチェック）。
-
-    画面が確認した接続先と接続時刻を照合する。実行するブランチ等は接続先の設定から決める。
-    """
-    async with _connection_change_lock:
-        profile = session.require_profile()
-        if body is None or body.profile_id != profile.id or body.connected_at != session.connected_at:
-            raise HTTPException(status_code=409, detail="確認後に接続状態が変わりました。接続先を確認してデプロイをやり直してください。")
-        if profile.unset_fields:
-            raise HTTPException(status_code=400, detail=_unset_profile_message(profile, load_profiles()[1]))
-        if deploys.state_unknown:
-            raise HTTPException(status_code=409, detail="デプロイの状態不明のため、更新操作を停止しています。サーバーの状態を確認してください。")
-        if deploys.running:
-            raise HTTPException(status_code=409, detail="デプロイを実行中です。終わるまで待ってください。")
-        _invalidate_insights()
-        deploys.start(session, profile, on_finished=_invalidate_insights)
-        return _deploy_snapshot()
-
+# ---------------------------------------------------------------- ボットの中の状態（インサイト）のキャッシュ
 
 # Discord API の利用制限に配慮し、ボットの中の状態は接続先ごとに一定時間使い回す
 INSIGHTS_CACHE_SECONDS = 60
@@ -511,141 +265,12 @@ def _invalidate_insights() -> None:
     _insights_cache.clear()
 
 
-def _connection_unchanged(generation: int, *, require_connected: bool = True) -> bool:
-    """コマンドを送った時点の接続のまま（世代が同じで、必要なら接続中）か（#461）。
+# ---------------------------------------------------------------- ルートの登録
 
-    世代は接続し直し・切断のたびに進む。切断だけで世代が進まない経路を見逃さないため、
-    結果を使う API は `require_connected` を既定のまま（接続中の確認つき）にする。
-    ログの取得・追跡は、接続の有無ではなく「取り始めた接続のままか」だけを見る。
-    """
-    return generation == session.generation and (not require_connected or session.connected)
-
-
-async def _read_json_command(command: str, *, generation: int, changed: str, failed: str,
-                             malformed: str, require_connected: bool = True, validate=None, **options) -> dict:
-    """接続先の世代を確認し、遠隔スクリプトの最終行を読み取る。"""
-    result = await session.run(command, **options)
-    if not _connection_unchanged(generation, require_connected=require_connected):
-        raise NotConnectedError(changed)
-    if result.exit_status != 0:
-        raise SshError(failed)
-    try:
-        data = json.loads(result.stdout.strip().splitlines()[-1])
-        if not isinstance(data, dict) or (validate is not None and not validate(data)):
-            raise ValueError("結果が想定の形ではありません。")
-        return data
-    except (ValueError, IndexError) as error:
-        raise SshError(malformed) from error
-
-
-@app.get("/api/insights")
-async def get_insights(refresh: bool = False) -> dict:
-    """Discord API・サーバーごとの設定・直近24時間のログから集めた「ボットの中の状態」。"""
-    async with _insights_lock:
-        profile = session.require_profile()
-        generation = session.generation
-        epoch = _insights_epoch
-        key = (generation, profile)
-        cached = _insights_cache.get(key)
-        if cached and not refresh and time.monotonic() - cached[0] < INSIGHTS_CACHE_SECONDS:
-            return {"data": cached[2], "fetched_at": cached[1], "cached": True}
-
-        data = await _read_json_command(
-            rc.insights_command(profile.bot_dir, profile.service, use_sudo=profile.journal_sudo),
-            generation=generation, require_connected=True,
-            changed="集計中に SSH 接続が変わりました。接続先を確認して更新してください。",
-            failed="ボットの状態を集められませんでした。サーバーの Python とログの読み取り権限を確認してください。",
-            malformed="ボットの状態の集計結果を読み取れませんでした。",
-            label="ボットの中の状態（Discord API・DB・ログ）",
-            input=rc.INSIGHTS_SCRIPT,
-            timeout=60,
-        )
-        fetched_at = time.time()
-        _insights_cache.clear()
-        if epoch == _insights_epoch:
-            _insights_cache[key] = (time.monotonic(), fetched_at, data)
-        return {"data": data, "fetched_at": fetched_at, "cached": False}
-
-
-@app.get("/api/db")
-async def get_db_summary() -> dict:
-    profile = session.require_profile()
-    generation = session.generation
-    summary = await _read_json_command(
-        rc.db_summary_command(profile.bot_dir),
-        generation=generation,
-        changed="集計中に SSH 接続が変わりました。接続先を確認して更新してください。",
-        failed="DB の集計に失敗しました。サーバーの Python と読み取り権限を確認してください。",
-        malformed="DB の集計結果を読み取れませんでした。",
-        label="DB 集計（読み取り専用）",
-        input=rc.DB_SUMMARY_SCRIPT,
-    )
-    # 手元のリポジトリの最新の版と比べ、新しい版がまだデプロイされていないかを画面に出す
-    summary["latest_schema_version"] = local_schema_version()
-    return summary
-
-
-@app.get("/api/db/tables/{table}")
-async def get_db_table(
-    table: str,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=rc.DB_TABLE_PAGE_MAX)] = 50,
-) -> dict:
-    """bot.db の1つのテーブルの行（会話・記憶の本文と ID を含む）を、読み取り専用で取り寄せる。
-
-    範囲外の offset・limit は 422 にする（ログの行数と同じく、API の仕様として拒否する。#399）。
-    `db_table_command` の丸めは、直接呼ばれた場合の最後の砦として残す。
-    """
-    if table not in rc.DB_TABLES:
-        raise HTTPException(status_code=404, detail="このテーブルは表示できません。")
-    profile = session.require_profile()
-    generation = session.generation
-    data = await _read_json_command(
-        rc.db_table_command(profile.bot_dir, table, offset, limit),
-        generation=generation,
-        changed="読み取り中に SSH 接続が変わりました。接続先を確認して開き直してください。",
-        failed="テーブルの中身を取り寄せられませんでした。サーバーの Python と読み取り権限を確認してください。",
-        malformed="テーブルの中身を読み取れませんでした。",
-        validate=lambda value: value.get("table") == table,
-        label=f"DB の中身（{table}・読み取り専用）",
-        input=rc.DB_TABLE_SCRIPT,
-    )
-    return data
-
-
-# ---------------------------------------------------------------- 補助
-
-
-def _unset_profile_message(profile: Profile, source: str) -> str:
-    """見本の値のままの接続先へ接続しようとしたときの案内。"""
-    fields = "・".join(profile.unset_fields)
-    if source == "profiles.example.json":
-        how = "backend/profiles.example.json を backend/profiles.json にコピーし、YOUR_ で始まる値を書き換えてください"
-    else:
-        how = f"backend/{source} の YOUR_ で始まる値を書き換えてください"
-    return f"接続先「{profile.label}」は見本の値のままです（{fields}）。{how}（書き換えたら接続し直すだけで反映されます）。"
-
-
-def _sudo_password_message(username: str | None, service: str) -> str:
-    """sudo にパスワードが要る環境向けの案内。許可するのは起動・停止・再起動の3つだけにする例を示す。"""
-    user = username or "<ユーザー名>"
-    commands = ", ".join(f"/usr/bin/systemctl {action} {service}" for action in rc.SERVICE_ACTIONS)
-    return (
-        "sudo にパスワードが必要なため実行できませんでした。サーバーで sudo visudo -f /etc/sudoers.d/persona-bot-console を開き、"
-        f"「{user} ALL=(root) NOPASSWD: {commands}」の1行を書くと、この3つの操作だけをパスワードなしで許可できます"
-        "（systemctl の場所は which systemctl で確かめてください。見本: tools/console/examples/sudoers.example）。"
-    )
-
-
-def _journal_error_message(stderr: str) -> str:
-    detail = _last_line(stderr)
-    if "permission" in stderr.lower() or "insufficient" in stderr.lower():
-        return (
-            "ログを読む権限がありません。サーバーのユーザーを adm / systemd-journal グループに入れるか、"
-            "profiles.json の journal_sudo を true にしてください。"
-        )
-    return f"ログを取得できませんでした: {detail or '原因不明'}"
-
+# 元の並び（接続 → ログ → 操作・デプロイ → DB）に合わせる。パスは重ならないので順序で挙動は変わらないが、
+# 静的ファイルの配信（下の mount）は必ず最後に置く。
+for _routes in (system_routes, logs_routes, operations_routes, database_routes):
+    app.include_router(_routes.router)
 
 # npm run build 済みなら画面も同じポートで配信する（API のルートより後に登録すること）
 if FRONTEND_DIST.is_dir():

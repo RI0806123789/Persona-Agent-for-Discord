@@ -20,45 +20,21 @@ import asyncssh
 
 from async_utils import CancellationState, await_shielded
 from profiles import Profile, resolve_local_path
+# エラーの型と、診断文・伏せ字用の安全な文面の組み立ては ssh_errors.py にある（#482）。
+# 従来の `from ssh_session import SshError, CommandStateUnknownError, ...` を保つため、ここから再公開する。
+from ssh_errors import (  # noqa: F401  （外部へ再公開する名前を含む）
+    CONNECTION_LOST_SAFE_MESSAGE, COMMAND_STATE_UNKNOWN_MESSAGE, NOT_CONNECTED_MESSAGE, STATE_UNKNOWN_SUFFIX,
+    CommandStateUnknownError, NotConnectedError, SshError,
+    communication_error, completion_unknown_from_transport, completion_unknown_from_unexpected,
+    connection_lost_message, describe_connect_error, exit_status_unknown_error,
+    missing_default_known_hosts_error, missing_key_error, missing_known_hosts_error,
+    start_error, timeout_error, with_unknown_state_suffix,
+)
 
 CONNECT_TIMEOUT_SECONDS = 10
 COMMAND_TIMEOUT_SECONDS = 20
 KEEPALIVE_SECONDS = 30
 HISTORY_MAX = 200
-# 接続が外から切れたときの、伏せ字モード用の文面（切断理由の原文を含めない。#399）
-CONNECTION_LOST_SAFE_MESSAGE = "SSH 接続が切れました。もう一度接続してください。"
-
-
-def _safe_config_location(path: Path, *, key: bool = False) -> str:
-    """既知の配置だけ残し、任意の所有者・ディレクトリ・ファイル名を画面へ出さない。"""
-    parts = [part for part in str(path).replace("\\", "/").split("/") if part]
-    if parts and parts[0].endswith(":"):
-        parts = parts[1:]
-    if ".ssh" not in parts:
-        return "<LOCAL_PATH>"
-    home = len(parts) >= 3 and parts[0].lower() in {"home", "users"} and parts[2] == ".ssh"
-    parent = "<LOCAL_HOME>" if home else "<LOCAL_PATH>"
-    filename = "<KEY_FILE>" if key else "known_hosts" if parts[-1] == "known_hosts" else "<KNOWN_HOSTS_FILE>"
-    return f"{parent}/.ssh/{filename}"
-
-
-class SshError(Exception):
-    """通常の診断文と、必要なら伏せ字用の安全な文面を持つ日本語のエラー。"""
-
-    def __init__(self, message: str, *, safe_message: str | None = None) -> None:
-        super().__init__(message)
-        # 通常の診断文は維持し、設定由来のローカル情報を含まない文面を別に運ぶ。
-        self.safe_message = safe_message
-
-
-class NotConnectedError(SshError):
-    """まだ接続していない（または切れた）ときのエラー。"""
-
-
-class CommandStateUnknownError(SshError):
-    """開始済みの遠隔コマンドが終了したことを確認できない。"""
-
-
 @dataclass
 class CommandResult:
     stdout: str
@@ -118,7 +94,7 @@ class SshSession:
     def require_profile(self) -> Profile:
         """接続中のプロファイルを返す。未接続なら NotConnectedError。"""
         if self._conn is None or self.profile is None:
-            raise NotConnectedError("SSH に接続していません。接続してからもう一度試してください。")
+            raise NotConnectedError(NOT_CONNECTED_MESSAGE)
         return self.profile
 
     def snapshot(self) -> dict:
@@ -152,7 +128,7 @@ class SshSession:
                 options = self._build_options(profile)
                 conn = await asyncssh.connect(**options)
             except Exception as error:  # noqa: BLE001 — どんな失敗も画面向けの文言に変える
-                message = _describe_connect_error(error, profile)
+                message = describe_connect_error(error, profile.host, CONNECT_TIMEOUT_SECONDS)
                 safe_message = error.safe_message if isinstance(error, SshError) else None
                 self.last_error = message
                 self.last_error_safe = safe_message
@@ -215,34 +191,20 @@ class SshSession:
         if profile.key_path:
             key_path = resolve_local_path(profile.key_path)
             if not key_path.is_file():
-                raise SshError(
-                    f"秘密鍵が見つかりません: {key_path}",
-                    safe_message=f"秘密鍵が見つかりません: {_safe_config_location(key_path, key=True)}"
-                    "（profiles.json の key_path の場所を確かめてください）",
-                )
+                raise missing_key_error(key_path)
             options["client_keys"] = [str(key_path)]
 
         if profile.known_hosts:
             known_hosts = resolve_local_path(profile.known_hosts)
             if not known_hosts.is_file():
-                raise SshError(
-                    f"known_hosts が見つかりません: {known_hosts}"
-                    "（profiles.json の known_hosts の場所を確かめてください。null なら ~/.ssh/known_hosts を使います）",
-                    safe_message=f"known_hosts が見つかりません: {_safe_config_location(known_hosts)}"
-                    "（profiles.json の known_hosts の場所を確かめてください。null なら ~/.ssh/known_hosts を使います）",
-                )
+                raise missing_known_hosts_error(known_hosts)
             options["known_hosts"] = str(known_hosts)
         else:
             # 指定が無ければ ~/.ssh/known_hosts を使う。ファイル自体が無いと asyncssh が
             # 読み込みで失敗するので、分かりやすい案内を先に出す
             default_known_hosts = Path.home() / ".ssh" / "known_hosts"
             if not default_known_hosts.is_file():
-                raise SshError(
-                    f"{default_known_hosts} がありません。PowerShell で一度 ssh {profile.host} を実行し、"
-                    "フィンガープリントを確認してからホスト鍵を登録してください。",
-                    safe_message="<LOCAL_HOME>/.ssh/known_hosts がありません。PowerShell で一度 ssh <SSH_HOST> を実行し、"
-                    "フィンガープリントを確認してからホスト鍵を登録してください。",
-                )
+                raise missing_default_known_hosts_error(default_known_hosts, profile.host)
             options["known_hosts"] = str(default_known_hosts)
 
         ssh_config = Path.home() / ".ssh" / "config"
@@ -255,8 +217,7 @@ class SshSession:
         if conn is None or conn is not self._conn:
             return  # 自分で閉じた接続、または古い接続
         self._reset_connection_state()
-        reason = f"（{exc}）" if exc else ""
-        self.last_error = f"SSH 接続が切れました{reason}。もう一度接続してください。"
+        self.last_error = connection_lost_message(exc)
         # 切断理由（exc）には接続先のホスト名・IP アドレス・ローカルのパスなど、画面が秘密として
         # 知らない値が入りうる。伏せ字モードでは理由を含まない定型文を出す（#399）。
         self.last_error_safe = CONNECTION_LOST_SAFE_MESSAGE
@@ -289,14 +250,13 @@ class SshSession:
         try:
             result = await conn.run(command, input=input, check=False, timeout=timeout, errors="replace")
         except asyncio.TimeoutError as error:
-            message = f"{label}: {timeout:g} 秒以内に応答がありませんでした。"
-            self._record(label, command, None, started, ok=False, error=message)
-            raise SshError(message) from error
+            failure = timeout_error(label, timeout)
+            self._record(label, command, None, started, ok=False, error=str(failure))
+            raise failure from error
         except (asyncssh.Error, OSError) as error:
-            message = f"{label}: 通信に失敗しました（{type(error).__name__}: {error}）。"
-            safe_message = f"{label}: 通信に失敗しました。"
-            self._record(label, command, None, started, ok=False, error=message, error_safe=safe_message)
-            raise SshError(message, safe_message=safe_message) from error
+            failure = communication_error(label, error)
+            self._record(label, command, None, started, ok=False, error=str(failure), error_safe=failure.safe_message)
+            raise failure from error
 
         exit_status = result.exit_status
         duration_ms = self._record(label, command, exit_status, started, ok=exit_status == 0)
@@ -329,23 +289,18 @@ class SshSession:
                     result = await process.wait(check=False)
                     # チャネル切断やシェルへのシグナルだけでは、子の更新処理の終了を保証できない。
                     if result.exit_status is None or result.exit_status < 0:
-                        raise CommandStateUnknownError(f"{label}: 遠隔コマンドの終了コードを確認できませんでした。")
+                        raise exit_status_unknown_error(label)
                     return result
                 finally:
                     if process is not None:
                         process.close()
                         await process.wait_closed()
             except (asyncssh.Error, OSError) as error:
-                raise CommandStateUnknownError(
-                    f"{label}: 通信に失敗し、遠隔コマンドの終了を確認できません（{type(error).__name__}: {error}）。",
-                    safe_message=f"{label}: 通信に失敗し、遠隔コマンドの終了を確認できません。",
-                ) from error
+                raise completion_unknown_from_transport(label, error) from error
             except CommandStateUnknownError:
                 raise
             except Exception as error:
-                raise CommandStateUnknownError(
-                    f"{label}: 遠隔コマンドの終了とチャネルの回収を確認できません（{type(error).__name__}）。"
-                ) from error
+                raise completion_unknown_from_unexpected(label, error) from error
 
         # 開始途中も保護する。create_process のキャンセルで参照を失う経路を作らない。
         task = asyncio.create_task(execute())
@@ -380,14 +335,12 @@ class SshSession:
                 raise SshError(f"{label}: {timeout:g} 秒以内に応答がありませんでした。遠隔コマンドの終了を確認しました。") from error
         except CommandStateUnknownError as error:
             self.command_state_unknown = True
-            suffix = " 状態不明のため、サーバーで処理の終了と状態を確認してからバックエンドを起動し直してください。"
-            message = str(error) + suffix
             # 作り直す例外にも安全な文面を引き継ぐ（落とすと、伏せ字中に生のエラーへ戻ってしまう）。
-            safe_message = None if error.safe_message is None else error.safe_message + suffix
-            self._record(label, command, None, started, ok=False, error=message, error_safe=safe_message)
+            enriched = with_unknown_state_suffix(error)
+            self._record(label, command, None, started, ok=False, error=str(enriched), error_safe=enriched.safe_message)
             if canceled:
                 raise asyncio.CancelledError from error
-            raise CommandStateUnknownError(message, safe_message=safe_message) from error
+            raise enriched from error
         except SshError as error:
             message = str(error)
             self._record(label, command, finished_exit_status, started, ok=False, error=message)
@@ -412,24 +365,21 @@ class SshSession:
         try:
             process = await conn.create_process(command, errors="replace")
         except (asyncssh.Error, OSError) as error:
-            message = f"{label}: 開始できませんでした（{error}）。"
-            safe_message = f"{label}: 開始できませんでした。SSHの接続状態を確認してから再試行してください。"
-            self._record(label, command, None, started, ok=False, error=message, error_safe=safe_message)
-            raise SshError(message, safe_message=safe_message) from error
+            failure = start_error(label, error)
+            self._record(label, command, None, started, ok=False, error=str(failure), error_safe=failure.safe_message)
+            raise failure from error
         self._record(label, command, None, started, ok=True)
         return process
 
     def _require_conn(self) -> asyncssh.SSHClientConnection:
         if self._conn is None:
-            raise NotConnectedError("SSH に接続していません。接続してからもう一度試してください。")
+            raise NotConnectedError(NOT_CONNECTED_MESSAGE)
         return self._conn
 
     def require_command_completion(self) -> None:
         """再接続後も、終了不明の操作と次の更新・サービス操作を並行させない。"""
         if self.command_state_unknown:
-            raise CommandStateUnknownError(
-                "遠隔コマンドの終了が未確認で、状態不明です。サーバーで処理の終了と状態を確認してからバックエンドを起動し直してください。"
-            )
+            raise CommandStateUnknownError(COMMAND_STATE_UNKNOWN_MESSAGE)
 
     def _record(
         self,
@@ -445,26 +395,3 @@ class SshSession:
         duration_ms = round((time.perf_counter() - started) * 1000)
         self.history.append(CommandRecord(time.time(), label, command, exit_status, duration_ms, ok, error, error_safe))
         return duration_ms
-
-
-def _describe_connect_error(error: Exception, profile: Profile) -> str:
-    """接続エラーを「何が起きて、どうすればよいか」の日本語にする。"""
-    if isinstance(error, SshError):
-        return str(error)
-    if isinstance(error, asyncssh.HostKeyNotVerifiable):
-        return (
-            "サーバーのホスト鍵を確認できませんでした（known_hosts に未登録、または鍵が変わっています）。"
-            f"初回なら PowerShell で ssh {profile.host} を実行し、フィンガープリントを確かめてから登録してください。"
-            "心当たりなく鍵が変わった場合は接続しないでください（なりすましの可能性があります）。"
-        )
-    if isinstance(error, asyncssh.PermissionDenied):
-        return "認証に失敗しました。ユーザー名と秘密鍵（key_path または ~/.ssh/config の IdentityFile）を確認してください。"
-    if isinstance(error, asyncio.TimeoutError):
-        return f"{CONNECT_TIMEOUT_SECONDS} 秒以内にサーバーへ接続できませんでした。ホスト名・ポート・ファイアウォールを確認してください。"
-    if isinstance(error, ConnectionRefusedError):
-        return "接続を拒否されました。ポート番号が正しいか、サーバーで SSH が動いているか確認してください。"
-    if isinstance(error, OSError):
-        return "サーバーに接続できませんでした。ホスト名とネットワークを確認してください。"
-    if isinstance(error, asyncssh.Error):
-        return "SSH の接続処理に失敗しました。設定と接続先の状態を確認して再試行してください。"
-    return "予期しないエラーで接続できませんでした。時間をおいて再試行してください。"
