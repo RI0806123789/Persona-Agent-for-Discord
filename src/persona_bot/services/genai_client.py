@@ -1,6 +1,7 @@
 """Gemini Developer API のクライアントと非同期生成の共通境界。"""
 
 import asyncio
+import json
 import re
 from math import ceil
 from typing import Any
@@ -142,3 +143,46 @@ async def generate_content(
 async def generate_json_content(sender, client: Any, **options: Any) -> Any:
     """JSON 生成設定を共通化し、呼出元の期限とスキーマはそのまま渡す。"""
     return await sender(client, temperature=0, response_mime_type="application/json", **options)
+
+
+# Decisions API（判断専用モデル。#450）の送信先。Gemini Developer API の v1beta だけで提供される。
+DECISIONS_API_PATH = "decisions"
+DECISIONS_API_VERSION = "v1beta"
+
+
+async def create_decision(
+    client: Any,
+    *,
+    model: str,
+    input: Any,
+    questions: dict[str, Any],
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Decisions API へ1回だけ問い合わせ、応答の JSON を dict で返す（#450）。
+
+    ★ 固定版の google-genai（2.x）には公式の入口 `client.aio.decisions.create`（3.2 以降）が無いため、
+    SDK が全リソースの送信に使う `client.aio._api_client.async_request` を呼ぶ（非公開の口）。
+    認証ヘッダー・Developer API の接続先・HTTPX の接続は生成と同じものをそのまま使い、独自の
+    REST 経路は作らない。非公開の口への依存はこの関数だけに閉じ込め、口の存在と引数は
+    tests/services/test_genai_client.py が固定版の SDK で確かめる。SDK を 3.2 以上へ上げたら、
+    ここを `client.aio.decisions.create(...)` へ差し替える（呼び出し側は変えなくてよい）。
+
+    期限・再試行は generate_content と同じく、SDK のミリ秒の期限と `asyncio.wait_for` の両方で
+    制限し、SDK 内部の再試行は止める。HTTP の失敗は SDK の例外（errors.APIError）として伝える。
+    """
+    if timeout is not None and timeout <= 0:
+        raise asyncio.TimeoutError()
+    http_options = types.HttpOptions(
+        api_version=DECISIONS_API_VERSION,
+        timeout=ceil(timeout * 1000) if timeout is not None else None,
+        retry_options=types.HttpRetryOptions(attempts=1),
+    )
+    request = client.aio._api_client.async_request(
+        "post", DECISIONS_API_PATH, {"model": model, "input": input, "questions": questions}, http_options,
+    )
+    response = await asyncio.wait_for(request, timeout=timeout) if timeout is not None else await request
+    body = getattr(response, "body", None)
+    if not body:
+        return {}
+    parsed = json.loads(body)
+    return parsed if isinstance(parsed, dict) else {}

@@ -18,6 +18,7 @@ from persona_bot.config.constants import (
     REMINDER_MAX_MESSAGE_LENGTH,
     REMINDER_RECURRENCE_VALUES,
 )
+from persona_bot.services.decision_service import BinaryQuestion
 from persona_bot.utils.normalization import normalize_bool_flag, normalize_extracted_text, normalize_recurrence
 
 
@@ -41,6 +42,32 @@ _MODERATION_CRITERIA = (
     "- 日常会話や軽いジョーク、ペルソナに基づくロールプレイは **safe** と判定してください。\n"
     "- 文脈上問題のない医学用語・学術用語は **safe** と判定してください。\n"
     "- 迷った場合は **safe** と判定してください（過剰ブロックを避ける）。\n"
+)
+
+# 判断モデル（Gemini Decision 1。#450）へ「ユーザー入力が不適切か」を問う質問。
+# ★ 判定基準の範囲は _MODERATION_CRITERIA（生成モデルの判定）とそろえる。片方だけ広げると、
+#   判断モデルが安全と確定した発言を生成モデルなら止めていた、という食い違いが増える。
+# NG ワードの見本は載せない（登録語の照合はローカルの NG フィルタが先に済ませており、
+# 語そのものが Google 側での入力の拒否を招くため）。問いのキーはモデルに見えないので、
+# 問いの内容はすべて instructions に書く。架空の日本語の例文では、英語の問いより
+# わずかに良かったため日本語にしている（constants.py の DECISION_* の説明を参照）。
+_INPUT_UNSAFE_DECISION_KEY = "input_unsafe"
+_INPUT_UNSAFE_DECISION_QUESTION = BinaryQuestion(
+    instructions=(
+        "テキストは Discord のボットへ送られた利用者の発言です。"
+        "この発言は、次のどれかに当たる不適切な内容を含みますか？\n"
+        "- 暴力的・攻撃的・脅迫的な表現\n"
+        "- 差別的・侮蔑的な表現（人種、性別、障害、出自など）\n"
+        "- 性的に露骨な表現\n"
+        "- 個人情報（住所、電話番号、本名など）の露出\n"
+        "- 上記をスペース挿入・記号混入・ひらがなとカタカナの入れ替え・ローマ字化・伏字・当て字・隠語などで"
+        "言い換えた表現"
+    ),
+    true_description="上のいずれかに当たる表現を含む。",
+    false_description=(
+        "日常会話、軽いジョーク、ペルソナに基づくロールプレイ、ゲームや作品の話、"
+        "文脈上問題のない医学用語・学術用語など、上のどれにも当たらない。"
+    ),
 )
 
 _SYSTEM_PROMPT = (

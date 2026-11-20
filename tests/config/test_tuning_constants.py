@@ -49,6 +49,17 @@ class ModerationAndChoiceTuningTests(unittest.TestCase):
         moderator = module.ContentModerator(None, SimpleNamespace(words=[]))
         self.assertEqual((moderator._model_name, moderator._timeout), ("test-moderation-model", 23.0))
 
+    def test_decision_defaults_use_configured_model_timeout_and_threshold(self) -> None:
+        # 判断専用モデル（#450）の閾値・モデル・期限も constants.py の値を既定にする。
+        moderation = load_with_tuning("persona_bot.services.content_moderator",
+                                      DECISION_INPUT_SAFE_MAX_UNSAFE_PROBABILITY=0.25)
+        moderator = moderation.ContentModerator(None, SimpleNamespace(words=[]))
+        self.assertEqual(moderator._decision_safe_max_unsafe_probability, 0.25)
+        decision = load_with_tuning("persona_bot.services.decision_service",
+                                    DECISION_MODEL_NAME="test-decision-model", DECISION_TIMEOUT_SECONDS=4.5)
+        decider = decision.GeminiDecider(None)
+        self.assertEqual((decider._model_name, decider._timeout), ("test-decision-model", 4.5))
+
     def test_default_choices_follow_configured_mode(self) -> None:
         # ペルソナは固定の選択肢を持たない（prompts/ から作る）ため、応答モードだけを確かめる
         module = load_with_tuning("persona_bot.config.choices", DEFAULT_RESPOND_MODE="test-mode")

@@ -1,6 +1,8 @@
 """共通SDK境界のタイムアウトと暗黙リトライ抑止を確認する。"""
 
 import asyncio
+import inspect
+import json
 import os
 from pathlib import Path
 import sys
@@ -259,6 +261,116 @@ class GenaiFactoryFailureTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 create_genai_client("YOUR_API_KEY")
         http_client.aclose.assert_awaited_once()
+
+
+class DecisionRequestTests(unittest.IsolatedAsyncioTestCase):
+    """Decisions API（#450）は固定版 SDK の非公開の送信口を通る。SDK の更新で口が変わったらここで気づく。"""
+
+    QUESTIONS = {"input_unsafe": {"type": "noul", "instructions": "架空の問い"}}
+
+    def setUp(self) -> None:
+        block_network(self)
+
+    def make_client(self, handle):
+        with patch.object(genai_client.httpx, "AsyncHTTPTransport", return_value=httpx.MockTransport(handle)):
+            return create_genai_client("YOUR_GEMINI_API_KEY")
+
+    def test_pinned_sdk_keeps_the_private_send_entrypoint(self) -> None:
+        # create_decision が頼る口。引数の名前と順番が変わったら、公式の client.aio.decisions へ移す合図。
+        method = genai._api_client.BaseApiClient.async_request
+        self.assertTrue(inspect.iscoroutinefunction(method))
+        self.assertEqual(
+            list(inspect.signature(method).parameters),
+            ["self", "http_method", "path", "request_dict", "http_options"],
+        )
+
+    async def test_request_goes_to_v1beta_decisions_with_header_key_and_json_body(self) -> None:
+        requests = []
+
+        async def handle(request):
+            requests.append(request)
+            return httpx.Response(200, json={
+                "answers": {"input_unsafe": {"type": "noul", "noul": 0.2, "confidence": 0.8}},
+                "usage": {"total_input_tokens": 7, "total_output_tokens": 0, "total_tokens": 7},
+            })
+
+        client = self.make_client(handle)
+        try:
+            result = await genai_client.create_decision(
+                client, model="gemini-decision-1", input="架空の発言", questions=self.QUESTIONS, timeout=2,
+            )
+        finally:
+            await close_genai_client(client)
+        self.assertEqual(len(requests), 1)
+        request = requests[0]
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(request.url.path, "/v1beta/decisions")
+        self.assertEqual(request.headers["x-goog-api-key"], "YOUR_GEMINI_API_KEY")
+        self.assertNotIn("YOUR_GEMINI_API_KEY", str(request.url))
+        self.assertEqual(json.loads(request.content), {
+            "model": "gemini-decision-1", "input": "架空の発言", "questions": self.QUESTIONS,
+        })
+        self.assertEqual(result["answers"]["input_unsafe"]["noul"], 0.2)
+
+    async def test_http_errors_are_sdk_errors_without_retries(self) -> None:
+        for status, code in ((400, "prohibited_content"), (429, 429), (503, 503)):
+            with self.subTest(status=status):
+                calls = []
+
+                async def handle(request):
+                    calls.append(request)
+                    return httpx.Response(status, json={"error": {"code": code, "message": "架空のAPI障害"}})
+
+                client = self.make_client(handle)
+                try:
+                    with patch("google.genai._api_client.asyncio.sleep", side_effect=AssertionError("SDK内の再送は禁止です。")):
+                        with self.assertRaises(errors.APIError) as raised:
+                            await genai_client.create_decision(
+                                client, model="gemini-decision-1", input="架空の発言",
+                                questions=self.QUESTIONS, timeout=1,
+                            )
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(raised.exception.code, status)
+                finally:
+                    await close_genai_client(client)
+
+    async def test_empty_or_non_object_body_is_an_empty_result(self) -> None:
+        for body in (b"", b"[]", b'"\xe6\x9e\xb6\xe7\xa9\xba"'):
+            with self.subTest(body=body):
+                async def handle(request):
+                    return httpx.Response(200, content=body)
+
+                client = self.make_client(handle)
+                try:
+                    self.assertEqual(await genai_client.create_decision(
+                        client, model="gemini-decision-1", input="架空の発言", questions=self.QUESTIONS, timeout=1,
+                    ), {})
+                finally:
+                    await close_genai_client(client)
+
+    async def test_expired_timeout_stops_before_request(self) -> None:
+        client = SimpleNamespace(aio=SimpleNamespace(_api_client=SimpleNamespace(async_request=AsyncMock())))
+        with self.assertRaises(asyncio.TimeoutError):
+            await genai_client.create_decision(
+                client, model="gemini-decision-1", input="架空の発言", questions=self.QUESTIONS, timeout=0,
+            )
+        client.aio._api_client.async_request.assert_not_called()
+
+    async def test_deadline_cancels_a_slow_response_and_options_disable_sdk_retries(self) -> None:
+        async def slow(*_args):
+            await asyncio.sleep(10)
+
+        request = AsyncMock(side_effect=slow)
+        client = SimpleNamespace(aio=SimpleNamespace(_api_client=SimpleNamespace(async_request=request)))
+        with self.assertRaises(asyncio.TimeoutError):
+            await genai_client.create_decision(
+                client, model="gemini-decision-1", input="架空の発言", questions=self.QUESTIONS, timeout=0.05,
+            )
+        http_method, path, _body, http_options = request.call_args.args
+        self.assertEqual((http_method, path), ("post", "decisions"))
+        self.assertEqual(http_options.api_version, "v1beta")
+        self.assertEqual(http_options.timeout, 50)
+        self.assertEqual(http_options.retry_options.attempts, 1)
 
 
 if __name__ == "__main__":
