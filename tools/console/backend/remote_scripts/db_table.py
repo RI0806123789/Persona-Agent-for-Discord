@@ -172,6 +172,11 @@ def read_table(con, table, offset, limit, result):
     return result
 
 
+def new_result(table, offset, limit):
+    """返す辞書の形（キーの構成）をここに1つだけ持つ。collect と、引数不足を返す main が同じ形にそろえる。"""
+    return {"table": table, "offset": offset, "limit": limit, "columns": [], "rows": [], "total": 0, "users": {}, "errors": []}
+
+
 def collect(db_path, table, offset=0, limit=50):
     """1ページ分を読み取り専用で収集し、実行ごとに独立した結果を返す。"""
     try:
@@ -183,7 +188,7 @@ def collect(db_path, table, offset=0, limit=50):
     except (TypeError, ValueError, OverflowError):
         # None・数値でない型・無限大なども、開始位置と件数を一緒に既定値へ戻す。
         offset, limit = 0, 50
-    result = {"table": table, "offset": offset, "limit": limit, "columns": [], "rows": [], "total": 0, "users": {}, "errors": []}
+    result = new_result(table, offset, limit)
     if table not in TABLES:
         result["errors"].append("このテーブルは表示できません。")
         return result
@@ -206,9 +211,11 @@ def collect(db_path, table, offset=0, limit=50):
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
     if len(args) < 3:
-        print(json.dumps({
-            "errors": ["引数が足りません。bot.db と blacklist.json、およびオフセット・件数を指定してください。"],
-        }))
+        # 必須なのは bot.db の場所とテーブル名だけ（開始位置・件数は省略できる）。
+        # 通常の結果と同じ形で返し、画面側が列・行の有無を見て扱えるようにする。
+        result = new_result("", 0, 50)
+        result["errors"].append("引数が足りません。bot.db の場所とテーブル名を指定してください（開始位置・件数は省略できます）。")
+        print(json.dumps(result))
         return
     # 省略時・不正値のときは、従来どおり開始位置と件数を一緒に既定値へ戻す。
     offset, limit = args[3:5] if len(args) >= 5 else (0, 50)

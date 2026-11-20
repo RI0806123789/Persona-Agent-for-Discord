@@ -70,6 +70,13 @@ class DeploySettingsTests(unittest.TestCase):
         with self.assertRaises(profiles.ProfileError):
             profiles._parse_profile(_raw_profile(python="../../usr/bin/python"))
 
+    def test_rejects_deploy_settings_with_a_trailing_newline(self) -> None:
+        """手で書いた profiles.json の値の末尾に改行が残っていても、設定の読込で拒否する（#479）。"""
+        for key, value in (("deploy_branch", "main\n"), ("deploy_branch", "main\r\n"),
+                           ("python", ".venv/bin/python\n"), ("python", ".venv/bin/python\r\n")):
+            with self.subTest(key=key, value=value), self.assertRaises(profiles.ProfileError):
+                profiles._parse_profile(_raw_profile(**{key: value}))
+
     def test_deploy_branch_is_sent_to_the_screen(self) -> None:
         profile = profiles._parse_profile(_raw_profile(deploy_branch="release/1.0"))
         self.assertEqual(profile.public_dict()["deploy_branch"], "release/1.0")

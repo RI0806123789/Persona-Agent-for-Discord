@@ -1026,6 +1026,46 @@ class DeployCommandTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             rc.deploy_pip_install_command("/srv/bot", ".venv/bin/python; id")
 
+    def test_checks_reject_trailing_newline_and_control_characters(self) -> None:
+        """`$` は末尾の改行の直前にも一致するため、`match` では "main\\n" が通ってしまった（#479）。"""
+        valid = (
+            (rc.check_branch, "main"),
+            (rc.check_branch, "release/test-1.0"),
+            (rc.check_commit, "0" * 40),
+            (rc.check_commit, "0123456789abcdef" * 2 + "01234567"),
+            (rc.check_python, ".venv/bin/python"),
+            (rc.check_python, "/opt/py3/bin/python3.12"),
+        )
+        for check, value in valid:
+            with self.subTest(check=check.__name__, value=value):
+                self.assertEqual(check(value), value)
+        suffixes = ("\n", "\r\n", "\r", "\t", "\x00", "\n\n", " ")
+        for check, value in valid:
+            for suffix in suffixes:
+                with self.subTest(check=check.__name__, value=value, suffix=suffix), self.assertRaises(ValueError):
+                    check(value + suffix)
+            with self.subTest(check=check.__name__, value=value, position="先頭"), self.assertRaises(ValueError):
+                check("\n" + value)
+            with self.subTest(check=check.__name__, value=value, position="途中"), self.assertRaises(ValueError):
+                check(value[:1] + "\n" + value[1:])
+
+    def test_commands_are_not_built_from_values_with_a_trailing_newline(self) -> None:
+        good = "a" * 40
+        for build in (
+            lambda: rc.deploy_fetch_command("/srv/bot", "main\n"),
+            lambda: rc.deploy_merge_command("/srv/bot", "main\n"),
+            lambda: rc.deploy_log_command("/srv/bot", good + "\n", good),
+            lambda: rc.deploy_log_command("/srv/bot", good, good + "\n"),
+            lambda: rc.deploy_requirements_diff_command("/srv/bot", good + "\n", good),
+            lambda: rc.deploy_pip_install_command("/srv/bot", ".venv/bin/python\n"),
+            lambda: rc.deploy_pip_check_command("/srv/bot", ".venv/bin/python\n"),
+            lambda: rc.deploy_rollback_command("/srv/bot", "main\n", good, []),
+            lambda: rc.deploy_rollback_command("/srv/bot", "main", good + "\n", []),
+            lambda: rc.deploy_rollback_command("/srv/bot", "main", good, [good.replace("a", "b") + "\n"]),
+        ):
+            with self.assertRaises(ValueError):
+                build()
+
     def test_deploy_log_round_trip_preserves_commit_hash_and_subject(self):
         command = rc.deploy_log_command("/srv/bot", "a" * 40, "b" * 40)
         self.assertIn("%h%x1f%s", command)
