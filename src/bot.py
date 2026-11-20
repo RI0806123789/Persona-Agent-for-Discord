@@ -25,6 +25,7 @@ from persona_bot.config.constants import (
     AUTO_TOPIC_CHECK_MINUTES,
     AUTONOMOUS_CHECK_MINUTES,
     DATABASE_PATH,
+    DECISION_ENABLED,
     FEEDBACK_PRUNE_MINUTES,
     LEGACY_MEMORY_OWNER_ID,
     MEMORY_MAINTENANCE_MINUTES,
@@ -34,6 +35,7 @@ from persona_bot.config.constants import (
 )
 from persona_bot.services.content_moderator import ContentModerator
 from persona_bot.core.database import Database
+from persona_bot.services.decision_service import GeminiDecider
 from persona_bot.utils.discord_helpers import post_welcome_message
 from persona_bot.services.document_service import DocumentService
 from persona_bot.services.feedback_service import FeedbackService, set_default_service
@@ -87,6 +89,8 @@ moderator = ContentModerator(
     model_name=MODERATION_MODEL_NAME,
     timeout=MODERATION_TIMEOUT_SECONDS,
     usage=usage,
+    # ユーザー入力の一次判定に判断専用モデル（Gemini Decision 1）を使う（#450）。
+    decider=GeminiDecider(genai_client, usage=usage) if DECISION_ENABLED else None,
 )
 blacklist = BlacklistService()
 documents = DocumentService(

@@ -4,6 +4,11 @@
 カタカナ⇔ひらがな変換・伏字・隠語などの回避テクニックにも対応する。
 APIエラーやタイムアウト時は安全側に倒して通過させる（fail-open）。
 
+ユーザー入力の判定（check_and_route・check_route_and_plan・judge_voice_input）は、判断専用モデル
+（Gemini Decision 1。#450）を一段目に置くカスケードにしている。判断モデルが「安全」と確定した入力は
+そのまま通し、それ以外は生成モデルの判定に従う（判断モデルは単独ではブロックしない）。
+判断モデルを渡さなければ（decider=None）従来どおり生成モデルだけで判定する。
+
 プロンプト定義・出力スキーマ・判定結果の正規化は `moderation_prompts.py`（#469）に分けてあり、
 ここから従来の名前で再公開する（テストが `_build_prompt` などをこのモジュールで差し替えるため、
 それを呼ぶ `ContentModerator` はここに残す）。
@@ -14,15 +19,19 @@ import asyncio
 from typing import Any
 
 from persona_bot.config.constants import (
-    BOT_RESPONSE_REFUSAL_TEXT, MODERATION_MODEL_NAME, MODERATION_TIMEOUT_SECONDS, REMINDER_TIMEZONE,
+    BOT_RESPONSE_REFUSAL_TEXT, DECISION_INPUT_SAFE_MAX_UNSAFE_PROBABILITY, MODERATION_MODEL_NAME,
+    MODERATION_TIMEOUT_SECONDS, REMINDER_TIMEZONE,
 )
 from persona_bot.services.agent_plan import AgentPlan, normalize_agent_plan
+from persona_bot.services.decision_service import Decider
 from persona_bot.services.moderation_prompts import (  # noqa: F401（従来の import 先として再公開する名前を含む）
     VERDICT_SAFE,
     VERDICT_UNKNOWN,
     VERDICT_UNSAFE,
     _DATA_END,
     _DATA_START,
+    _INPUT_UNSAFE_DECISION_KEY,
+    _INPUT_UNSAFE_DECISION_QUESTION,
     _SYSTEM_PROMPT,
     _VOICE_TURN_SYSTEM_PROMPT,
     _build_combined_system_prompt,
@@ -57,6 +66,8 @@ class ContentModerator:
         model_name: str = MODERATION_MODEL_NAME,
         timeout: float = MODERATION_TIMEOUT_SECONDS,
         usage: UsageTracker | None = None,
+        decider: Decider | None = None,
+        decision_safe_max_unsafe_probability: float = DECISION_INPUT_SAFE_MAX_UNSAFE_PROBABILITY,
     ) -> None:
         self._genai_client = genai_client
         self._ng_filter = ng_filter
@@ -64,6 +75,9 @@ class ContentModerator:
         self._timeout = timeout
         # 毎メッセージ走る判定の消費トークンを記録する（#480）。None なら記録しない。
         self._usage = usage
+        # ユーザー入力の一次判定に使う判断モデル（#450）。None なら従来どおり生成モデルだけで判定する。
+        self._decider = decider
+        self._decision_safe_max_unsafe_probability = decision_safe_max_unsafe_probability
         # リマインダーの相対表現（「30分後」など）を絶対日時へ直させるための基準時刻に使う。
         # ここで一度だけ解決しておく — メッセージごとに組み立てると、タイムゾーンデータが
         # 無い環境では毎回例外になり、fail-open のはずのモデレーションが
@@ -144,6 +158,38 @@ class ContentModerator:
             logger.error("モデレーション: 判定に失敗したため通過扱いにします。", exc_info=error)
             return VERDICT_UNKNOWN, "", None
 
+    async def _decides_input_safe(self, text: str) -> bool:
+        """判断モデルがユーザー入力を「安全」と確定したか（#450 のカスケードの一段目）。
+
+        不適切である確率が閾値以下のときだけ True。それ以外（不適切寄り・確信度が低い・判断モデルが
+        無い・判断できなかった）は False で、呼び出し側は生成モデルの判定に従う。
+        ★ 判断モデルは単独ではブロックしない（不適切寄りでも False を返すだけ）。違反に数えるかは
+        生成モデルが決める — 日本語での誤警報で利用者がブラックリストへ載らないようにするため。
+        例外は外へ出さない（on_message の主経路から呼ばれる。Decider の実装が約束を破っても守る）。
+        """
+        if self._decider is None:
+            return False
+        try:
+            answers = await self._decider.decide_binary(
+                text, {_INPUT_UNSAFE_DECISION_KEY: _INPUT_UNSAFE_DECISION_QUESTION}, label="入力モデレーション",
+            )
+        except Exception as error:
+            logger.error("モデレーション: 判断モデルの呼び出しに失敗したため生成モデルの判定に従います。", exc_info=error)
+            return False
+        answer = (answers or {}).get(_INPUT_UNSAFE_DECISION_KEY)
+        if answer is None:
+            return False
+        if answer.probability <= self._decision_safe_max_unsafe_probability:
+            logger.debug("モデレーション: 判断モデルが安全と確定しました（不適切の確率=%.3f）。", answer.probability)
+            return True
+        # 閾値の見直しに使うため、確率と確信度だけを出す（本文・利用者は出さない）。
+        logger.info(
+            "モデレーション: 判断モデルでは安全と確定できないため生成モデルの判定に従います"
+            "（不適切の確率=%.3f・確信度=%.3f）。",
+            answer.probability, answer.confidence,
+        )
+        return False
+
     async def check(
         self,
         text: str,
@@ -175,9 +221,14 @@ class ContentModerator:
         Returns:
             VERDICT_SAFE / VERDICT_UNSAFE / VERDICT_UNKNOWN のいずれか。
             文字起こしが空なら判定する内容が無いので VERDICT_UNKNOWN。
+
+        判断モデル（#450）が安全と確定したら、生成モデルを呼ばずに VERDICT_SAFE を返す
+        （判断モデルの判定は速く安いため先に待つ）。確定できなければ生成モデルで再判定する。
         """
         if not text or not text.strip():
             return VERDICT_UNKNOWN
+        if await self._decides_input_safe(text):
+            return VERDICT_SAFE
         prompt = _build_prompt(text, "ユーザー入力", self._ng_filter.words)
         verdict, _reason, _parsed = await self._judge_verdict(prompt, schema=_response_schema())
         return verdict
@@ -269,9 +320,17 @@ class ContentModerator:
             history_text=agent_history,
         )
 
-        is_safe, reason, parsed = await self._judge(
-            prompt, route=True, include_agent=agent_history is not None,
+        # 記憶カテゴリ・リマインダー・委任のために生成モデルの呼び出しは必ず要るので、判断モデル（#450）は
+        # 並行して待つ（直列にすると判断モデルの往復だけ応答が遅れる）。生成モデルの safe が再判定を兼ねる。
+        decided_safe, (is_safe, reason, parsed) = await asyncio.gather(
+            self._decides_input_safe(text),
+            self._judge(prompt, route=True, include_agent=agent_history is not None),
         )
+        if decided_safe and not is_safe:
+            # 判断モデルが安全と確定した入力は通す（カスケードの規則）。ただし生成モデルが不適切と
+            # 判定した応答の記憶カテゴリ・リマインダー・委任は、下の分岐で「無し」に倒す。
+            logger.info("モデレーション: 判断モデルが安全と確定したため、生成モデルの不適切判定を採用しません。")
+            is_safe, reason = True, ""
         if parsed is None or parsed.get("safe") is not True:
             # JSON が読めなかった場合。安全判定は _judge の結果に従い、
             # 記憶カテゴリ・リマインダー・委任は「無し」に倒す。曖昧なsafe値での
