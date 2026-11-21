@@ -248,6 +248,11 @@ class AutonomousService(AutonomousLifecycleMixin, AutonomousSpeechMixin):
                 self._clear_session(guild_settings)
             return
 
+        if not guild_settings.is_active:
+            # 退出で無効化された旧設定（見回りが取った一覧の写し）。再参加後の新しい設定とは別物なので、
+            # 旧設定で配信を始めたり続けたりしない（#466 の話題提供と同じ）。
+            return
+
         # 配信中なら、続けるか終えるかの判断が先（機能を無効化された場合も
         # ここで拾って後片付けする必要があるため、enabled の判定より前に置く）。
         if guild_settings.autonomous_session is not None:
@@ -275,7 +280,7 @@ class AutonomousService(AutonomousLifecycleMixin, AutonomousSpeechMixin):
     async def _tend_session(self, guild: discord.Guild, guild_settings: GuildSettings) -> None:
         """配信中のサーバーの面倒を見る（停止条件の確認 → 独り言の投下）。"""
         session = guild_settings.autonomous_session
-        if session is None:
+        if session is None or not guild_settings.is_active:
             return
 
         # 実態（接続）が先。管理者に切断された・回線が切れた場合はセッションの

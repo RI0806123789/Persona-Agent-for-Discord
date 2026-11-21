@@ -172,6 +172,17 @@ class PersonaSettingsTests(PersonaFolderTestCase):
         self.assertIn("live_voice", logs)
         self.assertNotIn("tools", logs)  # 書かれた値そのものはログに出さない
 
+    def test_trailing_newline_is_rejected_in_voice_values(self) -> None:
+        """`$` は末尾の改行の直前にも一致するため、fullmatch で改行付きの値を拒否する（#493）。"""
+        self.write("a.txt")
+        self.write_settings({"personas": {"a.txt": {"voice": {
+            "rate": "+5%\n", "pitch": "+10Hz\n", "live_voice": "Kore\n",
+        }}}})
+        with self.assertLogs("persona_bot.config.personas", level="WARNING"):
+            voice = self.load().voice_profile("../prompts/a.txt")
+        for key in ("rate", "pitch", "live_voice"):
+            self.assertEqual(voice[key], VOICE_PROFILE_FALLBACK[key])
+
     def test_missing_files_and_default_are_warned(self) -> None:
         self.write("a.txt")
         self.write_settings({"default": "転送忘れ.txt", "personas": {"転送忘れ.txt": {"name": "架空"}}})

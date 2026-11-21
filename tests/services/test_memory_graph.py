@@ -153,6 +153,26 @@ class BuildMemoryGraphTests(unittest.TestCase):
         self.assertIn("【要点】\n・要点1\n・2", documents[1].detail)
         self.assertIn("【注意】\n・注意1", documents[1].detail)
 
+    def test_document_detail_skips_booleans_and_non_finite_numbers(self):
+        graph = build_memory_graph(snapshot(document_summaries=[
+            {"document_name": "架空.pdf", "key_points": [True, False, float("nan"), float("inf"), 3, 1.5, "要点"]},
+        ]), tz=TOKYO)
+        detail = by_label(graph)["架空.pdf"].detail
+        self.assertIn("・3\n・1.5\n・要点", detail)
+        for word in ("True", "False", "nan", "inf"):
+            self.assertNotIn(word, detail)
+
+    def test_category_without_room_for_a_child_is_not_left_empty(self):
+        # 根の次に分類を足すと残りが0になる上限（根 + 分類 = 2 のとき、子を置けない）。
+        graph = build_memory_graph(snapshot(profile={"好み": "猫"}), max_nodes=2, tz=TOKYO)
+        self.assertIsNone(graph)  # 記憶のノードを1つも置けない図は出さない
+        graph = build_memory_graph(snapshot(profile={"好み": "猫"}, projects={"話題": "値"}), max_nodes=3, tz=TOKYO)
+        self.assertEqual([node.kind for node in graph.nodes], ["root", "category", "value"])
+        self.assertTrue(graph.truncated)
+        for node in graph.nodes:
+            if node.kind == "category":
+                self.assertTrue(any(child.parent == node.id for child in graph.nodes))
+
     def test_payload_has_only_graph_fields_and_metadata(self):
         graph = build_memory_graph(snapshot(profile={"呼び名": "架空"}, pending_count=1), tz=TOKYO)
         payload = graph_payload(graph, generated_at=NOW, tz=TOKYO)

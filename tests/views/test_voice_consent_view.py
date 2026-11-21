@@ -63,6 +63,7 @@ class ConsentViewTests(unittest.IsolatedAsyncioTestCase):
         self.conversation = FakeConversation()
         self.blocked = set()
         self.view = VoiceConsentView(self.conversation, is_blocked=lambda user_id: user_id in self.blocked)
+        self.addCleanup(self.view.stop)
 
     async def press(self, name, interaction):
         button = getattr(self.view, name)

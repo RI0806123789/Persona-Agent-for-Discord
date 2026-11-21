@@ -689,7 +689,17 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
         if transcription is not None and transcription.text:
             self._on_output_transcript(transcription.text)
         if getattr(content, "generation_complete", None) or getattr(content, "turn_complete", None):
+            # 受信時点の状態を控える。短い返答では _on_generation_complete が再生の開始を待つため、
+            # その間に停止や新しい発話（割り込み）が起きうる。
+            awaiting_at_receipt = self._awaiting_interrupt_ack
+            current_at_receipt = self._current
             await self._on_generation_complete()
+            if self._stopped:
+                return
+            if (getattr(content, "turn_complete", None) and not awaiting_at_receipt
+                    and (self._current is not current_at_receipt or self._awaiting_interrupt_ack)):
+                # 待つ間に新しい発言へ交代した。古い turn_complete で、新しい割り込みの確認待ちを解かない。
+                return
         if getattr(content, "turn_complete", None):
             self._on_turn_complete()
 
@@ -765,7 +775,8 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
                     self._barge_in_stats["echo"] += 1
                     self._discard_response(utterance, "自分の声の回り込みへの返答")
                 elif (utterance.input_task is not None and utterance.input_task.done()
-                        and not utterance.violation_recorded and not self._stopped):
+                        and not utterance.violation_recorded and not utterance.discarded
+                        and not self._stopped):
                     # 入力の AI 判定が済んだ後に続きが届いた。増えた分も判定し直す。
                     utterance.input_task = self._spawn_judge(self._judge_input(utterance), label="音声会話の入力の再判定")
         if finished:

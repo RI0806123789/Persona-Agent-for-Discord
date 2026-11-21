@@ -185,6 +185,19 @@ class JoinLiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.voice_guard.release.assert_called_with(1)
         self.live.start.assert_not_awaited()
 
+    async def test_cancellation_while_stopping_the_old_conversation_cleans_up(self):
+        """始め直しで旧会話の停止を待つ間に中断しても、会話の無い接続と保護を残さない（#493）。"""
+        voice_client = FakeLiveVoiceClient(None, self.channel)
+        self.guild.voice_client = voice_client
+        self.live.get.return_value = SimpleNamespace(stopped=False, voice_client=voice_client, channel_id=30)
+        self.live.stop.side_effect = asyncio.CancelledError
+        with self.assertRaises(asyncio.CancelledError):
+            await self.join()
+        voice_client.disconnect.assert_awaited_once_with(force=True)
+        self.voice_guard.release.assert_called_with(1)
+        self.live.start.assert_not_awaited()
+        self.live.release_reservation.assert_called()
+
     async def cancel_during_stage_promotion(self):
         """ステージの発言者への昇格を待つ間に /join を中断する。"""
         entered, resume = asyncio.Event(), asyncio.Event()

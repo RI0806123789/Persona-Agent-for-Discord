@@ -344,7 +344,9 @@ class VoiceSessionCommands:
             or conversation.voice_client is not voice_client
             or conversation.channel_id != voice_channel.id
         )
-        if restarting and not live_voice.reserve(guild.id):
+        # 始め直しのとき確保した予約票。停止待機の中断時に、自分の票だけを解放するため持ち回る。
+        first_reservation = live_voice.reserve(guild.id) if restarting else None
+        if restarting and not first_reservation:
             # 新規接続のパスと同じく、保護の引継ぎやステージ昇格の API の前に同時実行の上限を
             # 確かめる（後で断ると、その分を無駄にした上で接続を切ることになる）。
             # 会話が動いていない接続は残しても音声会話に使えないため、開始失敗時と同じ片付け
@@ -362,6 +364,7 @@ class VoiceSessionCommands:
             if restarting:
                 resumed = await self._restart_live_on_connection(
                     interaction, voice_client, voice_channel, conversation,
+                    first_reservation=first_reservation,
                 )
             else:
                 resumed = await self._ensure_live_speaker(interaction, voice_client, voice_channel)
@@ -375,7 +378,7 @@ class VoiceSessionCommands:
     async def _restart_live_on_connection(
         self, interaction: discord.Interaction, voice_client: discord.VoiceClient,
         voice_channel: discord.VoiceChannel | discord.StageChannel,
-        conversation: VoiceConversation | None,
+        conversation: VoiceConversation | None, *, first_reservation: object | None = None,
     ) -> bool:
         """接続はあるがこのチャンネルの音声会話が動いていない（止まっている・移された先で /join された）
         とき、同じ接続のまま始め直す。会話を始められたら True。"""
@@ -388,7 +391,20 @@ class VoiceSessionCommands:
             # まず旧チャンネル用に動いていた会話を止める（この後の昇格に失敗して退出するときも、
             # 会話タスクを残留させない）。ステージでは先に発言者へ昇格し、声を出せないまま会話を始めない。
             if conversation is not None and not conversation.stopped:
-                await live_voice.stop(guild.id, reason="/join による音声会話の始め直し")
+                try:
+                    await live_voice.stop(guild.id, reason="/join による音声会話の始め直し")
+                except (Exception, asyncio.CancelledError):
+                    # 停止の待機中の中断。旧会話は登録から外れて会話の無い接続と保護（adopt 済み）だけが
+                    # 残るので、昇格失敗時と同じ片付けを済ませてから伝える（繰り返しのキャンセルでも止めない）。
+                    live_voice.release_reservation(guild.id, reservation=first_reservation)
+                    await wait_for_cleanup(
+                        self._disconnect_voice(
+                            guild.id, voice_client, label="音声会話の始め直しの中断後の切断",
+                            failure_message="音声会話の始め直しの中断後の切断に失敗しました。",
+                        ),
+                        label="音声会話の始め直しの中断後の切断",
+                    )
+                    raise
             # live_voice.stop() は予約枠も解放するため、開始の移譲前に再度枠を確保する
             #（旧予約票の自己破棄の防止）。
             reservation = live_voice.reserve(guild.id)

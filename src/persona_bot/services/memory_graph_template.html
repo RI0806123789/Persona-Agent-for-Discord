@@ -652,9 +652,12 @@
     stopAnimation();
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     try { svg.setPointerCapture(event.pointerId); } catch (error) { /* 取れなくても操作は続ける */ }
-    if (pointers.size === 2) {
+    if (pointers.size >= 2) {
+      // 2本目以降の指では1本指のドラッグを打ち切る（残ると「掴んでいる」表示が戻らない）。
+      // ピンチは最初の2本だけで続け、3本目以降の指で単一指のドラッグへ化けさせない。
       drag = null;
-      pinch = pinchState();
+      svg.classList.remove("is-dragging");
+      if (pointers.size === 2) pinch = pinchState();
       return;
     }
     const target = event.target instanceof Element ? event.target.closest("g.node") : null;
@@ -705,6 +708,8 @@
   const endPointer = (event, cancelled) => {
     pointers.delete(event.pointerId);
     if (pointers.size < 2) pinch = null;
+    else if (pointers.size === 2) pinch = pinchState();
+    if (pointers.size === 0) svg.classList.remove("is-dragging");
     if (!drag || drag.pointer !== event.pointerId) return;
     const finished = drag;
     drag = null;

@@ -187,8 +187,9 @@ class LiveSession:
             while True:
                 try:
                     if not await self._open_with_search_fallback():
-                        # 開き直す前に close() が呼ばれた。接続は片付け済みなので、受信を始めずに戻る。
-                        return
+                        # 開き直す前に close() が呼ばれた。接続は片付け済みなので、受信を始めず、
+                        # 正常に戻らず失敗として伝える（呼び出し側が接続成功と誤認して会話を始めない）。
+                        raise LiveUnavailableError(quota=False)
                     break
                 except Exception as error:
                     # 最初の接続だけは、設定の誤りなら声・検索などの任意の設定を外して試し直す。
@@ -317,7 +318,9 @@ class LiveSession:
                 # セッションは使わず、新しいセッションでつなぎ直す。
                 logger.info("Gemini Live: 接続中に文脈の破棄を求められたため、新しいセッションでつなぎ直します。")
                 try:
-                    await context.__aexit__(None, None, None)
+                    await wait_for_cleanup(
+                        context.__aexit__(None, None, None), label="Gemini Live の不採用接続の終了",
+                    )
                 except Exception:
                     logger.debug("Gemini Live: 採用しない接続を閉じる途中で例外が出ました。", exc_info=True)
                 continue
