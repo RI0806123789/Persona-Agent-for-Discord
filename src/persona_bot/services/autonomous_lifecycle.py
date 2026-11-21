@@ -188,7 +188,8 @@ class AutonomousLifecycleMixin:
     ) -> bool:
         """待機後も開始要求が有効で、元の接続・チャンネルを所有しているか。"""
         return bool(
-            not attempt.stopped and guild_settings.autonomous_enabled and not is_quiet_hours()
+            not attempt.stopped and guild_settings.is_active
+            and guild_settings.autonomous_enabled and not is_quiet_hours()
             and guild_settings.autonomous_session is None
             and voice_client is not None and guild.voice_client is voice_client
             and voice_client.is_connected() and getattr(voice_client.channel, "id", None) == channel_id
@@ -196,7 +197,8 @@ class AutonomousLifecycleMixin:
 
     def _record_interrupted_start(self, guild_settings: GuildSettings, attempt: _StartAttempt) -> None:
         """利用者の停止や時間帯制限は失敗にせず、接続異常では既存の再試行待ちを保つ。"""
-        if (not attempt.stopped and guild_settings.autonomous_enabled and not is_quiet_hours()
+        if (not attempt.stopped and guild_settings.is_active
+                and guild_settings.autonomous_enabled and not is_quiet_hours()
                 and guild_settings.autonomous_session is None):
             self._record_start_failure(guild_settings)
 

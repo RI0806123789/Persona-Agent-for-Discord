@@ -87,6 +87,19 @@ class AutonomousSessionPermissionTests(unittest.IsolatedAsyncioTestCase):
         self.spawn.assert_not_called()
         self.gemini.generate.assert_not_awaited()
 
+    async def test_invalidated_settings_are_not_tended_or_started(self) -> None:
+        """退出で無効化された旧設定では、継続も開始・失敗記録もしない（#493。話題提供の #466 と同じ）。"""
+        self.state.forget_guild(1)
+        self.assertFalse(self.settings.is_active)
+        await self.service._check_guild(1, self.settings)
+        self.assertIsNotNone(self.settings.autonomous_session)
+        self.voice.disconnect.assert_not_awaited()
+        attempt = autonomous_lifecycle._StartAttempt()
+        self.assertFalse(self.service._can_finish_start(self.guild, self.settings, attempt, self.voice, 10))
+        self.settings.autonomous_session = None
+        self.service._record_interrupted_start(self.settings, attempt)
+        self.assertEqual(self.settings.autonomous_start_failures, 0)
+
     async def test_lost_view_or_send_permission_stops_without_closing_post_or_generation(self) -> None:
         for stage in (False, True):
             for permission, label in (("view_channel", "チャンネルを見る"), ("send_messages", "メッセージを送信")):

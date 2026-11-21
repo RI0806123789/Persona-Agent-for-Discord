@@ -63,9 +63,13 @@ class VoicePlaybackMixin:
             loop.call_soon_threadsafe(self._on_playback_finished, source)
 
         try:
+            def unusable() -> bool:
+                # 未再生のこの音源自身が割り込み確定でフェード中へ移った場合も、誰も read() しないので使えない。
+                return (self._stopped or self._playback_state.source is not source or source.aborted
+                        or owner is None or owner.discarded or self._playback_state.fading is source)
+
             async with self._playback_controller.lock:
-                if (self._stopped or self._playback_state.source is not source or source.aborted
-                        or owner is None or owner.discarded):
+                if unusable():
                     self._release_unplayed(source)
                     return
                 # 割り込みでフェードアウトさせた音源が鳴り終わるのを待つ（prepare の停止で
@@ -74,6 +78,12 @@ class VoicePlaybackMixin:
                 deadline = monotonic() + LIVE_PLAYBACK_FADE_WAIT_SECONDS
                 while self._playback_state.fading is not None and monotonic() < deadline:
                     await asyncio.sleep(0.01)
+                    if unusable():
+                        break
+                if unusable():
+                    # 待つ間に停止・破棄・差し替えが起きた。不要な prepare（再生の停止）をしない。
+                    self._release_unplayed(source)
+                    return
                 await self._playback_controller.prepare(self.voice_client)
                 if (self._stopped or self._playback_state.source is not source or source.aborted
                         or owner.discarded or not self.voice_client.is_connected()):

@@ -244,6 +244,14 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(connect.configs[1].speech_config)
         self.assertIsNone(connect.configs[1].tools)
 
+    async def test_close_during_start_fails_instead_of_returning_normally(self):
+        """開始の途中で close() された場合は、接続成功と誤認させず失敗として伝える（#493）。"""
+        live, _connect = self.make([FakeSession([])])
+        live._open_with_search_fallback = AsyncMock(return_value=False)
+        with self.assertRaises(LiveUnavailableError) as raised:
+            await live.start()
+        self.assertFalse(raised.exception.quota)
+
     async def test_start_failure_reports_quota(self):
         # 検索つきの利用枠の超過は検索なしで1回試し直すので、本物の超過は2回続く。
         for outcomes, quota in (

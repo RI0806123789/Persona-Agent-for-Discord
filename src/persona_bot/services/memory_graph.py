@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -204,6 +205,13 @@ class _GraphBuilder:
         ))
         return node_id
 
+    def add_category(self, label: str, parent: str, detail: str, path: Iterable[str]) -> str | None:
+        """分類のノードを足す。子を1つ足す余地まで無いときは、空の分類を残さず足さない。"""
+        if len(self.graph.nodes) + 2 > self._max_nodes:
+            self.graph.truncated = True
+            return None
+        return self.add(label, "category", parent, detail, path)
+
     def add_entry(
         self, parent: str, name: str, value: Any, path: tuple[str, ...], *, show_name: bool = True,
     ) -> None:
@@ -235,7 +243,7 @@ class _GraphBuilder:
 
 
 def _add_anniversaries(builder: _GraphBuilder, root: str, entries: list[Any]) -> None:
-    category = builder.add("記念日", "category", root, _CATEGORY_DETAILS["anniversaries"], ("記念日",))
+    category = builder.add_category("記念日", root, _CATEGORY_DETAILS["anniversaries"], ("記念日",))
     if category is None:
         return
     for index, entry in enumerate(entries, 1):
@@ -253,6 +261,17 @@ def _add_anniversaries(builder: _GraphBuilder, root: str, entries: list[Any]) ->
         )
 
 
+def _detail_item_text(item: Any) -> str:
+    """文書要約の補足項目 1 件を文字列にする。文字列と数値だけを通し、bool と非有限の数は除く。"""
+    if isinstance(item, bool):
+        return ""
+    if isinstance(item, float) and not math.isfinite(item):
+        return ""
+    if isinstance(item, (str, int, float)):
+        return str(item).strip()
+    return ""
+
+
 def _document_detail(summary: dict[str, Any], tz) -> str:
     lines: list[str] = []
     text = summary.get("summary")
@@ -261,7 +280,7 @@ def _document_detail(summary: dict[str, Any], tz) -> str:
     for key, heading in _DOCUMENT_LIST_FIELDS:
         values = summary.get(key)
         if isinstance(values, list):
-            items = [str(item).strip() for item in values if isinstance(item, (str, int, float)) and str(item).strip()]
+            items = [text for text in (_detail_item_text(item) for item in values) if text]
             if items:
                 lines.append(f"\n【{heading}】")
                 lines.extend(f"・{item}" for item in items)
@@ -272,7 +291,7 @@ def _document_detail(summary: dict[str, Any], tz) -> str:
 
 
 def _add_documents(builder: _GraphBuilder, root: str, summaries: list[Any], tz) -> None:
-    category = builder.add("文書の要約", "category", root, _CATEGORY_DETAILS["documents"], ("文書の要約",))
+    category = builder.add_category("文書の要約", root, _CATEGORY_DETAILS["documents"], ("文書の要約",))
     if category is None:
         return
     # 新しいものほど後ろに保存されている。図では新しい順に並べる。
@@ -325,19 +344,22 @@ def build_memory_graph(
         )
 
     if other_profile:
-        category = builder.add("プロフィール", "category", root, _CATEGORY_DETAILS["profile"], ("プロフィール",))
+        category = builder.add_category("プロフィール", root, _CATEGORY_DETAILS["profile"], ("プロフィール",))
         if category is not None:
             for key, value in other_profile.items():
                 builder.add_entry(category, str(key), value, ("プロフィール",))
     if anniversaries:
         _add_anniversaries(builder, root, anniversaries)
     if projects:
-        category = builder.add("プロジェクト", "category", root, _CATEGORY_DETAILS["projects"], ("プロジェクト",))
+        category = builder.add_category("プロジェクト", root, _CATEGORY_DETAILS["projects"], ("プロジェクト",))
         if category is not None:
             for key, value in projects.items():
                 builder.add_entry(category, str(key), value, ("プロジェクト",))
     if documents:
         _add_documents(builder, root, documents, tz)
+    if not any(node.kind not in ("root", "info") for node in builder.graph.nodes):
+        # 上限が小さく、記憶のノードを1つも置けなかった。根だけの図は出さない。
+        return None
     return builder.graph
 
 
