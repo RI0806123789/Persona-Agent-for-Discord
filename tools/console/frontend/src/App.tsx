@@ -65,11 +65,13 @@ export function Console() {
   const [connecting, setConnecting] = useState(false);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [statusErrorSafe, setStatusErrorSafe] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [samples, setSamples] = useState<Sample[]>([]);
   const [insights, setInsights] = useState<Insights | null>(null);
   const [insightsFetchedAt, setInsightsFetchedAt] = useState<number | null>(null);
   const [insightsError, setInsightsError] = useState<string | null>(null);
+  const [insightsErrorSafe, setInsightsErrorSafe] = useState<string | null>(null);
   const [operations, setOperations] = useState<Operation[]>([]);
 
   // ---- 画面の部品
@@ -163,7 +165,9 @@ export function Console() {
         setInsightsFetchedAt(null);
         setRefreshing(false);
         setStatusError(null);
+        setStatusErrorSafe(null);
         setInsightsError(null);
+        setInsightsErrorSafe(null);
       }
       connectionProfileId.current = state.profile?.id ?? null;
       dataConnectionKey.current = nextKey;
@@ -175,8 +179,8 @@ export function Console() {
 
   const { refreshConnection, refreshStatus, refreshInsights } = useConsolePolling({
     requestScope, connectionChanging, wasConnected, applyConnection, connected, autoRefresh, connectionKey,
-    setBackendError, setStatus, setStatusError, setRefreshing, setSamples, setInsights,
-    setInsightsFetchedAt, setInsightsError,
+    setBackendError, setStatus, setStatusError, setStatusErrorSafe, setRefreshing, setSamples, setInsights,
+    setInsightsFetchedAt, setInsightsError, setInsightsErrorSafe,
   });
 
   // 接続中は、選択欄を「実際に接続している接続先」に合わせる（別のタブや再読み込みで食い違わないように）
@@ -285,7 +289,12 @@ export function Console() {
       applyConnection(state);
       notify({ tone: "info", title: "切断しました" });
     } catch (error) {
-      notify({ tone: "critical", title: "切断できませんでした", detail: errorMessage(error) });
+      notify({
+        tone: "critical",
+        title: "切断できませんでした",
+        detail: errorMessage(error),
+        detailSafe: error instanceof ApiError ? error.safeMessage : undefined,
+      });
     } finally {
       connectionChanging.current = false;
       void refreshConnection();
@@ -424,12 +433,14 @@ export function Console() {
                   connecting={connecting}
                   status={status}
                   statusError={statusError}
+                  statusErrorSafe={statusErrorSafe}
                   samples={samples}
                   connection={connection}
                   logs={stream.entries}
                   insights={insights}
                   insightsFetchedAt={insightsFetchedAt}
                   insightsError={insightsError}
+                  insightsErrorSafe={insightsErrorSafe}
                   onNavigate={navigate}
                   onRequestAction={requestAction}
                   busyAction={busyAction}
@@ -489,6 +500,7 @@ export function Console() {
                   insights={insights}
                   insightsFetchedAt={insightsFetchedAt}
                   insightsError={insightsError}
+                  insightsErrorSafe={insightsErrorSafe}
                   now={now}
                 />
               )}

@@ -51,7 +51,7 @@ const originalWindow = globalThis.window;
 globalThis.window = {matchMedia: () => ({matches: true}), addEventListener: noop, removeEventListener: noop};
 test.after(() => {globalThis.window = originalWindow;});
 const load = loader({
-  "api.ts": {api: {}, errorMessage: (error) => error.message},
+  "api.ts": {api: {}, errorMessage: (error) => error.message, errorSafeMessage: () => null},
   "theme/theme.ts": {SEED_OPTIONS: [{id: "test", hex: "#123456", label: "架空色"}]},
 });
 const privacy = load("privacy.ts");
@@ -315,7 +315,7 @@ function appHarness() {
     "./hooks": {useStoredState: (_key, initial) => rt.hooks.useState(initial), useNow: () => 0,
       useMediaQuery: () => true, usePolling: noop},
     "./useLogStream": { useLogStream: () => ({}) },
-    "./api": {api, errorMessage: (error) => error.message, ApiError: Error},
+    "./api": {api, errorMessage: (error) => error.message, errorSafeMessage: () => null, ApiError: Error},
     "./components/toast": {useToast: () => (notice) => notices.push(notice)},
     "./requestScope": load("requestScope.ts"), "./navigation": {PAGES: [{id: "overview"}], isPageId: () => true},
     "./profiles": load("profiles.ts"), "./status": load("status.ts"), "./deployPlan": load("deployPlan.ts"), "./theme/theme": {SEED_OPTIONS: [{id: "test"}]},

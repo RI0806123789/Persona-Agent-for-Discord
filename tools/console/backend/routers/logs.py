@@ -15,7 +15,7 @@ from starlette.websockets import WebSocketDisconnect
 
 import remote_commands as rc
 from async_utils import CancellationState, await_shielded
-from console_messages import journal_error_message
+from console_messages import journal_error_message, journal_safe_error_message
 from routers.context import state
 from ssh_errors import NotConnectedError, SshError
 
@@ -33,7 +33,10 @@ async def get_logs(lines: Annotated[int, Query(ge=1, le=rc.MAX_LOG_LINES)] = 200
         raise NotConnectedError("ログの取得中に SSH 接続が変わりました。接続先を確認して更新してください。")
     entries = [entry for line in result.stdout.splitlines() if (entry := rc.parse_journal_line(line))]
     if result.exit_status != 0 and not entries:
-        raise SshError(journal_error_message(result.stderr))
+        raise SshError(
+            journal_error_message(result.stderr),
+            safe_message=journal_safe_error_message(result.stderr),
+        )
     return {"entries": entries}
 
 
@@ -85,9 +88,13 @@ async def stream_logs(websocket: WebSocket, lines: Annotated[int, Query(ge=1, le
             stderr = await asyncio.wait_for(process.stderr.read(), timeout=1)
         except (asyncio.TimeoutError, asyncssh.Error, OSError):
             pass
-        message = journal_error_message(stderr) if stderr.strip() else "ログの追跡が終了しました。"
+        if stderr.strip():
+            message = journal_error_message(stderr)
+            message_safe = journal_safe_error_message(stderr)
+        else:
+            message = message_safe = "ログの追跡が終了しました。"
         with suppress(WebSocketDisconnect, RuntimeError):
-            await websocket.send_json({"type": "end", "message": message})
+            await websocket.send_json({"type": "end", "message": message, "message_safe": message_safe})
 
     async def wait_for_client_close() -> None:
         while True:

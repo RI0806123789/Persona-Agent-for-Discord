@@ -31,11 +31,26 @@ def sudo_password_message(username: str | None, service: str) -> str:
     )
 
 
+_JOURNAL_PERMISSION_MESSAGE = (
+    "ログを読む権限がありません。サーバーのユーザーを adm / systemd-journal グループに入れるか、"
+    "profiles.json の journal_sudo を true にしてください。"
+)
+
+
+def _journal_permission_denied(stderr: str) -> bool:
+    lowered = stderr.lower()
+    return "permission" in lowered or "insufficient" in lowered
+
+
 def journal_error_message(stderr: str) -> str:
     detail = last_line(stderr)
-    if "permission" in stderr.lower() or "insufficient" in stderr.lower():
-        return (
-            "ログを読む権限がありません。サーバーのユーザーを adm / systemd-journal グループに入れるか、"
-            "profiles.json の journal_sudo を true にしてください。"
-        )
+    if _journal_permission_denied(stderr):
+        return _JOURNAL_PERMISSION_MESSAGE
     return f"ログを取得できませんでした: {detail or '原因不明'}"
+
+
+def journal_safe_error_message(stderr: str) -> str:
+    """遠隔の標準エラー（接続先のホスト名・パスを含みうる）を載せない、伏せ字モード用の文面（#494）。"""
+    if _journal_permission_denied(stderr):
+        return _JOURNAL_PERMISSION_MESSAGE
+    return "ログを取得できませんでした。サーバーの journalctl の実行結果と権限を確認してください。"

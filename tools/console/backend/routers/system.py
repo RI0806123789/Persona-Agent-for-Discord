@@ -62,6 +62,11 @@ def get_history() -> dict:
 # ---------------------------------------------------------------- 状態
 
 
+def _safe_error_text(error: BaseException, fallback: str) -> str:
+    """失敗の例外から伏せ字モード用の文面を取り出す。持たない例外は固定文にする（生の例外文は返さない。#494）。"""
+    return getattr(error, "safe_message", None) or fallback
+
+
 @router.get("/api/status")
 async def get_status() -> dict:
     session = state.session
@@ -90,11 +95,16 @@ async def get_status() -> dict:
         "resources_error": None,
         "git": None,
         "git_error": None,
+        # 伏せ字モード用の安全な文面。生のエラー文が接続先のホスト名・パスを含みうる項目だけが値を持つ（#494）。
+        "service_error_safe": None,
+        "resources_error_safe": None,
+        "git_error_safe": None,
     }
 
     host_uptime = None
     if isinstance(resources, BaseException):
         response["resources_error"] = str(resources)
+        response["resources_error_safe"] = _safe_error_text(resources, "リソースを取得できませんでした。")
     elif resources.exit_status != 0:
         response["resources_error"] = "リソースを取得できませんでした。サーバーのコマンドと権限を確認してください。"
     else:
@@ -103,18 +113,22 @@ async def get_status() -> dict:
 
     if isinstance(service, BaseException):
         response["service_error"] = str(service)
+        response["service_error_safe"] = _safe_error_text(service, "サービス状態を取得できませんでした。")
     else:
         parsed = rc.parse_service_show(service.stdout, profile.service, host_uptime)
         if parsed["load_state"] == "not-found":
             response["service_error"] = f"サービス {profile.service} がサーバーに見つかりません（systemd に未登録）。"
+            response["service_error_safe"] = "サービスがサーバーに見つかりません（systemd に未登録）。"
         elif service.exit_status != 0:
             response["service_error"] = "サービス状態を取得できませんでした。systemd と読み取り権限を確認してください。"
         response["service"] = parsed
 
     if isinstance(git, BaseException):
         response["git_error"] = str(git)
+        response["git_error_safe"] = _safe_error_text(git, "Git の情報を取得できませんでした。")
     elif git.exit_status != 0:
         response["git_error"] = last_line(git.stderr) or "Git の情報を取得できませんでした。"
+        response["git_error_safe"] = "Git の情報を取得できませんでした。"
     else:
         try:
             response["git"] = rc.parse_git(git.stdout)

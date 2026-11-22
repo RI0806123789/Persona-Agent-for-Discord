@@ -537,6 +537,29 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsNone(data["resources"]["load"])
                 self.assertNotIn(b"private detail", body)
 
+    async def test_status_partial_failures_return_safe_messages_without_raw_details(self):
+        """ping が成功し一部のコマンドだけ失敗したとき、`*_error_safe` に生のエラー文を入れない（#494）。"""
+        original = self.session.run
+
+        async def run(command, **kwargs):
+            if command == rc.RESOURCES_COMMAND:
+                raise SshError("リソース: 通信に失敗しました（OSError: host-fixture.internal）。",
+                               safe_message="リソース: 通信に失敗しました。")
+            if command == rc.git_command(self.profile.bot_dir):
+                return CommandResult("", "fatal: not a git repository: /srv/private-dir-fixture\n", 128, 1)
+            return await original(command, **kwargs)
+
+        with mock.patch.object(self.session, "run", side_effect=run):
+            status, body = await request("/api/status")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertIn("host-fixture.internal", data["resources_error"])  # 通常表示は従来どおり
+        self.assertEqual(data["resources_error_safe"], "リソース: 通信に失敗しました。")
+        self.assertIn("private-dir-fixture", data["git_error"])
+        self.assertEqual(data["git_error_safe"], "Git の情報を取得できませんでした。")
+        self.assertNotIn(b"host-fixture.internal", json.dumps(
+            {key: value for key, value in data.items() if key.endswith("_safe")}).encode())
+
     async def websocket(self, *, origin="http://127.0.0.1:5173", host="127.0.0.1", lines="1"):
         incoming, outgoing = asyncio.Queue(), asyncio.Queue()
         headers = [(b"host", host.encode())]

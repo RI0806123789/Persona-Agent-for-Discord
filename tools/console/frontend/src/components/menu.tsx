@@ -93,6 +93,7 @@ export function useMenu(): MenuController {
       const index = list.indexOf(document.activeElement as HTMLElement);
       const move = (next: number) => {
         event.preventDefault();
+        if (list.length === 0) return; // 有効な項目が無いと % 0 で NaN になる（#494）
         list[(next + list.length) % list.length]?.focus({ preventScroll: true });
       };
       switch (event.key) {
@@ -102,7 +103,8 @@ export function useMenu(): MenuController {
           break;
         case "ArrowUp":
         case "k":
-          move(index - 1);
+          // 項目にフォーカスが無い（index が -1）ときは末尾へ。そのまま引くと下から2番目へ飛ぶ（#494）
+          move(index < 0 ? list.length - 1 : index - 1);
           break;
         case "Home":
           move(0);
