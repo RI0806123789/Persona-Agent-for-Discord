@@ -83,3 +83,8 @@ export function logStreamUrl(lines: number): string {
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/** API が返した伏せ字用の安全な文面（`detail_safe`）。無ければ null（#494）。 */
+export function errorSafeMessage(error: unknown): string | null {
+  return error instanceof ApiError && error.safeMessage ? error.safeMessage : null;
+}

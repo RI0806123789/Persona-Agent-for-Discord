@@ -32,6 +32,7 @@ from persona_bot.services.moderation_prompts import (  # noqa: F401（従来の 
     _DATA_START,
     _INPUT_UNSAFE_DECISION_KEY,
     _INPUT_UNSAFE_DECISION_QUESTION,
+    NG_WORD_MATCH_KEY,
     _SYSTEM_PROMPT,
     _VOICE_TURN_SYSTEM_PROMPT,
     _build_combined_system_prompt,
@@ -190,6 +191,15 @@ class ContentModerator:
         )
         return False
 
+    def _is_ng_word_match(self, parsed: dict[str, Any] | None) -> bool:
+        """生成モデルが、NG ワード（またはその変形表現）への該当を理由に不適切と判定したか（#496）。
+
+        判断モデルは問いに登録語を載せないため、空白・記号の挿入やローマ字化などで崩した登録語を
+        見分けられない。この理由の不適切判定だけは、判断モデルが安全と確定しても上書きしない。
+        NG ワードが1つも登録されていないときは、モデルが付けた印を信用しない（根拠となる語が無い）。
+        """
+        return bool(parsed) and parsed.get(NG_WORD_MATCH_KEY) is True and bool(self._ng_filter.words)
+
     async def check(
         self,
         text: str,
@@ -222,15 +232,26 @@ class ContentModerator:
             VERDICT_SAFE / VERDICT_UNSAFE / VERDICT_UNKNOWN のいずれか。
             文字起こしが空なら判定する内容が無いので VERDICT_UNKNOWN。
 
-        判断モデル（#450）が安全と確定したら、生成モデルを呼ばずに VERDICT_SAFE を返す
-        （判断モデルの判定は速く安いため先に待つ）。確定できなければ生成モデルで再判定する。
+        判断モデル（#450）が安全と確定したら VERDICT_SAFE を返し、確定できなければ生成モデルの判定に従う。
+        NG ワードが登録されていないときは、判断モデルが先に安全と確定すれば生成モデルを呼ばない
+        （判断モデルの判定は速く安い）。登録されているときは、判断モデルでは見分けられない変形表現を
+        生成モデルが見つけうるため、両方を並行して待ち、生成モデルが NG ワードへの該当を理由に
+        不適切と判定したものだけは判断モデルで上書きしない（#496）。
         """
         if not text or not text.strip():
             return VERDICT_UNKNOWN
-        if await self._decides_input_safe(text):
-            return VERDICT_SAFE
         prompt = _build_prompt(text, "ユーザー入力", self._ng_filter.words)
-        verdict, _reason, _parsed = await self._judge_verdict(prompt, schema=_response_schema())
+        if not self._ng_filter.words:
+            if await self._decides_input_safe(text):
+                return VERDICT_SAFE
+            verdict, _reason, _parsed = await self._judge_verdict(prompt, schema=_response_schema())
+            return verdict
+        decided_safe, (verdict, _reason, parsed) = await asyncio.gather(
+            self._decides_input_safe(text),
+            self._judge_verdict(prompt, schema=_response_schema()),
+        )
+        if decided_safe and not (verdict == VERDICT_UNSAFE and self._is_ng_word_match(parsed)):
+            return VERDICT_SAFE
         return verdict
 
     async def judge_voice_turn(
@@ -327,10 +348,15 @@ class ContentModerator:
             self._judge(prompt, route=True, include_agent=agent_history is not None),
         )
         if decided_safe and not is_safe:
-            # 判断モデルが安全と確定した入力は通す（カスケードの規則）。ただし生成モデルが不適切と
-            # 判定した応答の記憶カテゴリ・リマインダー・委任は、下の分岐で「無し」に倒す。
-            logger.info("モデレーション: 判断モデルが安全と確定したため、生成モデルの不適切判定を採用しません。")
-            is_safe, reason = True, ""
+            if self._is_ng_word_match(parsed):
+                # NG ワードの変形表現は判断モデルでは見分けられない（登録語を問いに載せないため）。
+                # 生成モデルがこの理由で不適切と判定したものは、判断モデルで上書きしない（#496）。
+                logger.info("モデレーション: 判断モデルは安全と確定したが、NG ワードの変形表現として不適切と判定します。")
+            else:
+                # 判断モデルが安全と確定した入力は通す（カスケードの規則）。ただし生成モデルが不適切と
+                # 判定した応答の記憶カテゴリ・リマインダー・委任は、下の分岐で「無し」に倒す。
+                logger.info("モデレーション: 判断モデルが安全と確定したため、生成モデルの不適切判定を採用しません。")
+                is_safe, reason = True, ""
         if parsed is None or parsed.get("safe") is not True:
             # JSON が読めなかった場合。安全判定は _judge の結果に従い、
             # 記憶カテゴリ・リマインダー・委任は「無し」に倒す。曖昧なsafe値での

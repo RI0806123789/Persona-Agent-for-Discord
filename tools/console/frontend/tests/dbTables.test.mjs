@@ -133,7 +133,7 @@ test("範囲外の日時が1行あっても、同じページのほかの行は�
   });
   const { RowFields } = compileCjs(detailSource, {
     react: React, "react/jsx-runtime": jsxRuntime,
-    "../api": { api: {}, errorMessage: String },
+    "../api": { api: {}, errorMessage: String, errorSafeMessage: () => null },
     "../components/Collapse": {}, "../components/expressive": {}, "../components/ui": {}, "../hooks": {},
     "../dbTables": tables, "../format": format, "../privacy": privacy,
     "./DbCells": cells,

@@ -42,7 +42,8 @@ export function levelOf(entry: LogEntry): LogLevel {
 
 const EXCEPTION_TRACEBACK = /^Traceback \(most recent call last\)/;
 // 共通Formatterは例外本文を省き、この見出しと字下げされた発生位置だけを出す。
-const SAFE_EXCEPTION = /^例外: \S+$/;
+// insights.py の SAFE_EXCEPTION_LINE と同じ形（例外情報を読めなかったときの定型文も含む。#494）。
+const SAFE_EXCEPTION = /^(?:例外: \S+|例外情報を読み取れませんでした。)$/;
 // discord.py が「heartbeat blocked」の警告に続けて出す「ループが何をしていたか」のスタックなど
 const OTHER_TRACEBACK = /traceback \(most recent call last\)/i;
 

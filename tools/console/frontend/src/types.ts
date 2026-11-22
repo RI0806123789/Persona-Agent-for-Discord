@@ -88,10 +88,13 @@ export interface StatusResponse {
   fetched_at: number;
   service: ServiceStatus | null;
   service_error: string | null;
+  service_error_safe?: string | null;
   resources: Resources | null;
   resources_error: string | null;
+  resources_error_safe?: string | null;
   git: GitInfo | null;
   git_error: string | null;
+  git_error_safe?: string | null;
 }
 
 export interface LogEntry {

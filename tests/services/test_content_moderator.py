@@ -54,6 +54,20 @@ class PromptBoundaryTests(unittest.TestCase):
                 types.GenerateContentConfig(response_mime_type="application/json", response_schema=schema)
 
 
+    def test_ng_word_match_mark_is_optional_and_explained_in_every_unsafe_example(self):
+        """NG ワードの変形表現かの印（#496）は任意の項目で、不適切の出力例にすべて入っている。"""
+        for route in (False, True):
+            schema = _response_schema(route=route)
+            self.assertEqual(schema["properties"]["ng_word_match"], {"type": "BOOLEAN"})
+            self.assertNotIn("ng_word_match", schema["required"])
+        self.assertNotIn("ng_word_match", _response_schema(emotion=True)["properties"])
+        prompt = _build_combined_system_prompt("2026-01-01 09:00", "UTC", include_agent=True)
+        unsafe = [json.loads(line) for line in prompt.splitlines() if line.startswith('{"safe": false')]
+        self.assertEqual(len(unsafe), 1)
+        self.assertIs(unsafe[0]["ng_word_match"], False)
+        self.assertIn("ng_word_match", prompt)
+
+
 class ExtractedReminderTests(unittest.TestCase):
     def test_reminder_text_is_bounded_single_line_and_mentions_are_inert(self):
         reminder = _normalize_reminder({
@@ -168,14 +182,14 @@ SAFE_ROUTE = {"safe": True, "category": "profile",
 class DecisionCascadeTests(unittest.IsolatedAsyncioTestCase):
     """判断モデル（#450）は「安全」と確定したときだけ使い、単独ではブロックしない。"""
 
-    def moderator(self, decider, **options):
-        return ContentModerator(None, SimpleNamespace(words=["架空のNG"]), decider=decider, **options)
+    def moderator(self, decider, *, words=("架空のNG",), **options):
+        return ContentModerator(None, SimpleNamespace(words=list(words)), decider=decider, **options)
 
-    async def test_voice_input_confident_safe_skips_the_generation_model(self) -> None:
+    async def test_voice_input_confident_safe_skips_the_generation_model_when_no_ng_words_are_registered(self) -> None:
         decider = FakeDecider(unsafe_probability(0.01))
         request = generation({"safe": False, "reason": "架空の理由"})
         with patch("persona_bot.services.content_moderator.generate_content", request):
-            self.assertEqual(await self.moderator(decider).judge_voice_input("架空の発言"), VERDICT_SAFE)
+            self.assertEqual(await self.moderator(decider, words=()).judge_voice_input("架空の発言"), VERDICT_SAFE)
         request.assert_not_awaited()
         text, questions, label = decider.calls[0]
         self.assertEqual(text, "架空の発言")
@@ -211,11 +225,57 @@ class DecisionCascadeTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(probability=probability, threshold=threshold):
                 request = generation({"safe": True})
                 moderator = self.moderator(
-                    FakeDecider(unsafe_probability(probability)), decision_safe_max_unsafe_probability=threshold,
+                    FakeDecider(unsafe_probability(probability)), words=(), decision_safe_max_unsafe_probability=threshold,
                 )
                 with patch("persona_bot.services.content_moderator.generate_content", request):
                     await moderator.judge_voice_input("架空の発言")
                 self.assertEqual(request.await_count, 0 if skips_generation else 1)
+
+    async def test_voice_input_with_ng_words_waits_for_both_and_lets_the_decision_override_other_unsafe(self) -> None:
+        """NG ワードが登録されているときは生成モデルも呼ぶが、NG ワード以外の理由の不適切判定は判断モデルが上書きする。"""
+        for payload in ({"safe": False, "reason": "架空の理由"},
+                        {"safe": False, "reason": "架空の理由", "ng_word_match": False}):
+            with self.subTest(payload=payload):
+                request = generation(payload)
+                with patch("persona_bot.services.content_moderator.generate_content", request):
+                    verdict = await self.moderator(FakeDecider(unsafe_probability(0.01))).judge_voice_input("架空の発言")
+                self.assertEqual(verdict, VERDICT_SAFE)
+                request.assert_awaited_once()
+
+    async def test_voice_input_keeps_the_ng_word_variant_verdict_even_when_the_decision_says_safe(self) -> None:
+        request = generation({"safe": False, "reason": "NGワードの変形", "ng_word_match": True})
+        with patch("persona_bot.services.content_moderator.generate_content", request):
+            verdict = await self.moderator(FakeDecider(unsafe_probability(0.01))).judge_voice_input("架空の発言")
+        self.assertEqual(verdict, VERDICT_UNSAFE)
+        # 判断モデルが安全と確定できないときは、従来どおり生成モデルの判定に従う。
+        with patch("persona_bot.services.content_moderator.generate_content", request):
+            verdict = await self.moderator(FakeDecider(unsafe_probability(0.5))).judge_voice_input("架空の発言")
+        self.assertEqual(verdict, VERDICT_UNSAFE)
+
+    async def test_voice_input_ng_word_mark_is_not_trusted_without_registered_words(self) -> None:
+        request = generation({"safe": False, "reason": "架空の理由", "ng_word_match": True})
+        with patch("persona_bot.services.content_moderator.generate_content", request):
+            verdict = await self.moderator(FakeDecider(unsafe_probability(0.01)), words=()).judge_voice_input("架空の発言")
+        self.assertEqual(verdict, VERDICT_SAFE)
+
+    async def test_text_route_keeps_the_ng_word_variant_judgement_but_not_the_actions(self) -> None:
+        """判断モデルが安全と確定しても、生成モデルが NG ワードの変形表現と判定したテキストは通さない（#496）。"""
+        request = generation({**UNSAFE_ROUTE, "ng_word_match": True})
+        with patch("persona_bot.services.content_moderator.generate_content", request), \
+                self.assertLogs("persona_bot.services.content_moderator", level="INFO") as logs:
+            result = await self.moderator(FakeDecider(unsafe_probability(0.02))).check_and_route("ね こ ま ん ま")
+        is_safe, reason, category, reminder = result
+        self.assertFalse(is_safe)
+        self.assertTrue(reason)
+        self.assertEqual((category, reminder), ("none", None))
+        self.assertIn("NG ワードの変形表現", logs.records[-1].getMessage())
+        self.assertNotIn("ね こ ま ん ま", "\n".join(record.getMessage() for record in logs.records))
+
+    async def test_text_route_mark_without_registered_words_does_not_block(self) -> None:
+        request = generation({**UNSAFE_ROUTE, "ng_word_match": True})
+        with patch("persona_bot.services.content_moderator.generate_content", request):
+            result = await self.moderator(FakeDecider(unsafe_probability(0.02)), words=()).check_and_route("架空の発言")
+        self.assertEqual(result, (True, "", "none", None))
 
     async def test_text_route_confident_safe_overrides_generation_unsafe_without_actions(self) -> None:
         request = generation(UNSAFE_ROUTE)

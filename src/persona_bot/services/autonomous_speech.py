@@ -336,5 +336,5 @@ class AutonomousSpeechMixin:
         """そのサーバーで選ばれているペルソナのプロンプトを読む（無ければ None）。"""
         return await load_persona_or_default(
             response_settings.prompt_file, logger=logger, loader=load_persona_template,
-            message="自律行動: プロンプトファイルが見つかりません。",
+            message="自律行動: プロンプトファイルを読み込めません。",
         )

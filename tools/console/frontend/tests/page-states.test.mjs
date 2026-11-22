@@ -74,12 +74,12 @@ function loadDataPage(db, { instrument = "" } = {}) {
   assert.ok(!instrument || text !== dataSource);
   const DataPage = compile(text, {
     react: runtime.hooks, "react/jsx-runtime": { jsx, jsxs: jsx },
-    "../api": { api: { db }, errorMessage: (error) => error.message },
+    "../api": { api: { db }, errorMessage: (error) => error.message, errorSafeMessage: (error) => error.safeMessage ?? null },
     "../components/Collapse": { Collapse: "Collapse" },
     "../components/expressive": names, "../components/Icon": { Icon: "Icon" }, "../components/ui": names,
     "../format": { formatBytes: String, formatNumber: String }, "../dbTables": dbTables,
     "../motionPreference": { prefersReducedMotion: () => true },
-    "../privacy": { usePrivacy: () => ({ mask: String }) },
+    "../privacy": { usePrivacy: () => ({ mask: String }), redactError: (text, safe, privacy) => (privacy.enabled && safe != null ? safe : text) },
     "./DataSummaryParts": names, "./DbTableDetail": { DbTableDetail: "DbTableDetail" },
     "./shared": { NotConnected: "NotConnected" },
   }).DataPage;
@@ -165,10 +165,10 @@ async function renderDetail(page) {
   const runtime = hookRenderer();
   const { DbTableDetail } = compile(detailSource, {
     react: runtime.hooks, "react/jsx-runtime": { jsx, jsxs: jsx },
-    "../api": { api: { dbTable: async () => page }, errorMessage: (error) => error.message },
+    "../api": { api: { dbTable: async () => page }, errorMessage: (error) => error.message, errorSafeMessage: (error) => error.safeMessage ?? null },
     "../components/Collapse": names, "../components/expressive": names, "../components/ui": names,
     "../dbTables": dbTables, "../format": { formatNumber: String },
-    "../hooks": { usePresence: () => ({}) }, "../privacy": { usePrivacy: () => ({ enabled: false }) },
+    "../hooks": { usePresence: () => ({}) }, "../privacy": { usePrivacy: () => ({ enabled: false }), redactError: (text, safe, privacy) => (privacy.enabled && safe != null ? safe : text) },
     "./DbCells": names,
   });
   const props = { table: "feedback", refreshToken: 0, onClose() {}, onNames() {} };
@@ -226,7 +226,7 @@ test("概要の最近のログは、ログも伏せ字も変わらない再描�
     "../logs": compileTs(await source("logs.ts")),
     // 保持行すべてを判定してから末尾を切り出す順序は、コンポーネント側（slice(-8)）で守る。
     "../logPresentation": { prepareLogEntries: (logs) => { calls += 1; return logs.map((entry) => ({ entry, level: "info", text: entry.message })); } },
-    "../privacy": { usePrivacy: () => activePrivacy },
+    "../privacy": { usePrivacy: () => activePrivacy, redactError: (text, safe, privacy) => (privacy.enabled && safe != null ? safe : text) },
   });
   const row = (message) => ({ ts: 1, pid: 42, priority: 6, source: "python", message });
   const logsA = Array.from({ length: 12 }, (_, i) => row(`行${i}`));

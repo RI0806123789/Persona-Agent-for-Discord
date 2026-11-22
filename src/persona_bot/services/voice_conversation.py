@@ -72,6 +72,7 @@ from persona_bot.services.voice_conversation_playback import VoicePlaybackMixin
 from persona_bot.services.voice_conversation_state import (
     _INPUT_BYTES_PER_MS, ConsentState, _Participant, _PlaybackState, _SpeakerState, _TranscriptState, _Utterance,
 )
+from persona_bot.utils.usage_graph import log_tokens_safely
 
 if TYPE_CHECKING:
     from persona_bot.services.voice_conversation_service import VoiceConversationService
@@ -650,7 +651,8 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
             return
         usage = getattr(message, "usage_metadata", None)
         if usage:
-            self._service.usage.log_tokens("音声会話", usage)
+            # 記録の失敗が Live の受信処理へ伝わらないよう、内部の呼び出しと同じ安全な入口を通す（#496）。
+            log_tokens_safely(self._service.usage, "音声会話", usage)
         content = getattr(message, "server_content", None)
         if content is None:
             return
