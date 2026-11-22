@@ -6,7 +6,10 @@
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    /* 順番に出す要素が、遅延の間だけ消えたままにならないよう、遅延も 0 にする（#494） */
+    animation-delay: 0s !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
     scroll-behavior: auto !important;
   }
   /* ビュー遷移は viewTransition.ts でも使わないようにしているが、念のため写しの動きも止める */

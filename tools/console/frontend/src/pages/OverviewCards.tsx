@@ -4,7 +4,7 @@ import { LoadingIndicator, WavyProgress } from "../components/expressive";
 import { Button, Card, Chip, InlineError, Notice, Sparkline, Stat, StatusChip } from "../components/ui";
 import { formatBytes, formatDuration, formatNumber, formatPercent, formatRelative } from "../format";
 import type { PageId } from "../navigation";
-import { usePrivacy } from "../privacy";
+import { redactError, usePrivacy } from "../privacy";
 import { ratioOf, usageTone } from "../status";
 import type { ConnectionState, Insights, Sample, StatusResponse } from "../types";
 
@@ -87,7 +87,9 @@ export function ResourceCards({ status, samples }: { status: StatusResponse | nu
       <Card title="サーバー稼働時間" icon="clock" source="ssh" className="span-3">
         <span className="headline-large">{formatDuration(resources?.uptime_seconds)}</span>
         <span className="body-small muted">OS の再起動からの経過時間</span>
-        {status?.resources_error && <InlineError>{status.resources_error}</InlineError>}
+        {status?.resources_error && (
+          <InlineError>{redactError(status.resources_error, status.resources_error_safe, privacy)}</InlineError>
+        )}
       </Card>
     </>
   );
@@ -98,12 +100,14 @@ export function BotInsightsCard({
   insights,
   fetchedAt,
   error,
+  errorSafe,
   now,
   onNavigate,
 }: {
   insights: Insights | null;
   fetchedAt: number | null;
   error: string | null;
+  errorSafe?: string | null;
   now: number;
   onNavigate: (page: PageId) => void;
 }) {
@@ -112,7 +116,7 @@ export function BotInsightsCard({
     return (
       <Card title="ボットの中の状態" icon="bot" source="ssh" className="span-12">
         {error ? (
-          <InlineError>{error}</InlineError>
+          <InlineError>{redactError(error, errorSafe, privacy)}</InlineError>
         ) : (
           <div className="loading-row">
             <LoadingIndicator size={40} />
@@ -216,7 +220,7 @@ export function GitCard({ status, now }: { status: StatusResponse | null; now: n
           </span>
         </>
       ) : status?.git_error ? (
-        <InlineError>{status.git_error}</InlineError>
+        <InlineError>{redactError(status.git_error, status.git_error_safe, privacy)}</InlineError>
       ) : (
         <LoadingIndicator size={36} />
       )}

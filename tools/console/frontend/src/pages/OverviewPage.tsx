@@ -5,7 +5,7 @@ import { Button, Card, InlineError, Sparkline, SplitButton, Stat, StatusChip } f
 import { formatBytes, formatClock, formatDuration, formatNumber } from "../format";
 import { LEVEL_LABELS } from "../logs";
 import { prepareLogEntries } from "../logPresentation";
-import { usePrivacy } from "../privacy";
+import { redactError, usePrivacy } from "../privacy";
 import type { PageId } from "../navigation";
 import { canStopService, serviceTone } from "../status";
 import type { ConnectionState, Insights, LogEntry, Profile, Sample, ServiceAction, StatusResponse } from "../types";
@@ -17,12 +17,14 @@ export function OverviewPage({
   connecting,
   status,
   statusError,
+  statusErrorSafe,
   samples,
   connection,
   logs,
   insights,
   insightsFetchedAt,
   insightsError,
+  insightsErrorSafe,
   onNavigate,
   onRequestAction,
   busyAction,
@@ -36,12 +38,14 @@ export function OverviewPage({
   connecting: boolean;
   status: StatusResponse | null;
   statusError: string | null;
+  statusErrorSafe?: string | null;
   samples: Sample[];
   connection: ConnectionState | null;
   logs: LogEntry[];
   insights: Insights | null;
   insightsFetchedAt: number | null;
   insightsError: string | null;
+  insightsErrorSafe?: string | null;
   onNavigate: (page: PageId) => void;
   onRequestAction: (action: ServiceAction) => void;
   busyAction: ServiceAction | null;
@@ -59,6 +63,7 @@ export function OverviewPage({
       <ServiceHero
         status={status}
         statusError={statusError}
+        statusErrorSafe={statusErrorSafe}
         samples={samples}
         onRequestAction={onRequestAction}
         busyAction={busyAction}
@@ -68,7 +73,7 @@ export function OverviewPage({
       />
       <SshCard connection={connection} samples={samples} now={now} />
       <ResourceCards status={status} samples={samples} />
-      <BotInsightsCard insights={insights} fetchedAt={insightsFetchedAt} error={insightsError} now={now} onNavigate={onNavigate} />
+      <BotInsightsCard insights={insights} fetchedAt={insightsFetchedAt} error={insightsError} errorSafe={insightsErrorSafe} now={now} onNavigate={onNavigate} />
       <GitCard status={status} now={now} />
       <RecentLogs logs={logs} onNavigate={onNavigate} />
     </div>
@@ -78,6 +83,7 @@ export function OverviewPage({
 function ServiceHero({
   status,
   statusError,
+  statusErrorSafe,
   samples,
   onRequestAction,
   busyAction,
@@ -87,6 +93,7 @@ function ServiceHero({
 }: {
   status: StatusResponse | null;
   statusError: string | null;
+  statusErrorSafe?: string | null;
   samples: Sample[];
   onRequestAction: (action: ServiceAction) => void;
   busyAction: ServiceAction | null;
@@ -127,8 +134,10 @@ function ServiceHero({
       </div>
 
       {tone.hint && <InlineError>{tone.hint}</InlineError>}
-      {statusError && <InlineError>{statusError}</InlineError>}
-      {status?.service_error && <InlineError>{status.service_error}</InlineError>}
+      {statusError && <InlineError>{redactError(statusError, statusErrorSafe, privacy)}</InlineError>}
+      {status?.service_error && (
+        <InlineError>{redactError(status.service_error, status.service_error_safe, privacy)}</InlineError>
+      )}
 
       <div className="stat-row">
         <Stat label="PID" value={service?.main_pid ?? "—"} mono />

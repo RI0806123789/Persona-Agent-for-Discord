@@ -2,14 +2,14 @@
 // 会話・記憶・リマインダーの本文と Discord の ID も届くので、伏せ字モードでは列の種類ごとに隠す
 // （dbTables.ts の isSecretKind）。統計の収集を止めた人の発言サンプルと解析は、サーバーから持ち帰らない。
 import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { api, errorMessage } from "../api";
+import { api, errorMessage, errorSafeMessage } from "../api";
 import { CollapseBody } from "../components/Collapse";
 import { WavyProgress } from "../components/expressive";
 import { Button, Card, Chip, EmptyState, IconButton, InlineError, Notice } from "../components/ui";
 import { DB_TABLE_SPECS, namesInPage, resolveColumns, type ColumnSpec } from "../dbTables";
 import { formatNumber } from "../format";
 import { usePresence } from "../hooks";
-import { usePrivacy } from "../privacy";
+import { redactError, usePrivacy } from "../privacy";
 import type { DbTablePage } from "../types";
 import { CellValue, RowFields } from "./DbCells";
 
@@ -35,6 +35,7 @@ export function DbTableDetail({
   const [data, setData] = useState<DbTablePage | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorSafe, setErrorSafe] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
   const privacy = usePrivacy();
   const requestId = useRef(0);
@@ -48,11 +49,13 @@ export function DbTableDetail({
         if (current !== requestId.current) return;
         setData(page);
         setError(null);
+        setErrorSafe(null);
         setExpanded(new Set());
         onNames(namesInPage(page));
       } catch (caught) {
         if (current !== requestId.current) return;
         setError(errorMessage(caught));
+        setErrorSafe(errorSafeMessage(caught));
       } finally {
         if (current === requestId.current) setLoading(false);
       }
@@ -132,7 +135,7 @@ export function DbTableDetail({
       ) : (
         <Notice icon="shield">読み取り専用（mode=ro）で、この 50 行だけを取り寄せています。スクリーンショットを共有するときは伏せ字モード（h）にしてください。</Notice>
       )}
-      {error && <InlineError>{error}</InlineError>}
+      {error && <InlineError>{redactError(error, errorSafe, privacy)}</InlineError>}
       {data?.errors.map((message) => <InlineError key={message}>{message}</InlineError>)}
       {!data && !error && <WavyProgress label="取り寄せています" />}
       {data && rows.length === 0 && !data.errors.length && <EmptyState icon="table" title="行がありません" />}

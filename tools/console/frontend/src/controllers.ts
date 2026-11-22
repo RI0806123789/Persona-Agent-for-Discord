@@ -1,6 +1,6 @@
 /** 接続世代・デプロイ・サービス操作の非同期処理と後片付け。 */
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction, type RefObject } from "react";
-import { ApiError, api, errorMessage } from "./api";
+import { ApiError, api, errorMessage, errorSafeMessage } from "./api";
 import { usePolling } from "./hooks";
 import { RequestScope } from "./requestScope";
 import { ACTION_LABELS } from "./status";
@@ -152,13 +152,14 @@ type Setter<T> = Dispatch<SetStateAction<T>>;
 
 export function useConsolePolling({
   requestScope, connectionChanging, wasConnected, applyConnection, connected, autoRefresh, connectionKey,
-  setBackendError, setStatus, setStatusError, setRefreshing, setSamples, setInsights,
-  setInsightsFetchedAt, setInsightsError,
+  setBackendError, setStatus, setStatusError, setStatusErrorSafe, setRefreshing, setSamples, setInsights,
+  setInsightsFetchedAt, setInsightsError, setInsightsErrorSafe,
 }: Scope & {
   applyConnection: (value: ConnectionState) => void; connected: boolean; autoRefresh: boolean; connectionKey: string;
   setBackendError: Setter<string | null>; setStatus: Setter<StatusResponse | null>;
-  setStatusError: Setter<string | null>; setRefreshing: Setter<boolean>; setSamples: Setter<Sample[]>;
+  setStatusError: Setter<string | null>; setStatusErrorSafe: Setter<string | null>; setRefreshing: Setter<boolean>; setSamples: Setter<Sample[]>;
   setInsights: Setter<Insights | null>; setInsightsFetchedAt: Setter<number | null>; setInsightsError: Setter<string | null>;
+  setInsightsErrorSafe: Setter<string | null>;
 }) {
   const refreshConnection = useCallback(async () => {
     if (connectionChanging.current) return;
@@ -184,10 +185,12 @@ export function useConsolePolling({
       if (!isCurrent()) return;
       setStatus(next);
       setStatusError(null);
+      setStatusErrorSafe(null);
       setSamples((previous) => [...previous, toSample(next)].slice(-MAX_SAMPLES));
     } catch (error) {
       if (!isCurrent()) return;
       setStatusError(errorMessage(error));
+      setStatusErrorSafe(errorSafeMessage(error));
       if (error instanceof ApiError && (error.status === 409 || error.status === 502)) void refreshConnection();
     } finally {
       if (isCurrent()) setRefreshing(false);
@@ -203,9 +206,11 @@ export function useConsolePolling({
       setInsights(result.data);
       setInsightsFetchedAt(result.fetched_at);
       setInsightsError(null);
+      setInsightsErrorSafe(null);
     } catch (error) {
       if (!isCurrent()) return;
       setInsightsError(errorMessage(error));
+      setInsightsErrorSafe(errorSafeMessage(error));
     }
   }, []);
   usePolling(refreshInsights, INSIGHTS_INTERVAL_MS, connected && autoRefresh, connectionKey);

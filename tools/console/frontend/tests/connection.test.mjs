@@ -75,7 +75,7 @@ function consoleHarness(api, renderTree = false) {
     "./hooks": { useStoredState: (_key, initial) => runtime.hooks.useState(initial), useNow: () => 0,
       useMediaQuery: () => true, usePolling: () => {} },
     "./useLogStream": { useLogStream: () => ({}) },
-    "./api": { api, errorMessage: (error) => error.message, ApiError: Error },
+    "./api": { api, errorMessage: (error) => error.message, errorSafeMessage: (error) => error.safeMessage ?? null, ApiError: Error },
     "./useConsoleShortcuts": { useConsoleShortcuts: () => false },
     "./components/toast": { useToast: () => (notice) => notices.push(notice), ToastViewport: "ToastViewport" },
     "./privacy": privacy, "./requestScope": scopes,
@@ -222,7 +222,7 @@ test("データ画面は切り替え前のDB集計を破棄し、切断後も再
   let calls = 0;
   const instrumented = dataSource.replace("  if (!connected) {", "  return {summary, loading, error};\n  if (!connected) {");
   const component = compile(instrumented, { react: runtime.hooks, "../api": {
-    api: { db: () => (++calls === 1 ? old.promise : fresh.promise) }, errorMessage: (error) => error.message,
+    api: { db: () => (++calls === 1 ? old.promise : fresh.promise) }, errorMessage: (error) => error.message, errorSafeMessage: (error) => error.safeMessage ?? null,
   }, "../privacy": { usePrivacy: () => ({}) } }).DataPage;
   const render = (connected, connectionKey) => runtime.render(component, { connected, connectionKey, refreshToken: 0 });
   render(true, "A"); runtime.commit();
@@ -239,7 +239,7 @@ test("データ画面は接続先が変わったら、開いていたテーブ�
   const instrumented = dataSource.replace("  if (!connected) {", "  return {openTable, selectTable};\n  if (!connected) {");
   assert.notEqual(instrumented, dataSource);
   const component = compile(instrumented, { react: runtime.hooks, "../api": {
-    api: { db: () => new Promise(() => {}) }, errorMessage: (error) => error.message,
+    api: { db: () => new Promise(() => {}) }, errorMessage: (error) => error.message, errorSafeMessage: (error) => error.safeMessage ?? null,
   }, "../privacy": { usePrivacy: () => ({}) } }).DataPage;
   const render = (connectionKey) => runtime.render(component, { connected: true, connectionKey, refreshToken: 0 });
   const originalFrame = globalThis.requestAnimationFrame;
@@ -277,7 +277,7 @@ test("接続切替の最初の描画から、子のテーブル取得を明示�
   const privacy = { MASK: "MASKED", usePrivacy: () => ({ enabled: masked, mask: () => "MASKED" }) };
   const modules = {
     "react/jsx-runtime": { jsx, jsxs: jsx },
-    "../api": { api, errorMessage: (error) => error.message },
+    "../api": { api, errorMessage: (error) => error.message, errorSafeMessage: (error) => error.safeMessage ?? null },
     "../privacy": privacy, "../dbTables": tableSpecs,
     "../format": { formatNumber: String },
     "../components/Collapse": { Collapse: "Collapse" },

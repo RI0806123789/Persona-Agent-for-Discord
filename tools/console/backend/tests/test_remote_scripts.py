@@ -1148,5 +1148,20 @@ class DbSummaryEntryPointTests(unittest.TestCase):
         self.assertTrue(json.loads(completed.stdout.strip().splitlines()[-1])["exists"])
 
 
+class SnowflakeValidationTests(unittest.TestCase):
+    def test_trailing_newline_is_not_a_valid_discord_id(self) -> None:
+        """`$` は末尾の改行の直前にも一致するため、`match` では改行付きの ID が通る（#494）。"""
+        self.assertTrue(insights.SNOWFLAKE_RE.fullmatch("123456789012345678"))
+        for value in ("123456789012345678\n", "\n", "", "12a", "1" * 21):
+            with self.subTest(value=value):
+                self.assertIsNone(insights.SNOWFLAKE_RE.fullmatch(value))
+
+    def test_exception_marker_lines_match_the_frontend_pattern(self) -> None:
+        """ボットの共通Formatterの定型行（例外の型名・読み取れなかった旨）だけを数える。"""
+        for line in ("例外: TimeoutError", "例外情報を読み取れませんでした。"):
+            self.assertTrue(insights.SAFE_EXCEPTION_LINE.match(line), line)
+        self.assertFalse(insights.SAFE_EXCEPTION_LINE.match("例外情報を読み取れませんでした。 続き"))
+
+
 if __name__ == "__main__":
     unittest.main()

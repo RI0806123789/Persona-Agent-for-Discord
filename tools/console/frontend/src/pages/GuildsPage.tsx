@@ -3,7 +3,7 @@ import { Icon, type IconName } from "../components/Icon";
 import { Card, Chip, InlineError, Notice, StatusChip } from "../components/ui";
 import { formatRelative } from "../format";
 import { describePersona, PERSONA_ESTIMATE_NOTE } from "../personaView";
-import { usePrivacy } from "../privacy";
+import { redactError, usePrivacy } from "../privacy";
 import type { GuildSettingsView, Insights, Profile } from "../types";
 import { NotConnected } from "./shared";
 
@@ -15,6 +15,7 @@ export function GuildsPage({
   insights,
   insightsFetchedAt,
   insightsError,
+  insightsErrorSafe,
   now,
 }: {
   connected: boolean;
@@ -24,6 +25,7 @@ export function GuildsPage({
   insights: Insights | null;
   insightsFetchedAt: number | null;
   insightsError: string | null;
+  insightsErrorSafe?: string | null;
   now: number;
 }) {
   const privacy = usePrivacy();
@@ -34,7 +36,7 @@ export function GuildsPage({
     return (
       <Card variant="filled">
         {insightsError ? (
-          <InlineError>{insightsError}</InlineError>
+          <InlineError>{redactError(insightsError, insightsErrorSafe, privacy)}</InlineError>
         ) : (
           <div className="loading-row">
             <LoadingIndicator size={48} />

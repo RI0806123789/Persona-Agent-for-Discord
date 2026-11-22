@@ -482,7 +482,7 @@ class _DiscordReader:
                     try:
                         voice, _ = self.discord_get(f"/guilds/{guild_id}/voice-states/@me", token, deadline=deadline)
                         channel_id = voice.get("channel_id") if isinstance(voice, dict) else None
-                        if isinstance(channel_id, str) and SNOWFLAKE_RE.match(channel_id):
+                        if isinstance(channel_id, str) and SNOWFLAKE_RE.fullmatch(channel_id):
                             channel, _ = self.discord_get(f"/channels/{channel_id}", token, deadline=deadline)
                             name = channel.get("name") if isinstance(channel, dict) else None
                             voice_channel = name if isinstance(name, str) and name else "（名前を取得できないチャンネル）"

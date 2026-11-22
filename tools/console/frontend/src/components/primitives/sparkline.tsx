@@ -50,10 +50,14 @@ export function Sparkline({
 
   const onMove = (event: PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
+    if (!(rect.width > 0)) return; // 描画幅 0 だと NaN になる（#494）
     const ratio = (event.clientX - rect.left) / rect.width;
     setHover(Math.max(0, Math.min(valid.length - 1, Math.round(ratio * (valid.length - 1)))));
   };
-  const active = hover === null ? null : { ...coords[hover], point: valid[hover] };
+  // 点が減った後に古い添字が残っても落ちないよう、座標と点の両方がある場合だけ使う
+  const hoverCoord = hover === null ? undefined : coords[hover];
+  const hoverPoint = hover === null ? undefined : valid[hover];
+  const active = hoverCoord && hoverPoint ? { ...hoverCoord, point: hoverPoint } : null;
   const leftPercent = active ? (active.x / width) * 100 : 0;
 
   return (

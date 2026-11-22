@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { api, errorMessage } from "../api";
+import { api, errorMessage, errorSafeMessage } from "../api";
 import { Collapse } from "../components/Collapse";
 import { LoadingIndicator, WavyProgress } from "../components/expressive";
 import { Icon } from "../components/Icon";
@@ -7,7 +7,7 @@ import { Button, Card, InlineError, Notice, Stat } from "../components/ui";
 import { formatBytes, formatNumber } from "../format";
 import { DB_TABLE_SPECS, isViewableTable } from "../dbTables";
 import { prefersReducedMotion } from "../motionPreference";
-import { usePrivacy } from "../privacy";
+import { redactError, usePrivacy } from "../privacy";
 import type { DbSummary, Profile } from "../types";
 import { FeedbackSummary, FeedbackTrend, SchemaChip, StatusCounts } from "./DataSummaryParts";
 import { DbTableDetail } from "./DbTableDetail";
@@ -34,6 +34,7 @@ export function DataPage({
   const [summary, setSummary] = useState<DbSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorSafe, setErrorSafe] = useState<string | null>(null);
   // 中身を開いているテーブル。中身には会話や記憶が入るので、開くのは利用者が選んだときだけにする
   // （覚えておいて、ページを開いただけで取り寄せることはしない）
   const [openSelection, setOpenSelection] = useState<{ connectionKey: string; table: string } | null>(null);
@@ -73,9 +74,11 @@ export function DataPage({
       if (current !== requestId.current) return;
       setSummary(data);
       setError(null);
+      setErrorSafe(null);
     } catch (caught) {
       if (current !== requestId.current) return;
       setError(errorMessage(caught));
+      setErrorSafe(errorSafeMessage(caught));
     } finally {
       if (current === requestId.current) setLoading(false);
     }
@@ -84,6 +87,7 @@ export function DataPage({
   useEffect(() => {
     setSummary(null);
     setError(null);
+    setErrorSafe(null);
     // 取得の途中で切断・接続先の変更があると、cleanup が世代を進めるため、その取得の finally は
     // loading を戻さない。ここで戻しておく（取得するなら load() がすぐに立て直す。#478）。
     setLoading(false);
@@ -112,7 +116,7 @@ export function DataPage({
           </Button>
         }
       >
-        {error && <InlineError>{error}</InlineError>}
+        {error && <InlineError>{redactError(error, errorSafe, privacy)}</InlineError>}
         {summary && !summary.exists && <InlineError>{privacy.mask(summary.path)} が見つかりません。</InlineError>}
         {!summary && !error && <LoadingIndicator size={40} />}
         {summary?.exists && (
