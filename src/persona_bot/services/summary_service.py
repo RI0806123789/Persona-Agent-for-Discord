@@ -67,7 +67,7 @@ async def generate_channel_summary(
     # ペルソナが見つからなくても議事録自体は作れるため、口調なしで続行する
     persona_prompt = await load_persona_or_default(
         response_settings.prompt_file, logger=logger, loader=load_persona_template, default="",
-        message="要約: プロンプトファイルが見つかりません。口調なしで続行します。",
+        message="要約: プロンプトファイルを読み込めません。口調なしで続行します。",
     )
 
     full_prompt = build_summary_prompt(persona_prompt, period.name, source.text)

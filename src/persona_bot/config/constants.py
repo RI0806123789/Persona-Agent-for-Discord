@@ -107,6 +107,14 @@ DECISION_TIMEOUT_SECONDS = 3.0
 # 0.1 なら不適切な例文は1件も安全と確定しない。実際の利用者の発言の分布で見直す
 # （安全と確定できなかった発言は、運用ログに確率と確信度だけを出している）。
 DECISION_INPUT_SAFE_MAX_UNSAFE_PROBABILITY = 0.1
+# 判断モデルが使えない状態（キー・地域・利用枠・SDK の非公開の送信口の変化など）が続くとき、会話のたびに
+# 問い合わせと警告を繰り返さないための歯止め（#496）。連続で DECISION_FAILURE_THRESHOLD 回失敗したら、
+# DECISION_SUSPEND_SECONDS の間は問い合わせず（生成モデルの判定だけで進む）、過ぎたら1回だけ試す。
+# 403 / 404 などの再試行しても通らない失敗（DECISION_UNAVAILABLE_STATUS_CODES）は1回で止める。
+# ログは「失敗し始めたとき」と「復旧したとき」だけ出す。
+DECISION_FAILURE_THRESHOLD = 3
+DECISION_SUSPEND_SECONDS = 300.0
+DECISION_UNAVAILABLE_STATUS_CODES = frozenset({401, 403, 404, 429})
 # ボットの応答が出力モデレーションで不適切と判定されたとき、本文の代わりに返す定型の謝罪文。
 # 親密度・記憶・評価の対象にしないため、呼び出し側はこの文面そのものではなく判定の成否で分岐する。
 BOT_RESPONSE_REFUSAL_TEXT = "申し訳ありませんが、適切な応答を生成できませんでした。"

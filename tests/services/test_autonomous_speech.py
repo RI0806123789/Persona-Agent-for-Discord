@@ -192,6 +192,23 @@ class AutonomousSpeechTests(unittest.IsolatedAsyncioTestCase):
         self.sent.assert_not_awaited()
         self.spoken.assert_not_awaited()
 
+    async def test_unreadable_persona_still_posts_the_opening_notice_and_skips_the_monologue(self) -> None:
+        """ペルソナを読めない（権限がない・UTF-8 でない）ときも、見つからないときと同じ扱いにする（#496）。"""
+        for error in (PermissionError("架空"), UnicodeDecodeError("utf-8", b"\x82", 0, 1, "架空")):
+            with self.subTest(error=type(error).__name__):
+                self.loader.side_effect = error
+                self.sent.reset_mock()
+                self.gemini.generate.reset_mock()
+                with self.assertLogs("persona_bot.services.autonomous_service", level="WARNING"):
+                    await self.speak("opening")
+                self.assertEqual(self.sent.await_args.args[1], autonomous_speech.AUTONOMOUS_OPENING_NOTICE)
+                self.gemini.generate.assert_not_awaited()
+                self.sent.reset_mock()
+                with self.assertLogs("persona_bot.services.autonomous_service", level="WARNING"):
+                    await self.speak("monologue")
+                self.sent.assert_not_awaited()
+                self.gemini.generate.assert_not_awaited()
+
     async def test_all_speech_paths_load_persona_without_blocking_loop(self) -> None:
         for kind in ("opening", "monologue", "comment"):
             with self.subTest(kind=kind):

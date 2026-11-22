@@ -35,9 +35,17 @@ class UsageTracker:
             return int(usage_info.get(dict_key, 0) or 0)
         return int(getattr(usage_info, attr_name, 0) or 0)
 
+    def _read_output_token_count(self, usage_info: Any) -> int:
+        """出力トークン数を読む。生成 API は candidates_token_count、Gemini Live の usage_metadata
+        （types.UsageMetadata）は response_token_count に入れるので、どちらの形も読む（#496）。"""
+        return (
+            self._read_token_count(usage_info, "candidates_token_count", "candidatesTokenCount")
+            or self._read_token_count(usage_info, "response_token_count", "responseTokenCount")
+        )
+
     def record(self, usage_info: Any) -> None:
         self.input_tokens.append(self._read_token_count(usage_info, "prompt_token_count", "promptTokenCount"))
-        self.output_tokens.append(self._read_token_count(usage_info, "candidates_token_count", "candidatesTokenCount"))
+        self.output_tokens.append(self._read_output_token_count(usage_info))
         self.total_tokens.append(self._read_token_count(usage_info, "total_token_count", "totalTokenCount"))
 
     def log_tokens(self, context_label: str, usage_info: Any | None) -> None:

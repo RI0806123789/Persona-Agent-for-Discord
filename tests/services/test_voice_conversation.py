@@ -1393,6 +1393,13 @@ class LifecycleTests(ConversationTestBase):
         await self.conversation._on_live_message(SimpleNamespace(server_content=None, usage_metadata=usage))
         self.service.usage.log_tokens.assert_called_once_with("音声会話", usage)
 
+    async def test_usage_recording_failure_does_not_stop_the_live_receive_loop(self):
+        """記録の失敗が Live の受信処理へ伝わらない（内部の呼び出しと同じ安全な入口を通す。#496）。"""
+        self.service.usage.log_tokens.side_effect = RuntimeError("架空の記録の失敗")
+        usage = SimpleNamespace(total_token_count=10)
+        with self.assertLogs("persona_bot.utils.usage_graph", level="WARNING"):
+            await self.conversation._on_live_message(SimpleNamespace(server_content=None, usage_metadata=usage))
+
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
     def make_service(self, **kwargs):

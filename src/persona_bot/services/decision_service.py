@@ -13,11 +13,16 @@
 import asyncio
 import logging
 import math
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any, Protocol
 
-from persona_bot.config.constants import DECISION_MODEL_NAME, DECISION_TIMEOUT_SECONDS
+from persona_bot.config.constants import (
+    DECISION_FAILURE_THRESHOLD, DECISION_MODEL_NAME, DECISION_SUSPEND_SECONDS, DECISION_TIMEOUT_SECONDS,
+    DECISION_UNAVAILABLE_STATUS_CODES,
+)
 from persona_bot.services.genai_client import create_decision, error_status_code
 from persona_bot.utils.usage_graph import UsageTracker, log_tokens_safely
 
@@ -139,17 +144,78 @@ class GeminiDecider:
         model_name: str = DECISION_MODEL_NAME,
         timeout: float = DECISION_TIMEOUT_SECONDS,
         usage: UsageTracker | None = None,
+        failure_threshold: int = DECISION_FAILURE_THRESHOLD,
+        suspend_seconds: float = DECISION_SUSPEND_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._genai_client = genai_client
         self._model_name = model_name
         self._timeout = timeout
         # 判断のたびの入力トークンを記録する。None なら記録しない。
         self._usage = usage
+        # 使えない状態が続くとき、会話のたびに問い合わせ・ログを繰り返さないための状態（#496）。
+        # メモリだけに持つ（再起動すれば最初から試す）。
+        self._failure_threshold = max(1, failure_threshold)
+        self._suspend_seconds = suspend_seconds
+        self._clock = clock
+        self._consecutive_failures = 0
+        self._suspended_until: float | None = None
+        # 失敗が続いている間は True。ログは、これが切り替わったとき（失敗し始め・復旧）だけ出す。
+        self._failing = False
+        self._suspend_logged = False
+
+    def _record_success(self) -> None:
+        """判断モデルが応答した（入力の拒否を含む）。失敗の記録を戻し、復旧したときだけログを出す。"""
+        self._consecutive_failures = 0
+        self._suspended_until = None
+        if self._failing:
+            self._failing = False
+            logger.info("判断モデル: 問い合わせが再び通りました。")
+
+    def _record_failure(
+        self, label: str, *, status_code: int | None, error: BaseException | None, timed_out: bool = False,
+    ) -> None:
+        """判断モデルが使えなかった。警告は、失敗し始めたときと、問い合わせを止めるとき（1回の失敗の連なりで1回）だけ。"""
+        self._consecutive_failures += 1
+        suspend = status_code in DECISION_UNAVAILABLE_STATUS_CODES or self._consecutive_failures >= self._failure_threshold
+        if suspend:
+            self._suspended_until = self._clock() + self._suspend_seconds
+        status = "期限内に応答なし" if timed_out else (status_code if status_code is not None else "不明")
+        if not self._failing:
+            self._failing = True
+            self._suspend_logged = suspend
+            logger.warning(
+                "判断モデル（%s）: 問い合わせに失敗したため、判定せず生成モデルの判定に従います（状態=%s）。%s",
+                label, status, self._suspend_notice() if suspend else "", exc_info=error,
+            )
+        elif suspend and not self._suspend_logged:
+            self._suspend_logged = True
+            logger.warning("判断モデル（%s）: 失敗が続いています（状態=%s）。%s", label, status, self._suspend_notice())
+        else:
+            logger.debug("判断モデル（%s）: 問い合わせの失敗が続いています（状態=%s）。", label, status)
+
+    def _suspend_notice(self) -> str:
+        return f"{self._suspend_seconds:.0f} 秒間は問い合わせず、生成モデルの判定だけで進みます。"
+
+    def _is_suspended(self) -> bool:
+        """問い合わせを止めている間か。期限が過ぎたら止めるのをやめ、次の1回を試せるようにする。"""
+        if self._suspended_until is None:
+            return False
+        if self._clock() < self._suspended_until:
+            return True
+        # 期限切れ。次の問い合わせの結果で、復旧か再停止かが決まる（試すのは同時に1回に限らないが、
+        # 失敗すれば直ちに再停止する）。
+        self._suspended_until = None
+        self._consecutive_failures = max(0, self._failure_threshold - 1)
+        return False
 
     async def decide_binary(
         self, text: str, questions: Mapping[str, BinaryQuestion], *, label: str = "判断",
     ) -> dict[str, BinaryAnswer] | None:
         if not text or not text.strip() or not questions:
+            return None
+        if self._is_suspended():
+            # 使えない状態が続いている間は、問い合わせも待ち時間もログも出さない（#496）。
             return None
         try:
             result = await create_decision(
@@ -160,17 +226,16 @@ class GeminiDecider:
                 timeout=self._timeout,
             )
         except asyncio.TimeoutError:
-            logger.warning("判断モデル（%s）: 期限内に応答が無かったため判定しません。", label)
+            self._record_failure(label, status_code=None, error=None, timed_out=True)
             return None
         except Exception as error:
             block_code = _block_error_code(error)
             if block_code is not None:
+                # 入力そのものの拒否は、判断モデルが使えないことではない（応答は来ている）。
+                self._record_success()
                 logger.warning("判断モデル（%s）: 入力が拒否されたため判定しません（%s）。", label, block_code)
             else:
-                logger.warning(
-                    "判断モデル（%s）: 問い合わせに失敗したため判定しません（状態=%s）。",
-                    label, error_status_code(error) or "不明", exc_info=error,
-                )
+                self._record_failure(label, status_code=error_status_code(error), error=error)
             return None
 
         # 応答を受け取った時点で記録する（拒否された入力も API を消費している）。
@@ -179,9 +244,13 @@ class GeminiDecider:
 
         feedback = result.get("prompt_feedback")
         if isinstance(feedback, dict) and feedback.get("block_reason"):
+            self._record_success()
             logger.warning("判断モデル（%s）: 入力が拒否されたため判定しません。", label)
             return None
         answers = read_binary_answers(result.get("answers"), questions.keys())
         if answers is None:
-            logger.warning("判断モデル（%s）: 応答の形が想定と違うため判定しません。", label)
+            # 応答の形が想定と違う（API の仕様変更など）。使えない状態として数える。
+            self._record_failure(label, status_code=None, error=None)
+            return None
+        self._record_success()
         return answers

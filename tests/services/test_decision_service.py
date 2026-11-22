@@ -134,6 +134,114 @@ class GeminiDeciderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"q": BinaryAnswer(0.6, 0.6)})
 
 
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class GeminiDeciderSuspensionTests(unittest.IsolatedAsyncioTestCase):
+    """判断モデルが使えない状態が続くとき、問い合わせ・待ち時間・ログを繰り返さない（#496）。"""
+
+    def setUp(self) -> None:
+        self.clock = FakeClock()
+        self.decider = GeminiDecider("架空のクライアント", failure_threshold=3, suspend_seconds=300, clock=self.clock)
+
+    async def call(self, *, result=None, error=None):
+        request = AsyncMock(side_effect=error) if error is not None else AsyncMock(return_value=result)
+        with patch("persona_bot.services.decision_service.create_decision", request):
+            answers = await self.decider.decide_binary("架空の発言", {"q": QUESTION}, label="架空の用途")
+        return answers, request
+
+    @staticmethod
+    def ok():
+        return response({"q": {"type": "noul", "noul": 0.05, "confidence": 0.95}})
+
+    async def test_unavailable_status_suspends_at_once_and_logs_only_the_first_failure(self) -> None:
+        for status in (401, 403, 404, 429):
+            with self.subTest(status=status):
+                self.setUp()
+                error = errors.ClientError(status, {"error": {"code": status, "message": "架空の本文"}})
+                with self.assertLogs(LOGGER, level="WARNING") as logs:
+                    answers, request = await self.call(error=error)
+                self.assertIsNone(answers)
+                request.assert_awaited_once()
+                self.assertEqual(len(logs.records), 1)
+                self.assertIn("300 秒間は問い合わせず", logs.records[0].getMessage())
+                # 止めている間は、問い合わせも例外のログも出さない。
+                for _ in range(3):
+                    with self.assertNoLogs(LOGGER, level="DEBUG"):
+                        answers, request = await self.call(error=error)
+                    self.assertIsNone(answers)
+                    request.assert_not_awaited()
+
+    async def test_generic_failures_suspend_after_the_threshold_with_one_extra_warning(self) -> None:
+        error = RuntimeError("架空の障害")
+        with self.assertLogs(LOGGER, level="DEBUG") as logs:
+            for _ in range(3):
+                _answers, request = await self.call(error=error)
+                request.assert_awaited_once()
+            _answers, request = await self.call(error=error)
+            request.assert_not_awaited()
+        warnings = [r for r in logs.records if r.levelname == "WARNING"]
+        self.assertEqual(len(warnings), 2)  # 失敗し始めたとき、と、問い合わせを止めるとき
+        self.assertIsNotNone(warnings[0].exc_info)
+        self.assertIsNone(warnings[1].exc_info)
+        self.assertEqual([r.levelname for r in logs.records], ["WARNING", "DEBUG", "WARNING"])
+
+    async def test_timeouts_count_as_failures_without_error_logs(self) -> None:
+        with self.assertLogs(LOGGER, level="WARNING") as logs:
+            for _ in range(3):
+                await self.call(error=asyncio.TimeoutError())
+        self.assertIn("期限内", logs.records[0].getMessage())
+        _answers, request = await self.call(error=asyncio.TimeoutError())
+        request.assert_not_awaited()
+
+    async def test_one_trial_after_the_suspension_decides_between_recovery_and_suspending_again(self) -> None:
+        error = errors.ClientError(403, {"error": {"code": 403, "message": "架空の本文"}})
+        with self.assertLogs(LOGGER, level="WARNING"):
+            await self.call(error=error)
+        self.clock.now += 301
+        # 失敗が続くなら、1回の失敗で再び止める（待ち時間を毎回払わない）。
+        with self.assertNoLogs(LOGGER, level="WARNING"):
+            _answers, request = await self.call(error=error)
+        request.assert_awaited_once()
+        _answers, request = await self.call(error=error)
+        request.assert_not_awaited()
+        # 復旧したら、復旧したことだけをログに残して通常へ戻る。
+        self.clock.now += 301
+        with self.assertLogs(LOGGER, level="INFO") as logs:
+            answers, request = await self.call(result=self.ok())
+        self.assertEqual(answers, {"q": BinaryAnswer(0.05, 0.95)})
+        self.assertEqual([r.levelname for r in logs.records], ["INFO"])
+        _answers, request = await self.call(result=self.ok())
+        request.assert_awaited_once()
+
+    async def test_success_resets_the_failure_streak_and_rejected_input_is_not_a_failure(self) -> None:
+        error = RuntimeError("架空の障害")
+        blocked = errors.ClientError(400, {"error": {"code": "prohibited_content", "message": "架空の本文"}})
+        with self.assertLogs(LOGGER, level="WARNING"):
+            await self.call(error=error)
+            await self.call(error=error)
+            # 入力の拒否は応答が来ている印。失敗の連なりを戻す。
+            await self.call(error=blocked)
+            await self.call(error=error)
+            await self.call(error=error)
+        with self.assertLogs(LOGGER, level="WARNING"):  # 3回目の失敗で、問い合わせを止める警告が出る
+            _answers, request = await self.call(error=error)
+        request.assert_awaited_once()  # 閾値に達した3回目の失敗まで、止めない
+
+    async def test_unreadable_shape_counts_as_a_failure(self) -> None:
+        with self.assertLogs(LOGGER, level="WARNING"):
+            for _ in range(3):
+                answers, _request = await self.call(result=response({"q": None}))
+                self.assertIsNone(answers)
+        _answers, request = await self.call(result=self.ok())
+        request.assert_not_awaited()
+
+
 class GeminiDeciderRealSdkTests(unittest.IsolatedAsyncioTestCase):
     """本番と同じ factory・SDK を通し、HTTP の境界だけを差し替える。"""
 

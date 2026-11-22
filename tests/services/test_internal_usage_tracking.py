@@ -56,6 +56,36 @@ class LogTokensSafelyTests(unittest.TestCase):
         self.assertNotIn("架空の非公開の値", captured.output[0])
 
 
+class OutputTokenFormatTests(unittest.TestCase):
+    """生成 API は candidates_token_count、Gemini Live は response_token_count に出力トークン数を入れる（#496）。"""
+
+    def test_live_usage_metadata_output_tokens_are_recorded(self):
+        tracker = UsageTracker()
+        live = types.UsageMetadata(prompt_token_count=120, response_token_count=80, total_token_count=200)
+        with self.assertLogs(USAGE_LOGGER, "INFO"):
+            tracker.log_tokens("音声会話", live)
+        self.assertEqual(
+            (list(tracker.input_tokens), list(tracker.output_tokens), list(tracker.total_tokens)), ([120], [80], [200]),
+        )
+
+    def test_generate_content_usage_and_rest_dicts_are_still_read(self):
+        tracker = UsageTracker()
+        generated = types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=10, candidates_token_count=7, total_token_count=17,
+        )
+        with self.assertLogs(USAGE_LOGGER, "INFO"):
+            tracker.log_tokens("架空", generated)
+            tracker.log_tokens("架空", USAGE)
+            tracker.log_tokens("架空", {"promptTokenCount": 5, "responseTokenCount": 3, "totalTokenCount": 8})
+        self.assertEqual(list(tracker.output_tokens), [7, 2, 3])
+
+    def test_missing_output_tokens_stay_zero(self):
+        tracker = UsageTracker()
+        with self.assertLogs(USAGE_LOGGER, "INFO"):
+            tracker.log_tokens("架空", types.UsageMetadata(prompt_token_count=4, total_token_count=4))
+        self.assertEqual(list(tracker.output_tokens), [0])
+
+
 class ModeratorUsageTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def safe_response():

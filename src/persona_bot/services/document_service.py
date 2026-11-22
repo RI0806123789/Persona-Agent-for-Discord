@@ -255,7 +255,7 @@ class DocumentService:
             # 見つからないときの扱いは呼び出し元ごとの契約で、load_persona_or_default の docstring に一覧がある。
             prompt = await load_persona_or_default(
                 response_settings.prompt_file, logger=logger, loader=load_persona_template,
-                message="文書タスク: ペルソナのファイルが見つからないため、標準のプロンプトで処理します。",
+                message="文書タスク: ペルソナのファイルを読み込めないため、標準のプロンプトで処理します。",
                 default=BUILTIN_PERSONA_PROMPT,
             )
             summaries = [
