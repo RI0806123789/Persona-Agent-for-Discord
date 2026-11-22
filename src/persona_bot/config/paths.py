@@ -13,6 +13,11 @@ def resolve_prompt_path(relative_path: str) -> Path:
     return resolve_script_path(relative_path)
 
 
+# ペルソナのファイルを読めなかったときの例外。見つからない（FileNotFoundError）だけでなく、権限がない・
+# UTF-8 でない（メモ帳の ANSI＝Shift_JIS 保存など。UnicodeDecodeError）場合も同じ扱いにする（#496）。
+PERSONA_READ_ERRORS = (OSError, UnicodeDecodeError)
+
+
 def load_prompt_template(file_path: str | Path) -> str:
     # メモ帳などで「UTF-8 (BOM 付き)」保存されたペルソナも、先頭に U+FEFF を残さず読む
     return Path(file_path).read_text(encoding="utf-8-sig")
@@ -44,7 +49,9 @@ async def load_persona_or_default(
     loader: Callable[[str], Awaitable[str]] = load_persona_template,
     default: str | None = None,
 ) -> str | None:
-    """ペルソナを読み、ファイルが無いときは警告ログを出して `default` を返す（#434）。
+    """ペルソナを読み、ファイルを読めないときは警告ログを出して `default` を返す（#434）。
+
+    「読めない」は、見つからない・権限がない・UTF-8 で保存されていない（`PERSONA_READ_ERRORS`）を指す（#496）。
 
     自発会話・自律行動・会話要約・文書など、ペルソナが読めなければ処理を見送る（None）か、口調なしで続ける
     （空文字）か、標準のプロンプトで続けるサービスの定型を共通化する。警告は呼び出し側のロガーに出し、
@@ -56,7 +63,8 @@ async def load_persona_or_default(
     - 会話要約（`default=""`）: 口調なしの要約で続ける。
     - 文書（`default=BUILTIN_PERSONA_PROMPT`）: 受付済みの依頼なので、標準のプロンプトで回答まで進める。
     - 通常会話（`message_response`）・音声会話の開始: このヘルパーを使わず、利用者へ設定の確認を案内して
-      止める（黙って別のキャラクターで答えない）。`load_persona_template` の例外をそのまま受ける。
+      止める（黙って別のキャラクターで答えない）。`load_persona_template` の例外を `PERSONA_READ_ERRORS` で受ける
+      （通常会話。音声会話の開始は例外をそのまま呼び出し元の失敗の案内へ渡す）。
 
     Args:
         logger: 警告の出力先（呼び出し元モジュールのロガー）。
@@ -66,6 +74,6 @@ async def load_persona_or_default(
     """
     try:
         return await loader(prompt_file)
-    except FileNotFoundError:
+    except PERSONA_READ_ERRORS:
         logger.warning(message, exc_info=True)
         return default

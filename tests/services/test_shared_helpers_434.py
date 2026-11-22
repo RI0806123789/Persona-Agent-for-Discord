@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 import numpy as np
 
 from persona_bot.audio import live_audio
-from persona_bot.config.paths import load_persona_or_default
+from persona_bot.config.paths import load_persona_or_default, load_prompt_template
 from persona_bot.core.background import TaskOwner
 from persona_bot.services.genai_client import error_status_code, is_quota_exhausted
 from persona_bot.services.live_session import is_quota_error
@@ -59,11 +60,38 @@ class LoadPersonaOrDefaultTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result, default)
             self.assertEqual(logs.records[0].getMessage(), "架空の警告")
 
-    async def test_other_errors_propagate(self) -> None:
-        with self.assertRaises(PermissionError):
+    async def test_unreadable_file_is_treated_like_a_missing_one(self) -> None:
+        """権限がない・UTF-8 でない（Shift_JIS 保存など）ファイルも、見つからないときと同じく見送る（#496）。"""
+        for error in (PermissionError("架空"), IsADirectoryError("架空"), UnicodeDecodeError("utf-8", b"\x82", 0, 1, "架空")):
+            with self.subTest(error=type(error).__name__), self.assertLogs("test.caller", level="WARNING") as logs:
+                result = await load_persona_or_default(
+                    "persona.txt", logger=logging.getLogger("test.caller"), message="架空の警告",
+                    loader=AsyncMock(side_effect=error), default=None,
+                )
+            self.assertIsNone(result)
+            self.assertEqual(logs.records[0].getMessage(), "架空の警告")
+            self.assertNotIn("persona.txt", logs.records[0].getMessage())
+
+    async def test_shift_jis_persona_file_is_not_readable_as_utf8(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "persona.txt"
+            path.write_bytes("あなたは架空のキャラクターです。".encode("cp932"))
+
+            async def loader(_name: str) -> str:
+                return load_prompt_template(path)
+
+            with self.assertLogs("test.caller", level="WARNING"):
+                result = await load_persona_or_default(
+                    "persona.txt", logger=logging.getLogger("test.caller"), message="架空の警告", loader=loader,
+                    default="標準",
+                )
+        self.assertEqual(result, "標準")
+
+    async def test_errors_other_than_reading_the_file_propagate(self) -> None:
+        with self.assertRaises(RuntimeError):
             await load_persona_or_default(
                 "persona.txt", logger=logging.getLogger("test"), message="警告",
-                loader=AsyncMock(side_effect=PermissionError()),
+                loader=AsyncMock(side_effect=RuntimeError()),
             )
 
 

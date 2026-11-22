@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from persona_bot.config.constants import GEMINI_RESPONSE_TIMEOUT_SECONDS, HISTORY_LIMIT, IMAGE_ONLY_QUESTION
+from persona_bot.config.paths import PERSONA_READ_ERRORS
 from persona_bot.core.app_state import ResponseSettings
 from persona_bot.core.message_operations import MESSAGE_LOGGER_NAME, MessageOperations
 from persona_bot.services.affinity_service import extract_affinity_changes
@@ -101,10 +102,11 @@ async def handle_chat_message(
 
             try:
                 prompt = await ops.load_persona_template(response_settings.prompt_file)
-            except FileNotFoundError:
-                logger.warning("プロンプトファイルが見つかりません。", exc_info=True)
+            except PERSONA_READ_ERRORS:
+                # 見つからない・権限がない・UTF-8 でない場合。ファイル名・パスは出さない（#496）。
+                logger.warning("プロンプトファイルを読み込めません。", exc_info=True)
                 await message.reply(
-                    "会話設定のファイルが見つかりません。管理者に設定の確認を依頼してください。",
+                    "会話設定のファイルを読み込めません。管理者に設定の確認を依頼してください。",
                     allowed_mentions=REPLY_ALLOWED_MENTIONS,
                 )
                 return None

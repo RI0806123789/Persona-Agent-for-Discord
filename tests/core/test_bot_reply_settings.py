@@ -374,20 +374,27 @@ class ReplySettingsTests(unittest.IsolatedAsyncioTestCase):
         self.namespace["send_long_reply"].assert_awaited_once()
 
     async def test_missing_persona_is_logged_without_file_name_or_exception_details(self) -> None:
-        self.loader.side_effect = FileNotFoundError("架空の内部ファイル詳細")
-        with self.assertLogs("persona_bot.core.message_handler", level="WARNING") as logs:
-            await self.on_message(self.message)
-        reply = self.message.reply.await_args.args[0]
-        self.assertNotIn(self.settings.current_prompt_file, reply)
-        self.assertNotIn("架空の内部ファイル詳細", reply)
-        self.assertIn("管理者", reply)
-        log_text = "\n".join(LOG_FORMATTER.format(record) for record in logs.records)
-        self.assertIn("プロンプトファイルが見つかりません", log_text)
-        self.assertNotIn(self.settings.current_prompt_file, log_text)
-        self.assertNotIn("架空の内部ファイル詳細", log_text)
-        self.assertIs(logs.records[0].exc_info[1], self.loader.side_effect)
-        self.namespace["gemini"].generate_with_metadata.assert_not_awaited()
-        self.namespace["affinity"].update_emotion.assert_not_called()
+        # 見つからない・権限がない・UTF-8 でない（Shift_JIS 保存など）場合は、どれも設定の確認を案内して止める（#496）。
+        for error in (
+            FileNotFoundError("架空の内部ファイル詳細"), PermissionError("架空の内部ファイル詳細"),
+            UnicodeDecodeError("utf-8", b"\x82", 0, 1, "架空の内部ファイル詳細"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                self.loader.side_effect = error
+                self.message.reply.reset_mock()
+                with self.assertLogs("persona_bot.core.message_handler", level="WARNING") as logs:
+                    await self.on_message(self.message)
+                reply = self.message.reply.await_args.args[0]
+                self.assertNotIn(self.settings.current_prompt_file, reply)
+                self.assertNotIn("架空の内部ファイル詳細", reply)
+                self.assertIn("管理者", reply)
+                log_text = "\n".join(LOG_FORMATTER.format(record) for record in logs.records)
+                self.assertIn("プロンプトファイルを読み込めません", log_text)
+                self.assertNotIn(self.settings.current_prompt_file, log_text)
+                self.assertNotIn("架空の内部ファイル詳細", log_text)
+                self.assertIs(logs.records[0].exc_info[1], error)
+                self.namespace["gemini"].generate_with_metadata.assert_not_awaited()
+                self.namespace["affinity"].update_emotion.assert_not_called()
 
     async def test_rejected_reply_does_not_update_affinity_memory_or_feedback(self) -> None:
         self.response = "架空の応答です。[V:1, A:2]"

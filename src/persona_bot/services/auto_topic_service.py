@@ -210,7 +210,7 @@ class AutoTopicService(AnniversaryMixin):
         response_settings = guild_settings.snapshot_response()
         persona_prompt = await load_persona_or_default(
             response_settings.prompt_file, logger=logger, loader=load_persona_template,
-            message=f"{short_label}: プロンプトファイルが見つかりません。",
+            message=f"{short_label}: プロンプトファイルを読み込めません。",
         )
         if persona_prompt is None:
             return False

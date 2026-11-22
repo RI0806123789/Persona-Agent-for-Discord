@@ -70,13 +70,23 @@ _INPUT_UNSAFE_DECISION_QUESTION = BinaryQuestion(
     ),
 )
 
+# 不適切と判定した理由が NG ワードリスト（またはその変形表現）への該当かを、モデルに答えさせるキー。
+# 判断モデル（#450）が安全と確定した入力でも、NG ワードの変形表現だけは判断モデルでは見分けられない
+# （問いに登録語を載せない方針のため）ので、生成モデルがこの理由で不適切と判定したときは判断モデルで上書きしない（#496）。
+NG_WORD_MATCH_KEY = "ng_word_match"
+_NG_WORD_MATCH_RULE = (
+    f'- 不適切と判定した理由が「NGワードリストに含まれる語句、またはその変形表現」への該当であるときだけ、"{NG_WORD_MATCH_KEY}" を true にすること。'
+    "暴力的・差別的・性的・個人情報など、それ以外の理由なら false にすること。\n"
+)
+
 _SYSTEM_PROMPT = (
     _MODERATION_CRITERIA
     + "\n## 出力形式\n"
     + "必ず以下のJSON **のみ** を返してください。説明文は不要です。\n"
+    + _NG_WORD_MATCH_RULE
     + '{"safe": true}\n'
     + "または\n"
-    + '{"safe": false, "reason": "簡潔な判定理由"}\n'
+    + f'{{"safe": false, "reason": "簡潔な判定理由", "{NG_WORD_MATCH_KEY}": false}}\n'
 )
 
 
@@ -174,7 +184,8 @@ def _build_combined_system_prompt(
         + '{"safe": true, "category": "none", "reminder": {"at": "2026-01-31 09:00", "message": "ゴミ出し", "repeat": "none"}'
         + agent_key + '}\n'
         + "不適切と判定した場合は次の形にしてください。\n"
-        + '{"safe": false, "reason": "簡潔な判定理由", "category": "none", "reminder": null' + agent_key + '}\n'
+        + _NG_WORD_MATCH_RULE
+        + f'{{"safe": false, "reason": "簡潔な判定理由", "{NG_WORD_MATCH_KEY}": false, "category": "none", "reminder": null' + agent_key + '}\n'
         + (_AGENT_OUTPUT_EXAMPLES if include_agent else "")
     )
 
@@ -260,6 +271,9 @@ def _response_schema(
     """問い合わせに必要な項目だけを構造化出力の契約として渡す。"""
     properties = {"safe": {"type": "BOOLEAN"}, "reason": {"type": "STRING"}}
     required = ["safe"]
+    if not emotion:
+        # 任意の項目（必須にしない）。ボットの応答の判定（emotion）には要らない。
+        properties[NG_WORD_MATCH_KEY] = {"type": "BOOLEAN"}
     if emotion:
         properties.update({
             "valence_change": {"type": "INTEGER"},
