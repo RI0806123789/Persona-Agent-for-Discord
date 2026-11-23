@@ -29,7 +29,7 @@ gTTS==2.5.4
 # 音声エンジンが返す mp3 を、外部プロセス（ffmpeg.exe）を起動せずメモリ上で
 # 48kHz/ステレオ/16bit の生 PCM へデコードするために使う。
 # C ライブラリを同梱した binary wheel のため pip だけで完結する。
-miniaudio==1.71
+miniaudio==1.72
 httpx==0.28.1
 matplotlib==3.11.2
 numpy==2.2.6
