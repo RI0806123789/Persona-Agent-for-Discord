@@ -34,7 +34,7 @@ httpx==0.28.1
 matplotlib==3.11.2
 numpy==2.2.6
 Pillow==13.0.0
-pypdf==6.21.4
+pypdf==7.0.0
 # APIキー（Gemini / Discord）をプロジェクトルート直下の .env から読み込むために使う
 # （src/persona_bot/config/settings_loader.py）。以前は実キーを config_private.py という .py ファイルに
 # 直接書いていたが、.env 方式なら systemd の EnvironmentFile= や Docker の --env-file で
