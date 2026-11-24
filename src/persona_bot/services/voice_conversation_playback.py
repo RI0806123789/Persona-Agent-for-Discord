@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from time import monotonic
+from typing import TYPE_CHECKING, Callable
 
 from persona_bot.audio.live_audio import LivePlaybackSource
 from persona_bot.config.constants import (
@@ -23,7 +24,11 @@ from persona_bot.config.constants import (
     LIVE_ECHO_GUARD_SECONDS,
     LIVE_PLAYBACK_FADE_WAIT_SECONDS,
 )
-from persona_bot.services.voice_conversation_state import _Utterance
+from persona_bot.services.voice_conversation_state import _PlaybackState, _Utterance
+
+if TYPE_CHECKING:
+    from persona_bot.audio.playback import PlaybackController
+    from persona_bot.audio.voice_receive import LiveVoiceClient
 
 logger = logging.getLogger("persona_bot.services.voice_conversation")
 
@@ -33,6 +38,16 @@ _FADE_FRAMES = max(1, LIVE_BARGE_IN_FADE_MS // 20)
 
 class VoicePlaybackMixin:
     """返答の再生・フェードアウト・破棄。再生状態は `self._playback_state` に集約されている。"""
+
+    if TYPE_CHECKING:
+        # ホスト（`VoiceConversation`）が持つ属性の宣言。型検査のためだけにあり、
+        # 実行時には何も定義しない（ホスト側の定義が使われる）。ホストの定義を変えたら揃えること。
+        voice_client: LiveVoiceClient
+        _playback_state: _PlaybackState
+        _playback_controller: PlaybackController
+        _now: Callable[[], float]
+        _stopped: bool
+        _latencies: list[float]
 
     def _bot_audible(self) -> bool:
         """ペルソナの声がいま出ているか（再生を始めた音源がある）。割り込みは手元で確かめてから送る。"""

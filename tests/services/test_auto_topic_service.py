@@ -42,7 +42,7 @@ class AutoTopicServiceTests(unittest.IsolatedAsyncioTestCase):
         self.is_blocked = Mock(return_value=False)
         self.service = AutoTopicService(
             self.client, self.state, None, self.gemini, self.moderator, self.ng_filter,
-            SimpleNamespace(log_snapshot=Mock()), None,
+            SimpleNamespace(log_tokens=Mock(), log_snapshot=Mock()), None,
             is_blocked=self.is_blocked,
         )
         self.member = SimpleNamespace(id=11, display_name="架空の利用者", mention="<@11>")
@@ -227,13 +227,15 @@ class AutoTopicServiceTests(unittest.IsolatedAsyncioTestCase):
         self.channel.send.assert_not_awaited()
 
     async def test_usage_is_recorded_even_when_the_generated_text_is_not_posted(self):
-        """生成に成功したら、後段のモデレーション・権限の再確認で見送ってもトークンを記録する（#432）。"""
-        usage = self.service._usage.log_snapshot
+        """生成に成功したら、後段の見送りでもトークンを記録し、会話件数（log_snapshot）には混ぜない（#432・#496）。"""
+        log_tokens = self.service._usage.log_tokens
+        log_snapshot = self.service._usage.log_snapshot
         usage_info = {"total_token_count": 5}
         for reason in ("moderation", "permission"):
-            for kind in ("topic", "anniversary"):
+            for kind, label in (("topic", "自発的な会話"), ("anniversary", "記念日のお祝い")):
                 with self.subTest(reason=reason, kind=kind):
-                    usage.reset_mock()
+                    log_tokens.reset_mock()
+                    log_snapshot.reset_mock()
                     self.channel.send.reset_mock()
                     self.gemini.generate.return_value = ("架空の本文", usage_info, [])
                     self.moderator.check.return_value = (reason != "moderation", "架空の判定")
@@ -255,8 +257,8 @@ class AutoTopicServiceTests(unittest.IsolatedAsyncioTestCase):
                         self.gemini.generate.side_effect = original
                         self.permissions.send_messages = True
                     self.channel.send.assert_not_awaited()
-                    usage.assert_called_once()
-                    self.assertIs(usage.call_args.args[5], usage_info)
+                    log_tokens.assert_called_once_with(label, usage_info)
+                    log_snapshot.assert_not_called()
 
     async def test_active_autonomous_session_skips_generation(self):
         self.settings.autonomous_session = object()
@@ -438,7 +440,7 @@ class AnniversaryChannelTests(unittest.IsolatedAsyncioTestCase):
             self.client, self.state, None, self.gemini,
             SimpleNamespace(check=AsyncMock(return_value=(True, ""))),
             SimpleNamespace(mask_with_log=Mock(side_effect=lambda text, **kwargs: text)),
-            SimpleNamespace(log_snapshot=Mock()), None,
+            SimpleNamespace(log_tokens=Mock(), log_snapshot=Mock()), None,
         )
         patch("persona_bot.config.paths.load_prompt_template", return_value="架空のペルソナ").start()
         patch.object(

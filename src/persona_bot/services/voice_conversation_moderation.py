@@ -28,7 +28,7 @@ from persona_bot.services.voice_conversation_state import _Utterance
 from persona_bot.utils.discord_helpers import NO_MENTIONS
 
 if TYPE_CHECKING:
-    from persona_bot.services.voice_conversation import VoiceConversationService
+    from persona_bot.services.voice_conversation_service import VoiceConversationService
     from persona_bot.services.voice_conversation_state import ConsentState
 
 logger = logging.getLogger("persona_bot.services.voice_conversation")

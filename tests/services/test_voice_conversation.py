@@ -93,7 +93,7 @@ class ConversationTestBase(unittest.IsolatedAsyncioTestCase):
             blacklist=SimpleNamespace(record_violation=AsyncMock(return_value=(1, False))),
             memory=SimpleNamespace(append_pending_log=AsyncMock(), flush_if_needed=AsyncMock()),
             affinity=SimpleNamespace(update_emotion=Mock(), save_background=AsyncMock()),
-            usage=SimpleNamespace(log_tokens=Mock()),
+            usage=SimpleNamespace(log_tokens=Mock(), log_conversation=Mock()),
             end=AsyncMock(),
         )
         self.conversation = VoiceConversation(
@@ -1399,6 +1399,23 @@ class LifecycleTests(ConversationTestBase):
         usage = SimpleNamespace(total_token_count=10)
         with self.assertLogs("persona_bot.utils.usage_graph", level="WARNING"):
             await self.conversation._on_live_message(SimpleNamespace(server_content=None, usage_metadata=usage))
+
+    async def test_completed_voice_turn_counts_as_conversation_and_discarded_turn_does_not(self):
+        """音声会話の完了した1ターンだけを会話件数に数え、破棄された返答は数えない（#496）。"""
+        self.consent_all()
+        await self.complete_utterance(USER_A, "架空の質問")
+        await self.conversation._on_live_message(
+            live_message(output_transcription=SimpleNamespace(text="架空の返答"), turn_complete=True),
+        )
+        self.service.usage.log_conversation.assert_called_once_with("音声会話")
+
+        # 出力 NG で破棄されたターンは会話件数に数えない。
+        self.service.usage.log_conversation.reset_mock()
+        await self.complete_utterance(USER_A, "次の架空の質問")
+        await self.conversation._on_live_message(
+            live_message(output_transcription=SimpleNamespace(text="架空のNGを含む返答"), turn_complete=True),
+        )
+        self.service.usage.log_conversation.assert_not_called()
 
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):

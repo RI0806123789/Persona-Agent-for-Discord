@@ -1470,13 +1470,13 @@
                 <mxCell id="c1_ttl" value="C-1 アクティビティ図：/join から音声会話（Gemini Live）の開始まで" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=24;fontStyle=1;fontColor=#1A1A1A;fontFamily=Meiryo UI;" parent="1" vertex="1">
                     <mxGeometry x="40" y="20" width="1800" height="50" as="geometry"/>
                 </mxCell>
-                <mxCell id="c1_sub" value="対象: core/commands.py → core/voice_commands.py → services/voice_conversation.py → services/live_session.py。⊗ は利用者へ案内して終わる流れ（左端のレーンで受け取る）。" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontColor=#666666;fontFamily=Meiryo UI;" parent="1" vertex="1">
+                <mxCell id="c1_sub" value="対象: core/commands.py → core/voice_coordinator.py → core/voice_commands.py → services/voice_conversation.py → services/live_session.py。⊗ は利用者へ案内して終わる流れ（左端のレーンで受け取る）。" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontColor=#666666;fontFamily=Meiryo UI;" parent="1" vertex="1">
                     <mxGeometry x="40" y="68" width="2200" height="30" as="geometry"/>
                 </mxCell>
                 <mxCell id="pageC1_lane0" value="利用者・Discord" style="swimlane;horizontal=1;startSize=56;html=1;whiteSpace=wrap;fillColor=#F2F2F2;swimlaneFillColor=#FAFAFA;strokeColor=#B3B3B3;fontColor=#333333;fontSize=14;fontStyle=1;collapsible=0;container=0;fontFamily=Meiryo UI;" parent="1" vertex="1">
                     <mxGeometry x="40" y="110" width="300" height="2720" as="geometry"/>
                 </mxCell>
-                <mxCell id="pageC1_lane1" value="/join の受付&lt;br&gt;&lt;span style=&quot;font-size:10px;color:#666666&quot;&gt;core/commands.py・VoiceCommandCoordinator&lt;/span&gt;" style="swimlane;horizontal=1;startSize=56;html=1;whiteSpace=wrap;fillColor=#F2F2F2;swimlaneFillColor=#FAFAFA;strokeColor=#B3B3B3;fontColor=#333333;fontSize=14;fontStyle=1;collapsible=0;container=0;fontFamily=Meiryo UI;" parent="1" vertex="1">
+                <mxCell id="pageC1_lane1" value="/join の受付&lt;br&gt;&lt;span style=&quot;font-size:10px;color:#666666&quot;&gt;core/commands.py・voice_coordinator.py&lt;/span&gt;" style="swimlane;horizontal=1;startSize=56;html=1;whiteSpace=wrap;fillColor=#F2F2F2;swimlaneFillColor=#FAFAFA;strokeColor=#B3B3B3;fontColor=#333333;fontSize=14;fontStyle=1;collapsible=0;container=0;fontFamily=Meiryo UI;" parent="1" vertex="1">
                     <mxGeometry x="340" y="110" width="400" height="2720" as="geometry"/>
                 </mxCell>
                 <mxCell id="pageC1_lane2" value="接続処理&lt;br&gt;&lt;span style=&quot;font-size:10px;color:#666666&quot;&gt;core/voice_commands.py：VoiceSessionCommands&lt;/span&gt;" style="swimlane;horizontal=1;startSize=56;html=1;whiteSpace=wrap;fillColor=#F2F2F2;swimlaneFillColor=#FAFAFA;strokeColor=#B3B3B3;fontColor=#333333;fontSize=14;fontStyle=1;collapsible=0;container=0;fontFamily=Meiryo UI;" parent="1" vertex="1">

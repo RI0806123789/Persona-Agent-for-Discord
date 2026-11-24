@@ -21,7 +21,7 @@ from persona_bot.core.database import Database
 from persona_bot.services.content_moderator import ContentModerator
 from persona_bot.services.memory_service import MemoryService, _PromptBlockedError
 from persona_bot.services.stats_service import StatsService
-from persona_bot.utils.usage_graph import UsageTracker, log_tokens_safely
+from persona_bot.utils.usage_graph import UsageTracker, log_conversation_safely, log_tokens_safely
 
 USAGE = {"promptTokenCount": 10, "candidatesTokenCount": 2, "totalTokenCount": 12}
 USAGE_LOGGER = "persona_bot.utils.usage_graph"
@@ -54,6 +54,20 @@ class LogTokensSafelyTests(unittest.TestCase):
             log_tokens_safely(failing_tracker(), "架空の内部処理", USAGE)
         self.assertIn("ValueError", captured.output[0])
         self.assertNotIn("架空の非公開の値", captured.output[0])
+
+    def test_log_conversation_safely_emits_user_line_and_swallows_errors(self):
+        """音声会話のターン完了などを会話件数行へ安全に記録する（#496）。"""
+        tracker = UsageTracker()
+        with self.assertLogs(USAGE_LOGGER, "INFO") as captured:
+            log_conversation_safely(tracker, "音声会話")
+        self.assertTrue(any("User (音声会話)：会話を処理しました。" in line for line in captured.output))
+
+        log_conversation_safely(None, "音声会話")
+        broken = SimpleNamespace(log_conversation=Mock(side_effect=RuntimeError("架空の非公開の値")))
+        with self.assertLogs(USAGE_LOGGER, "WARNING") as warn_logs:
+            log_conversation_safely(broken, "音声会話")
+        self.assertIn("RuntimeError", warn_logs.output[0])
+        self.assertNotIn("架空の非公開の値", warn_logs.output[0])
 
 
 class OutputTokenFormatTests(unittest.TestCase):

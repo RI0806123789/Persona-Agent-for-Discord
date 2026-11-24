@@ -16,7 +16,7 @@ from persona_bot.services.gemini_service import GeminiService
 from persona_bot.services.ng_word_service import NgWordFilter
 from persona_bot.config.paths import load_persona_or_default, load_persona_template
 from persona_bot.services.prompting import build_summary_prompt
-from persona_bot.utils.usage_graph import UsageTracker
+from persona_bot.utils.usage_graph import UsageTracker, log_tokens_safely
 
 logger = logging.getLogger(__name__)
 _MD_HEADING_PATTERN = r"(?m)^[ \t]{0,3}#{1,6}[ \t]*"
@@ -86,10 +86,8 @@ async def generate_channel_summary(
         return False, "⚠️ 要約の生成に失敗しました。時間をおいて再度お試しください。"
 
     # 生成に成功した時点で消費したトークンを記録する。後段で空になった・拒否された場合も
-    # Gemini を呼んだ分は統計に含める（#432）。
-    usage.log_snapshot(
-        "会話要約", f"{period.name}の要約", f"{source.message_count}件", full_prompt, response_text, usage_info
-    )
+    # Gemini を呼んだ分は統計に含める（#432）。機能パネルの要約は会話件数（User ( 行）には数えない（#496）。
+    log_tokens_safely(usage, "会話要約", usage_info)
 
     # 感情タグが混じった場合の保険（ペルソナが誤って付けることがある）
     response_text = strip_affinity_tag(response_text)

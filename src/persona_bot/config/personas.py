@@ -222,15 +222,23 @@ def reload_persona_catalog(*, announce: bool = True) -> PersonaCatalog:
     try:
         catalog = load_persona_catalog()
     except OSError as error:
-        logger.warning(f'警告: prompts/ を読めませんでした（{type(error).__name__}）。前回のペルソナ一覧を使います。', exc_info=error)
+        logger.warning(
+            "警告: prompts/ を読めませんでした（%s）。前回のペルソナ一覧を使います。",
+            type(error).__name__, exc_info=error,
+        )
         return _catalog
     set_persona_catalog(catalog)
     if not announce:
         return catalog
     if not catalog.personas:
-        logger.info(f'ペルソナ: prompts/ に利用できるペルソナがありません。prompts/{PROMPT_TEMPLATE_FILE_NAME} をコピーして prompts/<名前>.txt を作ると、キャラ設定から選べます（作るまでは組み込みの標準プロンプトで応答します）。表示名と声は prompts/{PERSONA_SETTINGS_TEMPLATE_FILE_NAME} を prompts/personas.json にコピーして決められます。')
+        logger.info(
+            "ペルソナ: prompts/ に利用できるペルソナがありません。prompts/%s をコピーして prompts/<名前>.txt を作ると、"
+            "キャラ設定から選べます（作るまでは組み込みの標準プロンプトで応答します）。"
+            "表示名と声は prompts/%s を prompts/personas.json にコピーして決められます。",
+            PROMPT_TEMPLATE_FILE_NAME, PERSONA_SETTINGS_TEMPLATE_FILE_NAME,
+        )
     else:
-        logger.info(f'ペルソナ: {len(catalog.personas)} 件を読み込みました。')
+        logger.info("ペルソナ: %d 件を読み込みました。", len(catalog.personas))
     return catalog
 
 
@@ -263,12 +271,19 @@ def _load_persona_settings(settings_path: Path) -> dict[str, Any]:
     except FileNotFoundError:
         return {}
     except (OSError, UnicodeDecodeError) as error:
-        logger.warning(f'警告: personas.json を読めませんでした（{type(error).__name__}）。表示名と声の設定を使わずに続行します。', exc_info=error)
+        logger.warning(
+            "警告: personas.json を読めませんでした（%s）。表示名と声の設定を使わずに続行します。",
+            type(error).__name__, exc_info=error,
+        )
         return {}
     try:
         settings = json.loads(text)
     except json.JSONDecodeError as error:
-        logger.warning(f'警告: personas.json の {error.lineno} 行目付近が JSON として読めません。表示名と声の設定を使わずに続行します（ファイルはそのまま残します）。', exc_info=error)
+        logger.warning(
+            "警告: personas.json の %d 行目付近が JSON として読めません。"
+            "表示名と声の設定を使わずに続行します（ファイルはそのまま残します）。",
+            error.lineno, exc_info=error,
+        )
         return {}
     if not isinstance(settings, dict):
         logger.warning('警告: personas.json の最上位はオブジェクト（{ }）で書いてください。表示名と声の設定を使わずに続行します。')
@@ -284,7 +299,7 @@ def _expect_object(value: Any, subject: str, consequence: str) -> bool:
     """
     if isinstance(value, dict):
         return True
-    logger.warning(f'警告: personas.json の{subject}はオブジェクト（{{ }}）で書いてください。{consequence}')
+    logger.warning("警告: personas.json の%sはオブジェクト（{ }）で書いてください。%s", subject, consequence)
     return False
 
 
@@ -330,12 +345,12 @@ def _build_voice(voice: Any) -> dict[str, Any]:
             continue
         if key == "voice":
             if not isinstance(value, str) or not value.strip():
-                logger.warning(f'警告: personas.json の「<設定値>」の voice は空白以外の文字列で書いてください。既定値を使います。')
+                logger.warning("警告: personas.json の「<設定値>」の voice は空白以外の文字列で書いてください。既定値を使います。")
                 continue
             profile[key] = value.strip()
             continue
         if not isinstance(value, str) or not value:
-            logger.warning(f'警告: personas.json の「<設定値>」の voice.{key} は文字列で書いてください。既定値を使います。')
+            logger.warning("警告: personas.json の「<設定値>」の voice.%s は文字列で書いてください。既定値を使います。", key)
             continue
         if key == "eq" and value not in VOICE_EQ_PROFILES:
             # 実行時は未知の音色を加工なしで読み上げるだけで、気づきにくい。読み込み時に知らせる。
@@ -371,10 +386,14 @@ def _build_agent_lines(agent: Any) -> dict[str, str]:
         if key in unsupported:
             continue
         if not isinstance(value, str) or not value.strip():
-            logger.warning(f'警告: personas.json の「<設定値>」の agent.{key} は文字列で書いてください。既定の文面を使います。')
+            logger.warning("警告: personas.json の「<設定値>」の agent.%s は文字列で書いてください。既定の文面を使います。", key)
             continue
         if not _is_valid_agent_line(value):
-            logger.warning(f"警告: personas.json の「<設定値>」の agent.{key} の差し込みが不正です。使えるのは {{{'}, {'.join(sorted(_AGENT_LINE_FIELDS))}}} だけで、文字の {{ }} は {{{{ }}}} と書きます。既定の文面を使います。")
+            logger.warning(
+                "警告: personas.json の「<設定値>」の agent.%s の差し込みが不正です。"
+                "使えるのは {%s} だけで、文字の { } は {{ }} と書きます。既定の文面を使います。",
+                key, "}, {".join(sorted(_AGENT_LINE_FIELDS)),
+            )
             continue
         lines[key] = value.strip()
     return lines
@@ -395,7 +414,11 @@ def _build_agent_avatar_url(agent: Any) -> str | None:
         or len(url) > AGENT_AVATAR_URL_MAX_CHARS
         or any(character.isspace() for character in url)
     ):
-        logger.warning(f'警告: personas.json の「<設定値>」の agent.{_AGENT_AVATAR_KEY} は https:// で始まる{AGENT_AVATAR_URL_MAX_CHARS}文字以内の画像の URL で書いてください。既定のアイコンを使います。')
+        logger.warning(
+            "警告: personas.json の「<設定値>」の agent.%s は https:// で始まる%d文字以内の画像の URL で書いてください。"
+            "既定のアイコンを使います。",
+            _AGENT_AVATAR_KEY, AGENT_AVATAR_URL_MAX_CHARS,
+        )
         return None
     return url
 

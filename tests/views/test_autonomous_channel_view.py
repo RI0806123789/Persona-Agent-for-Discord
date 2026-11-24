@@ -144,7 +144,7 @@ class SettingsEntryTests(unittest.IsolatedAsyncioTestCase):
             interaction.response.defer.assert_awaited_once_with(ephemeral=True)
             raise RuntimeError("架空の取得失敗")
         interaction.user.guild.fetch_member.side_effect = unavailable
-        with patch("builtins.print"), patch("persona_bot.views.settings_view.AutonomousChannelView") as panel:
+        with patch("persona_bot.views.settings_view.AutonomousChannelView") as panel:
             await child(view, OpenAutonomousChannelButton).callback(interaction)
         panel.assert_not_called()
         self.assertIsNone(interaction.edit_original_response.await_args.kwargs["view"])
@@ -362,7 +362,10 @@ class AutonomousChannelPanelTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(next(o for o in child(view, StageChannelSelect).options if o.value == "2001").default)
 
         confirm = make_interaction(guild=self.guild)
-        await child(view, AutonomousChannelConfirmButton).callback(confirm)
+        with patch.object(view, "ensure_settings_current", wraps=view.ensure_settings_current) as ensure_current:
+            await child(view, AutonomousChannelConfirmButton).callback(confirm)
+        # 権限確認ヘルパー内と persist() 後の2回だけ確認し、直後で重複呼び出ししない（#495）。
+        self.assertEqual(ensure_current.await_count, 2)
         confirm.response.defer.assert_awaited_once_with(ephemeral=True)
         confirm.user.guild.fetch_member.assert_awaited_once()
         self.assertEqual(self.settings.autonomous_stage_channel_id, 2001)

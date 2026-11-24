@@ -1,7 +1,6 @@
 """会話の中でサブエージェントの使用を明記した依頼の振り分けと、人格役の返信を検証する（#170）。"""
 
 import asyncio
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -22,6 +21,7 @@ from persona_bot.services import agent_service
 from persona_bot.services.gemini_service import GenerationResult
 from persona_bot.views import agent_view
 from persona_bot.utils.discord_helpers import fetch_channel_history_text
+from tests.helpers.discord_mocks import make_spec_channel
 from tests.helpers.message_handler_helpers import make_message_handler
 from tests.helpers.persona_helpers import install_empty_persona_catalog
 
@@ -39,13 +39,7 @@ class AgentDelegationTests(unittest.IsolatedAsyncioTestCase):
         install_empty_persona_catalog(self)
         self.state = BotState()
         self.state.get_guild(1).current_respond_mode = "all"
-        channel = Mock(spec=discord.TextChannel, id=10)
-
-        @asynccontextmanager
-        async def typing():
-            yield
-
-        channel.typing.side_effect = typing
+        channel = make_spec_channel(discord.TextChannel, 10)
         self.progress_message = SimpleNamespace(edit=AsyncMock())
         self.message = SimpleNamespace(
             author=SimpleNamespace(id=11, bot=False, display_name="架空の利用者"),
@@ -417,16 +411,11 @@ class AgentDelegationTests(unittest.IsolatedAsyncioTestCase):
 
     def thread_message(self, content: str, *, mentioned: bool = False):
         """閉じた作業スレッドへの書き込み（Discord が再開する）。"""
-        channel = Mock(spec=discord.Thread, id=self.thread.id)
+        channel = make_spec_channel(
+            discord.Thread, self.thread.id, mention="<#700>", edit=AsyncMock(),
+        )
+        # Mock.__init__ の予約引数 parent（親モック指定）と衝突させないため、属性として設定する。
         channel.parent = self.parent_channel
-        channel.mention = "<#700>"
-
-        @asynccontextmanager
-        async def typing():
-            yield
-
-        channel.typing.side_effect = typing
-        channel.edit = AsyncMock()
         bot = self.handler.client.user
         progress_message = SimpleNamespace(edit=AsyncMock())
         return SimpleNamespace(
@@ -516,35 +505,34 @@ class AgentDelegationTests(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError("架空のボタン回収失敗")
 
         self.handoff.edit.side_effect = edit
-        with patch("builtins.print"):
-            run = asyncio.create_task(self.handler.on_message(self.message))
-            try:
-                await asyncio.wait_for(started.wait(), 2)
-                run.cancel()
-                await asyncio.wait_for(editing.wait(), 2)
-                view = self.thread.send.await_args_list[0].kwargs["view"]
-                self.assertTrue(view.is_finished())
-                self.assertFalse(run.done())
-                self.assertFalse(self.agent.try_acquire("11"))
-                if repeat:
-                    for _ in range(3):
-                        run.cancel()
-                        await asyncio.sleep(0)
-                        self.assertFalse(run.done())
-                        self.assertFalse(cleaned.is_set())
-                release.set()
-                with self.assertRaises(asyncio.CancelledError):
-                    await asyncio.wait_for(run, 2)
-                self.assertTrue(cleaned.is_set())
-                self.handoff.edit.assert_awaited_once_with(view=None)
-                self.assertTrue(self.agent.try_acquire("11"))
-                self.agent.release("11")
-                self.send.assert_not_awaited()
-                self.tts.assert_not_awaited()
-            finally:
-                release.set()
-                run.cancel()
-                await asyncio.gather(run, return_exceptions=True)
+        run = asyncio.create_task(self.handler.on_message(self.message))
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            run.cancel()
+            await asyncio.wait_for(editing.wait(), 2)
+            view = self.thread.send.await_args_list[0].kwargs["view"]
+            self.assertTrue(view.is_finished())
+            self.assertFalse(run.done())
+            self.assertFalse(self.agent.try_acquire("11"))
+            if repeat:
+                for _ in range(3):
+                    run.cancel()
+                    await asyncio.sleep(0)
+                    self.assertFalse(run.done())
+                    self.assertFalse(cleaned.is_set())
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(run, 2)
+            self.assertTrue(cleaned.is_set())
+            self.handoff.edit.assert_awaited_once_with(view=None)
+            self.assertTrue(self.agent.try_acquire("11"))
+            self.agent.release("11")
+            self.send.assert_not_awaited()
+            self.tts.assert_not_awaited()
+        finally:
+            release.set()
+            run.cancel()
+            await asyncio.gather(run, return_exceptions=True)
 
     async def test_external_cancel_removes_work_thread_button_before_releasing_slot(self) -> None:
         await self.cancel_work_thread("worker", repeat=True)
