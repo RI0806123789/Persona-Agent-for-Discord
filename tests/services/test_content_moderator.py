@@ -357,3 +357,31 @@ class DecisionCascadeTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
+
+    async def test_ng_word_variants_skip_confident_safe_even_without_ng_word_match_mark(self) -> None:
+        """空白・記号混入やローマ字の変形候補は、ng_word_match 印が無くても安全確定で上書きしない（#496）。"""
+        variants = ("ね こ ま ん ま", "ね・こ・ま・ん・ま", "nekomanma", "nekomamma", "ＮＥＫＯ・ＭＡＮＭＡ")
+        for variant in variants:
+            with self.subTest(variant=variant):
+                decider = FakeDecider(unsafe_probability(0.02))
+                moderator = self.moderator(decider, words=("ねこまんま",))
+                with patch("persona_bot.services.content_moderator.generate_content", generation(UNSAFE_ROUTE)), \
+                        patch("persona_bot.services.content_moderator.logger"):
+                    self.assertEqual(
+                        await moderator.check_and_route(variant),
+                        (False, "架空の理由", "none", None),
+                    )
+                with patch(
+                    "persona_bot.services.content_moderator.generate_content",
+                    generation({"safe": False, "reason": "架空の理由"}),
+                ), patch("persona_bot.services.content_moderator.logger"):
+                    self.assertEqual(await moderator.judge_voice_input(variant), VERDICT_UNSAFE)
+                self.assertEqual(decider.calls, [])
+
+                # 語境界をまたぐ無害な文で候補に掛かっても、生成モデルが文脈を見て安全と判定すれば通過する。
+                with patch("persona_bot.services.content_moderator.generate_content", generation(SAFE_ROUTE)):
+                    safe, _reason, category, _reminder = await moderator.check_and_route(variant)
+                self.assertTrue(safe)
+                self.assertEqual(category, "profile")
+                with patch("persona_bot.services.content_moderator.generate_content", generation({"safe": True})):
+                    self.assertEqual(await moderator.judge_voice_input(variant), VERDICT_SAFE)

@@ -210,6 +210,37 @@ class AffinityPersistenceTests(unittest.IsolatedAsyncioTestCase):
         await self.persist("user-0")
         self.assertEqual(self.db.affinity_load_all()["user-0"], expected)
 
+    async def test_multiple_queued_saves_coalesce_to_the_latest_snapshot(self) -> None:
+        """#495: 先行保存の待機中に複数回の更新・保存要求が重なっても、中間状態を省いて最新値へ合流する。"""
+        entered, release = asyncio.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        original = self.db.affinity_upsert
+        snapshots = []
+
+        def write(user_id, entry):
+            snapshots.append(deepcopy(entry))
+            if len(snapshots) == 1:
+                loop.call_soon_threadsafe(entered.set)
+                release.wait(3)
+            original(user_id, entry)
+
+        self.service.update_emotion("user-0", 2, 0)
+        with patch.object(self.db, "affinity_upsert", side_effect=write):
+            first = spawn(self.persist("user-0"), label="先行保存")
+            await asyncio.wait_for(entered.wait(), 2)
+            self.service.update_emotion("user-0", 3, 0)
+            second = spawn(self.persist("user-0"), label="中間保存")
+            expected = self.service.update_emotion("user-0", 4, 0).copy()
+            third = spawn(self.persist("user-0"), label="最新保存")
+            for _ in range(5):
+                await asyncio.sleep(0)
+            release.set()
+            await asyncio.gather(first, second, third)
+        # 1回目（52）の後に重なった2件は最新の1回（59）へ合流する。
+        self.assertEqual([entry["valence"] for entry in snapshots], [52, 59])
+        self.assertEqual(self.db.affinity_load_all()["user-0"], expected)
+        self.assertEqual(self.service._saved_versions["user-0"], self.service._save_versions["user-0"])
+
 
 class AffinityTuningTests(unittest.TestCase):
     def setUp(self) -> None:

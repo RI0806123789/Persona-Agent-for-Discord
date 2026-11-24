@@ -52,7 +52,8 @@ class SummaryMessageCountTests(unittest.IsolatedAsyncioTestCase):
         success, text = await self.generate([summary_message(content)])
         self.assertTrue(success)
         self.assertIn("対象: 1件", text)
-        self.assertEqual(self.usage.log_snapshot.call_args.args[2], "1件")
+        self.usage.log_tokens.assert_called_once_with("会話要約", self.gemini.generate.return_value[1])
+        self.usage.log_snapshot.assert_not_called()
         prompt = self.gemini.generate.call_args.args[0]
         self.assertIn(content, prompt)
 
@@ -62,7 +63,8 @@ class SummaryMessageCountTests(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertTrue(success)
         self.assertIn("対象: 2件", text)
-        self.assertEqual(self.usage.log_snapshot.call_args.args[2], "2件")
+        self.usage.log_tokens.assert_called_once_with("会話要約", self.gemini.generate.return_value[1])
+        self.usage.log_snapshot.assert_not_called()
 
     async def test_count_matches_filtered_source_and_includes_attachment_only_and_own_reply(self):
         blocked = SimpleNamespace(id=22, bot=False, display_name="架空の除外対象")
@@ -83,7 +85,8 @@ class SummaryMessageCountTests(unittest.IsolatedAsyncioTestCase):
         success, text = await self.generate(messages, is_blocked=check)
         self.assertTrue(success)
         self.assertIn("対象: 3件", text)
-        self.assertEqual(self.usage.log_snapshot.call_args.args[2], "3件")
+        self.usage.log_tokens.assert_called_once_with("会話要約", self.gemini.generate.return_value[1])
+        self.usage.log_snapshot.assert_not_called()
         prompt = self.gemini.generate.call_args.args[0]
         self.assertIn("架空の人間の投稿\n続き", prompt)
         self.assertIn("（このBOT）: 架空の自ボットの返答", prompt)
@@ -93,13 +96,13 @@ class SummaryMessageCountTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call.args[0] for call in check.call_args_list], [11, 22, 11, 11, 11, 11, 11])
 
     async def test_usage_is_recorded_even_when_the_generated_summary_is_discarded(self):
-        """生成に成功したら、見出し除去で空になった場合もトークンを記録する（#432）。"""
+        """生成に成功したら、見出し除去で空になった場合もトークンを記録し、会話件数には数えない（#432・#496）。"""
         self.gemini.generate.return_value = ("#### \n", {"total_token_count": 5}, [])
         success, text = await self.generate([summary_message("架空の投稿")])
         self.assertFalse(success)
         self.assertIn("空でした", text)
-        self.usage.log_snapshot.assert_called_once()
-        self.assertIs(self.usage.log_snapshot.call_args.args[5], self.gemini.generate.return_value[1])
+        self.usage.log_tokens.assert_called_once_with("会話要約", self.gemini.generate.return_value[1])
+        self.usage.log_snapshot.assert_not_called()
 
     async def test_no_usable_messages_skips_generation_and_usage_record(self):
         messages = [summary_message(""), summary_message("<@!99>"), summary_message("", stickers=[object()])]
@@ -107,6 +110,7 @@ class SummaryMessageCountTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(success)
         self.assertIn("要約できる会話がありません", text)
         self.gemini.generate.assert_not_awaited()
+        self.usage.log_tokens.assert_not_called()
         self.usage.log_snapshot.assert_not_called()
 
     async def test_discarded_summary_returns_apology_without_header(self):
@@ -118,8 +122,9 @@ class SummaryMessageCountTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("📋", text)
         # 却下の判定は Bot 応答として行う（要約専用の別の文言にしない）。
         self.assertEqual(screen.await_args.kwargs["log_label"], "会話要約")
-        # 生成自体は成功しているため、却下後もトークンは記録済み（#432）。
-        self.usage.log_snapshot.assert_called_once()
+        # 生成自体は成功しているため、却下後もトークンは記録済み（#432・#496）。
+        self.usage.log_tokens.assert_called_once_with("会話要約", self.gemini.generate.return_value[1])
+        self.usage.log_snapshot.assert_not_called()
 
     def test_structured_source_preserves_sanitized_marker_timezone_and_text_api(self):
         message = summary_message(

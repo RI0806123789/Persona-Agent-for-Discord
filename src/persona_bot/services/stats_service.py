@@ -39,6 +39,7 @@ from persona_bot.services.stats_normalization import (  # noqa: F401（BIG_FIVE_
 from persona_bot.utils.storage import extract_json_object
 from persona_bot.utils.timeutil import as_utc, parse_iso_datetime, resolve_timezone, timezone_label, utc_now_iso
 from persona_bot.utils.usage_graph import UsageTracker, log_tokens_safely
+from persona_bot.utils.user_persistence import save_user_background, write_user_snapshot_locked
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,8 @@ class StatsService:
             logger.error("会話統計の読み込みに失敗しました。", exc_info=error)
             self.cache = {}
         self._save_lock = asyncio.Lock()
+        self._save_versions: dict[str, int] = {}
+        self._saved_versions: dict[str, int] = {}
         # 削除・収集設定の変更より前に開始した解析結果を書き戻さないための世代。
         self._analysis_versions: dict[str, int] = {}
         self._analysis_tasks: dict[str, _AnalysisFlight] = {}
@@ -175,9 +178,19 @@ class StatsService:
             return False
 
     async def save_background(self, user_id: str) -> bool:
-        """対象ユーザーの現在値だけを保存し、成否を返す。"""
-        async with self._save_lock:
-            return await self._save_user_locked(user_id)
+        """対象ユーザーの現在値だけを保存し、成否を返す。並行要求は最新スナップショットへ合流させる。"""
+        return await save_user_background(
+            user_id,
+            lock=self._save_lock,
+            save_versions=self._save_versions,
+            saved_versions=self._saved_versions,
+            cache=self.cache,
+            write_fn=self._db.stats_save_user,
+            logger=logger,
+            error_message="会話統計の保存に失敗しました。",
+            on_cancel=self._restore_user_locked,
+            cancel_label="会話統計の中断後の復元",
+        )
 
     async def _save_user_locked(self, user_id: str, entry: dict | None = None) -> bool:
         """候補を保存する。失敗・中断時は公開済みキャッシュを変更しない。"""
@@ -185,19 +198,21 @@ class StatsService:
         entry = previous if entry is None else entry
         if entry is None:
             return True
-        try:
-            await run_in_thread(self._db.stats_save_user, user_id, deepcopy(entry))
-        except asyncio.CancelledError:
-            # 同期ワーカーは中断できず、ここへ戻る時点では保存済みの場合もある。
-            # ロックを離す前に元行へ戻し、後続の更新へ未確定の値を引き継がない。
-            await wait_for_cleanup(
-                self._restore_user_locked(user_id, previous), label="会話統計の中断後の復元",
-            )
-            raise
-        except Exception as error:
-            logger.error("会話統計の保存に失敗しました。", exc_info=error)
-            return False
-        return True
+        saved = await write_user_snapshot_locked(
+            user_id,
+            deepcopy(entry),
+            write_fn=self._db.stats_save_user,
+            logger=logger,
+            error_message="会話統計の保存に失敗しました。",
+            previous=previous,
+            on_cancel=self._restore_user_locked,
+            cancel_label="会話統計の中断後の復元",
+        )
+        if saved:
+            next_version = self._save_versions.get(user_id, 0) + 1
+            self._save_versions[user_id] = next_version
+            self._saved_versions[user_id] = next_version
+        return saved
 
     async def _restore_user_locked(self, user_id: str, previous: dict | None) -> None:
         """中断した書き込みを対象1行だけ補償し、繰り返しキャンセルでも回収する。"""

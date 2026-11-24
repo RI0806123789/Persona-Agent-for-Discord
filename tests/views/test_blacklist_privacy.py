@@ -117,8 +117,7 @@ class BlacklistPrivacyTests(unittest.IsolatedAsyncioTestCase):
                     interaction.client.application_info.return_value = make_owner_client(owner_id=99).application
                 hub = self.track(self.hub.clone(interaction))
                 button = next(item for item in hub.children if isinstance(item, UnblockButton))
-                with patch("builtins.print"):
-                    await button.callback(interaction)
+                await button.callback(interaction)
                 self.blacklist.get_all_blocked_users.assert_not_called()
                 edit = interaction.edit_original_response.await_args.kwargs
                 self.assertIsNone(edit["view"])

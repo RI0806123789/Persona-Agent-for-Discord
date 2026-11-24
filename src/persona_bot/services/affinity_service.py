@@ -4,7 +4,6 @@ import math
 import asyncio
 import re
 
-from persona_bot.core.background import run_in_thread
 from persona_bot.config.constants import (
     AFFINITY_HALF_LIFE_SECONDS,
     AFFINITY_LOWER_THRESHOLD,
@@ -15,6 +14,7 @@ from persona_bot.config.constants import (
 )
 from persona_bot.core.database import Database
 from persona_bot.services.prompting import build_affinity_prompt
+from persona_bot.utils.user_persistence import save_user_background
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,8 @@ class AffinityService:
         self._db = db
         self.cache: dict[str, dict] = {}
         self._save_lock = asyncio.Lock()
+        self._save_versions: dict[str, int] = {}
+        self._saved_versions: dict[str, int] = {}
         self._load()
 
     def _load(self):
@@ -130,17 +132,17 @@ class AffinityService:
         return data
 
     async def save_background(self, user_id: str) -> None:
-        """対象ユーザーだけを保存し、後続保存が古い値に巻き戻されないよう直列化する。"""
-        async with self._save_lock:
-            data = self.cache.get(user_id)
-            if data is None:
-                return
-            snapshot = data.copy()
-            try:
-                # キャンセルしてもworker終了までロックを保ち、後続の保存を追い越させない。
-                await run_in_thread(self._db.affinity_upsert, user_id, snapshot)
-            except Exception as error:
-                logger.error("親密度データの保存に失敗しました。", exc_info=error)
+        """対象ユーザーだけを保存し、後続保存が古い値に巻き戻されないよう世代合流と直列化を行う。"""
+        await save_user_background(
+            user_id,
+            lock=self._save_lock,
+            save_versions=self._save_versions,
+            saved_versions=self._saved_versions,
+            cache=self.cache,
+            write_fn=self._db.affinity_upsert,
+            logger=logger,
+            error_message="親密度データの保存に失敗しました。",
+        )
 
     def build_dynamic_prompt(self, user_id: str) -> str:
         # 文面そのものは prompting.py に集約している（ここは現在値を渡すだけ）。

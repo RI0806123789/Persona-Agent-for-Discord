@@ -225,6 +225,17 @@ class NgWordNormalizationTests(NgWordFileTestCase):
         self.assertEqual([record.getMessage() for record in logging.records], ["NGワード検出: 1件をマスクしました。"])
         self.assertTrue(ng_filter.contains_ng_word("架空b"))
 
+    def test_variant_candidate_detection_caches_pattern_and_keeps_strict_local_matching(self) -> None:
+        """変形候補検査は初回だけコンパイルし、ローカル NG 判定の語境界保持は変えない（#496）。"""
+        ng_filter = self.make_filter("ねこまんま")
+        self.assertFalse(ng_filter.contains_ng_word("ね こ ま ん ま"))
+        self.assertFalse(ng_filter.contains_ng_word("nekomanma"))
+        with patch.object(ng_word_service.re, "compile", wraps=ng_word_service.re.compile) as compile_pattern:
+            for variant in ("ね こ ま ん ま", "ね・こ・ま・ん・ま", "nekomanma", "nekomamma"):
+                self.assertTrue(ng_filter.may_contain_variant(variant))
+            self.assertFalse(ng_filter.may_contain_variant("まったく別の話題です"))
+            compile_pattern.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

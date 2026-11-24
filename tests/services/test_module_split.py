@@ -73,8 +73,8 @@ class ServiceSplitTests(unittest.TestCase):
 
     def test_pure_helpers_are_still_reachable_from_the_original_modules(self):
         from persona_bot.services import (
-            memory_anniversary, memory_projects, memory_service, reminder_schedule, reminder_service,
-            stats_graphs, stats_normalization, stats_service,
+            content_moderator, memory_anniversary, memory_projects, memory_service, moderation_prompts,
+            reminder_schedule, reminder_service, stats_graphs, stats_normalization, stats_service,
         )
         self.assertIs(memory_service.merge_anniversary_profile, memory_anniversary.merge_anniversary_profile)
         self.assertIs(memory_service.default_projects_memory, memory_projects.default_projects_memory)
@@ -82,6 +82,13 @@ class ServiceSplitTests(unittest.TestCase):
         self.assertIs(reminder_service._local_to_utc, reminder_schedule.local_to_utc)
         self.assertIs(stats_service.normalize_topics, stats_normalization.normalize_topics)
         self.assertIs(stats_service.BIG_FIVE_LABELS, stats_normalization.BIG_FIVE_LABELS)
+        for name in (
+            "VERDICT_SAFE", "VERDICT_UNSAFE", "VERDICT_UNKNOWN", "_DATA_START", "_DATA_END",
+            "_INPUT_UNSAFE_DECISION_KEY", "_INPUT_UNSAFE_DECISION_QUESTION", "NG_WORD_MATCH_KEY",
+            "_SYSTEM_PROMPT", "_VOICE_TURN_SYSTEM_PROMPT", "_build_prompt", "_build_combined_system_prompt",
+            "_normalize_emotion_delta", "_normalize_reminder", "_normalize_safe_flag", "_response_schema",
+        ):
+            self.assertIs(getattr(content_moderator, name), getattr(moderation_prompts, name), name)
         for name in ("render_hourly_graph", "render_topic_graph", "render_bigfive_radar", "render_ranking_graph"):
             self.assertTrue(callable(getattr(stats_graphs, name)), name)
 
@@ -155,6 +162,58 @@ class VoiceAndViewSplitTests(unittest.TestCase):
             node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module
         } | {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
         self.assertNotIn("persona_bot.views.agent_thread", imported)  # 循環参照になる
+
+    def test_mixins_declare_host_contracts_under_type_checking_and_voice_split_keeps_reexports(self):
+        """#495: 分割された全Mixinの TYPE_CHECKING 宣言と、voice_coordinator / diagnostics 分離の契約を検証する。"""
+        import ast
+        from pathlib import Path
+
+        from persona_bot.core import voice_commands, voice_coordinator
+        from persona_bot.services import (
+            auto_topic_anniversary, voice_conversation_diagnostics, voice_conversation_playback,
+        )
+        self.assertIs(voice_commands.VoiceCommandCoordinator, voice_coordinator.VoiceCommandCoordinator)
+        self.assertIs(voice_commands.skip_superseded_voice_operation, voice_coordinator.skip_superseded_voice_operation)
+        self.assertEqual(voice_conversation_diagnostics.logger.name, voice_conversation.logger.name)
+        self.assertTrue(
+            issubclass(voice_conversation.VoiceConversation, voice_conversation_diagnostics.VoiceDiagnosticsMixin)
+        )
+        for name in ("_log_barge_in_stats", "_log_echo_stats", "_log_latency", "_run_sender", "_clear_send_queue"):
+            self.assertTrue(hasattr(voice_conversation.VoiceConversation, name), name)
+
+        # VoiceModerationMixin の TYPE_CHECKING import は遅延再公開ではなく実体モジュールを参照する。
+        mod_tree = ast.parse(Path(voice_conversation_moderation.__file__).read_text(encoding="utf-8-sig"))
+        type_checking_imports = {
+            (node.module, alias.name)
+            for node in ast.walk(mod_tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+            for alias in node.names
+        }
+        self.assertIn(("persona_bot.services.voice_conversation_service", "VoiceConversationService"), type_checking_imports)
+        self.assertNotIn(("persona_bot.services.voice_conversation", "VoiceConversationService"), type_checking_imports)
+
+        for module, class_name in (
+            (voice_conversation_consent, "VoiceConsentMixin"),
+            (voice_conversation_moderation, "VoiceModerationMixin"),
+            (voice_conversation_playback, "VoicePlaybackMixin"),
+            (voice_conversation_diagnostics, "VoiceDiagnosticsMixin"),
+            (autonomous_speech, "AutonomousSpeechMixin"),
+            (autonomous_lifecycle, "AutonomousLifecycleMixin"),
+            (auto_topic_anniversary, "AnniversaryMixin"),
+        ):
+            with self.subTest(mixin=class_name):
+                tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8-sig"))
+                cls_node = next(
+                    node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name
+                )
+                has_type_checking = any(
+                    isinstance(stmt, ast.If)
+                    and isinstance(stmt.test, ast.Name)
+                    and stmt.test.id == "TYPE_CHECKING"
+                    and stmt.body
+                    for stmt in cls_node.body
+                )
+                self.assertTrue(has_type_checking)
 
 
 if __name__ == "__main__":

@@ -4,13 +4,14 @@ data/ng/NG_WORD.txt と data/ng/NG_WORD_private.txt から1行ずつNGワード�
 ユーザーの入力やBotの応答に含まれていないかチェックする。
 """
 
+from collections.abc import Sequence
 import logging
 import re
 import unicodedata
 from pathlib import Path
 
 from persona_bot.config.constants import NG_WORD_PATH, NG_WORD_PRIVATE_PATH
-from persona_bot.utils.normalization import fold_kana
+from persona_bot.utils.normalization import fold_kana, romaji_to_hiragana
 
 logger = logging.getLogger(__name__)
 
@@ -140,11 +141,62 @@ def _build_pattern(ng_words: list[str]) -> re.Pattern[str] | None:
     return re.compile("|".join(escaped), re.IGNORECASE)
 
 
+def _compact_for_variant(text: str) -> str:
+    """空白・区切り記号・制御文字を除いて NFKC＋ひらがな統一した文字列を返す（変形候補の照合用）。
+
+    ローカル NG 判定そのものでは空白・記号を飛ばさない（単語をまたぐ偶然の一致で誤ブロックしないため。#282）。
+    ここは「判断モデル（登録語を知らない）で安全確定してよいか」を決める候補検査だけに使い、
+    一致した発言はローカルで即ブロックせず、文脈と NG リストを持つ生成モデルの判定へ回す（#496）。
+    """
+    normalized = fold_kana(unicodedata.normalize("NFKC", text))
+    return "".join(
+        ch for ch in normalized
+        if not ch.isspace() and unicodedata.category(ch)[0] not in {"C", "P", "S", "Z"}
+    )
+
+
+def _build_variant_pattern(ng_words: Sequence[str]) -> re.Pattern[str] | None:
+    """空白・記号除去およびローマ字かな変換後の登録語に一致するパターンを作る。"""
+    candidates: dict[str, None] = {}
+    for word in ng_words:
+        compact = _compact_for_variant(word)
+        if compact:
+            candidates[compact] = None
+            kana = romaji_to_hiragana(compact)
+            if kana:
+                candidates[kana] = None
+    if not candidates:
+        return None
+    escaped = [re.escape(word) for word in sorted(candidates, key=len, reverse=True)]
+    return re.compile("|".join(escaped), re.IGNORECASE)
+
+
+def contains_ng_word_variant(text: str, ng_words: Sequence[str]) -> bool:
+    """空白・記号の挿入やローマ字化による登録語の変形候補を含むか（#496）。"""
+    if not text or not ng_words:
+        return False
+    pattern = _build_variant_pattern(ng_words)
+    return _matches_variant_pattern(text, pattern)
+
+
+def _matches_variant_pattern(text: str, pattern: re.Pattern[str] | None) -> bool:
+    if pattern is None or not text:
+        return False
+    compact = _compact_for_variant(text)
+    if not compact:
+        return False
+    if pattern.search(compact):
+        return True
+    kana = romaji_to_hiragana(compact)
+    return kana != compact and bool(pattern.search(kana))
+
+
 class NgWordFilter:
     """NGワードのフィルタリングを行うクラス。"""
 
     def __init__(self) -> None:
         self._snapshot: tuple[list[str], re.Pattern[str] | None] = ([], None)
+        self._variant_cache: tuple[list[str], re.Pattern[str] | None] | None = None
         self.reload()
 
     def reload(self) -> None:
@@ -153,6 +205,7 @@ class NgWordFilter:
         pattern = _build_pattern(words)
         # ワーカーで準備してから一度に公開し、再読込中も従来の判定を維持する。
         self._snapshot = (words, pattern)
+        self._variant_cache = None
         if words:
             logger.info("NGワード: %d件 読み込み済み", len(words))
 
@@ -164,6 +217,17 @@ class NgWordFilter:
     def words(self) -> list[str]:
         """NGワードのリストを返す（ContentModerator 連携用）。"""
         return list(self._snapshot[0])
+
+    def may_contain_variant(self, text: str) -> bool:
+        """空白・記号の混入やローマ字化による NG ワード変形候補を含むか（#496）。"""
+        words = self._snapshot[0]
+        if not words or not text:
+            return False
+        cache = self._variant_cache
+        if cache is None or cache[0] is not words:
+            cache = (words, _build_variant_pattern(words))
+            self._variant_cache = cache
+        return _matches_variant_pattern(text, cache[1])
 
     def contains_ng_word(self, text: str) -> bool:
         """テキストにNGワードが含まれているかどうかを判定する。"""

@@ -9,23 +9,44 @@
 を `AutoTopicService` から受け取る前提で、単独では使わない。
 """
 
+from __future__ import annotations
+
 import calendar
 import logging
-from datetime import datetime
-from typing import Any
+from datetime import datetime, tzinfo
+from typing import TYPE_CHECKING, Any, Callable
 
 import discord
 
 from persona_bot.config.constants import ANNIVERSARY_PROFILE_KEY, ANNIVERSARY_PUBLIC_LABELS
-from persona_bot.core.app_state import GuildSettings
+from persona_bot.core.app_state import BotState, GuildSettings
 from persona_bot.core.background import run_in_thread
 from persona_bot.utils.anniversaries import parse_anniversary
+
+if TYPE_CHECKING:
+    from persona_bot.core.database import Database
 
 logger = logging.getLogger("persona_bot.services.auto_topic_service")
 
 
 class AnniversaryMixin:
     """記念日・誕生日の自動お祝い。投稿の共通処理は `AutoTopicService` 側にある。"""
+
+    if TYPE_CHECKING:
+        # ホスト（`AutoTopicService`）が持つ属性・メソッドの宣言。型検査のためだけにあり、
+        # 実行時には何も定義しない（ホスト側の定義が使われる）。ホストの定義を変えたら揃えること。
+        _client: discord.Client
+        _state: BotState
+        _db: Database
+        _tz: tzinfo
+        _is_blocked: Callable[[int], bool] | None
+
+        def _can_send(self, channel: Any) -> bool: ...
+        def _unwatch_channel(self, guild_settings: GuildSettings, channel_id: int, feature_label: str) -> None: ...
+        async def _post_auto(
+            self, channel: Any, guild_settings: GuildSettings, *, eligible: Callable[[], bool],
+            member: discord.Member | None, anniversary_label: str | None,
+        ) -> bool: ...
 
     async def run_anniversary_checks(self) -> None:
         """全ユーザーの記念日（profile の "anniversaries" キー）を確認し、

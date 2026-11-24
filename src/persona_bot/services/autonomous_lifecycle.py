@@ -11,16 +11,18 @@
 `tests/helpers/autonomous_patch.patch_autonomous` で、この名前を持つ全モジュールへ当てること。
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import discord
 
 from persona_bot.config.constants import AUTONOMOUS_CONNECT_TIMEOUT_SECONDS
-from persona_bot.core.app_state import AutonomousSession, GuildSettings
+from persona_bot.core.app_state import AutonomousSession, BotState, GuildSettings
 from persona_bot.core.background import spawn, wait_for_cleanup, wait_for_task
 from persona_bot.services import autonomous_stage
 from persona_bot.services.autonomous_metrics import is_quiet_hours, start_retry_wait_minutes
@@ -50,6 +52,18 @@ class _StopAttempt:
 
 class AutonomousLifecycleMixin:
     """配信の開始（接続・ステージ準備・失敗時の待ち時間）と停止（案内・枠と接続の回収）。"""
+
+    if TYPE_CHECKING:
+        # ホスト（`AutonomousService`）が持つ属性・メソッドの宣言。型検査のためだけにあり、
+        # 実行時には何も定義しない（ホスト側の定義が使われる）。ホストの定義を変えたら揃えること。
+        _client: discord.Client
+        _state: BotState
+        _starting: dict[int, _StartAttempt]
+        _stopping: dict[int, _StopAttempt]
+
+        async def _speak_opening(
+            self, guild: discord.Guild, guild_settings: GuildSettings, session: AutonomousSession, channel: Any,
+        ) -> None: ...
 
     async def _start_session(self, guild: discord.Guild, guild_settings: GuildSettings) -> None:
         """開始要求を登録し、未登録セッションへの停止要求と多重開始を扱う。"""

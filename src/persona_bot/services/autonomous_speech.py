@@ -46,6 +46,7 @@ from persona_bot.utils.discord_helpers import (
     send_long_message,
     send_long_reply,
 )
+from persona_bot.utils.usage_graph import log_tokens_safely
 
 if TYPE_CHECKING:
     from persona_bot.services.content_moderator import ContentModerator
@@ -147,6 +148,7 @@ class AutonomousSpeechMixin:
                     detail=f"{message.author.display_name} さんのコメント（画像{len(images)}枚）",
                     grounding=response_settings.grounding_enabled,
                     images=images or None,
+                    is_conversation=True,
                 )
                 if not response_text:
                     return None
@@ -314,10 +316,12 @@ class AutonomousSpeechMixin:
         detail: str,
         grounding: bool = False,
         images: list[Any] | None = None,
+        is_conversation: bool = False,
     ) -> str | None:
         """Gemini を呼び、生成結果を返す（失敗時は None）。利用ログもここで残す。
 
         `images` はコメントに添付された画像（自発発言では常に None）。
+        コメントへの応答だけを管理コンソールの会話件数に数え、第一声・独り言はトークン数のみ記録する（#496）。
         """
         response_text, usage_info, _sources = await self._gemini.generate(
             full_prompt,
@@ -329,7 +333,10 @@ class AutonomousSpeechMixin:
         if not response_text:
             logger.error("自律行動: 発言の生成に失敗しました。")
             return None
-        self._usage.log_snapshot(f"自律行動/{label}", detail, "自動実行", full_prompt, response_text, usage_info)
+        if is_conversation:
+            self._usage.log_snapshot(f"自律行動/{label}", detail, "自動実行", full_prompt, response_text, usage_info)
+        else:
+            log_tokens_safely(self._usage, f"自律行動/{label}", usage_info)
         return response_text
 
     async def _load_persona(self, response_settings: ResponseSettings) -> str | None:

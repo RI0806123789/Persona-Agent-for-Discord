@@ -1,18 +1,16 @@
 """`/join`・`/leave` のボイス接続処理。
 
-次の2つを持つ（`commands.register_commands` は、コマンドの登録と共通のゲート配線だけを担当する）。
-
-- `VoiceCommandCoordinator` … 参加・退出の受付順を記録し、同じサーバーの接続変更を直列化する。
-- `VoiceSessionCommands` … 直列化された順番で実行する、参加・退出・音声会話（Gemini Live）の開始の実処理。
-  依存（状態・自律行動・接続先の保護・音声会話）は生成時に明示的に受け取る。
+`VoiceSessionCommands`（直列化された順番で実行する、参加・退出・音声会話の開始の実処理）と、接続前の権限案内・
+ステージ昇格・接続結果の案内を持つ。参加・退出の操作世代と直列化を担う `VoiceCommandCoordinator` は
+`voice_coordinator.py` に分けてあり（#495）、従来の名前でこのモジュールからも再公開する。
+（`commands.register_commands` は、コマンドの登録と共通のゲート配線だけを担当する。）
 
 ★ ログの出力元は `persona_bot.core.voice_commands`。以前は `persona_bot.core.commands` だった。
 """
 
 import asyncio
-from dataclasses import dataclass, field
 import logging
-from typing import Awaitable, Callable
+from typing import Callable
 
 import discord
 
@@ -20,6 +18,11 @@ from persona_bot.audio.voice_receive import LiveVoiceClient
 from persona_bot.config.constants import VOICE_CONNECT_TIMEOUT_SECONDS
 from persona_bot.core.app_state import BotState
 from persona_bot.core.background import wait_for_cleanup
+from persona_bot.core.voice_coordinator import (  # noqa: F401（従来の import 先として再公開）
+    VoiceCommandCoordinator,
+    _GuildOperations,
+    skip_superseded_voice_operation,
+)
 from persona_bot.services.autonomous_service import AutonomousService
 from persona_bot.services.autonomous_stage import enable_stage_speaker
 from persona_bot.services.live_session import LiveUnavailableError
@@ -37,104 +40,6 @@ from persona_bot.utils.voice_permissions import missing_voice_permissions
 
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class _GuildOperations:
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    tokens: list[object] = field(default_factory=list)
-    # 応答待ち以外の有効なtokenは、ロック待ちまたは実行中。
-    deferring: set[object] = field(default_factory=set)
-    changed: asyncio.Event = field(default_factory=asyncio.Event)
-    pending: int = 0
-
-    @property
-    def latest(self) -> object | None:
-        return self.tokens[-1] if self.tokens else None
-
-    def notify_changed(self) -> None:
-        # 待機者のEventを起こしてから差し替え、確認と待機の間の通知も取りこぼさない。
-        self.changed.set()
-        self.changed = asyncio.Event()
-
-
-async def skip_superseded_voice_operation(
-    interaction: discord.Interaction, is_current: Callable[[], bool],
-) -> bool:
-    """後続の操作が受け付けられていれば、古い操作の接続変更を見送る。"""
-    if is_current():
-        return False
-    await interaction.followup.send("後から受け付けた参加・退出操作を優先しました。")
-    return True
-
-
-class VoiceCommandCoordinator:
-    """応答待ちから操作完了まで、サーバー単位でロックと操作世代を共有する。"""
-
-    def __init__(self) -> None:
-        self._guilds: dict[int | None, _GuildOperations] = {}
-
-    async def run(
-        self, interaction: discord.Interaction,
-        change: Callable[[Callable[[], bool]], Awaitable[None]],
-    ) -> None:
-        guild_id = interaction.guild.id if interaction.guild is not None else None
-        operations = self._guilds.setdefault(guild_id, _GuildOperations())
-        token = object()
-        # deferより前に同期的に記録する。応答待ちの古い参加も後続の退出から識別できる。
-        operations.tokens.append(token)
-        operations.deferring.add(token)
-        operations.pending += 1
-        operations.notify_changed()
-
-        def is_current() -> bool:
-            return operations.latest is token
-
-        try:
-            await interaction.response.defer()
-            operations.deferring.discard(token)
-            operations.notify_changed()
-            notice_sent = False
-            notice_error: Exception | None = None
-            while True:
-                changed = operations.changed
-                async with operations.lock:
-                    superseded = token not in operations.tokens
-                    if not superseded and is_current():
-                        # 実行を始めた操作より前の要求は、後続の脱落でも復活させない。
-                        operations.tokens[:] = [token]
-                        operations.notify_changed()
-                        await change(is_current)
-                        return
-                    newer = (
-                        operations.tokens[operations.tokens.index(token) + 1:]
-                        if not superseded else []
-                    )
-                    can_notify = not any(item in operations.deferring for item in newer)
-
-                if can_notify and not notice_sent:
-                    try:
-                        notice_sent = await skip_superseded_voice_operation(interaction, is_current)
-                    except Exception as error:
-                        # 通知の失敗でも、後続が実行を始めるまでは元の要求を残す。
-                        notice_sent = True
-                        notice_error = error
-                if superseded:
-                    if notice_error is not None:
-                        raise notice_error
-                    return
-                # 応答待ちと通知中の脱落をロック外で待つ。後続の実行開始までは再判定する。
-                await changed.wait()
-        finally:
-            # ロック前に脱落した最新要求を外すと、直前の有効な要求へ戻る。
-            if token in operations.tokens:
-                operations.tokens.remove(token)
-            operations.deferring.discard(token)
-            operations.pending -= 1
-            operations.notify_changed()
-            # 応答待ちも含めて最後の操作が終わるまで、ロックと世代を共有する。
-            if operations.pending == 0:
-                self._guilds.pop(guild_id, None)
 
 
 def join_permission_notice(
@@ -176,7 +81,7 @@ async def promote_stage_speaker(
     try:
         await enable_stage_speaker(interaction.guild, channel)
     except Exception as error:
-        logger.error(f'ステージの発言者への昇格に失敗しました: {type(error).__name__}', exc_info=error)
+        logger.error("ステージの発言者への昇格に失敗しました: %s", type(error).__name__, exc_info=error)
         hint = "ボットを発言者へ招待するか、管理者にステージの「メンバーをミュート」権限を確認してください。"
         if leaving:
             text = f"⚠️ {channel.name} で、ステージの発言者になれなかったため、声で会話できずに退出しました。{hint}"
@@ -675,5 +580,5 @@ class VoiceSessionCommands:
                 )
             await interaction.followup.send("退出しました。")
         except Exception as error:
-            logger.error(f'切断エラー: {type(error).__name__}', exc_info=error)
+            logger.error("切断エラー: %s", type(error).__name__, exc_info=error)
             await interaction.followup.send("退出に失敗しました。")

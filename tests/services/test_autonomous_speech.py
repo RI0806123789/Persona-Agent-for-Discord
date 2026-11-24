@@ -50,11 +50,12 @@ class AutonomousSpeechTests(unittest.IsolatedAsyncioTestCase):
         )
         self.gemini = SimpleNamespace(generate=AsyncMock(return_value=("架空の応答", None, [])))
         self.is_blocked = Mock(return_value=False)
+        self.usage = SimpleNamespace(log_snapshot=Mock(), log_tokens=Mock())
         self.service = AutonomousService(
             self.client, self.state, self.gemini,
             SimpleNamespace(check=AsyncMock(return_value=(True, ""))),
             SimpleNamespace(mask_with_log=Mock(side_effect=lambda text, **kwargs: text)),
-            SimpleNamespace(log_snapshot=Mock()),
+            self.usage,
             is_blocked=self.is_blocked,
         )
         self.loader = Mock(return_value="架空のペルソナ")
@@ -208,6 +209,19 @@ class AutonomousSpeechTests(unittest.IsolatedAsyncioTestCase):
                     await self.speak("monologue")
                 self.sent.assert_not_awaited()
                 self.gemini.generate.assert_not_awaited()
+
+    async def test_only_comment_replies_are_counted_as_conversations(self) -> None:
+        """第一声・独り言はトークン数のみ記録し、視聴者コメントへの応答だけを会話件数に数える（#496）。"""
+        self.usage.log_tokens = Mock()
+        self.gemini.generate.return_value = ("架空の応答", {"totalTokenCount": 20}, [])
+        await self.speak("opening")
+        await self.speak("monologue")
+        self.usage.log_snapshot.assert_not_called()
+        self.assertEqual(self.usage.log_tokens.call_count, 2)
+
+        await self.service.handle_comment(self.make_comment(), "架空のコメント", self.settings)
+        self.usage.log_snapshot.assert_called_once()
+        self.assertEqual(self.usage.log_snapshot.call_args.args[0], "自律行動/コメント応答")
 
     async def test_all_speech_paths_load_persona_without_blocking_loop(self) -> None:
         for kind in ("opening", "monologue", "comment"):

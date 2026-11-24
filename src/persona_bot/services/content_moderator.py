@@ -42,7 +42,7 @@ from persona_bot.services.moderation_prompts import (  # noqa: F401（従来の 
     _normalize_safe_flag,
     _response_schema,
 )
-from persona_bot.services.ng_word_service import NgWordFilter
+from persona_bot.services.ng_word_service import NgWordFilter, contains_ng_word_variant
 from persona_bot.services.genai_client import generate_content, generate_json_content
 from persona_bot.utils.storage import read_json_response
 from persona_bot.utils.timeutil import format_prompt_now, resolve_timezone, timezone_label
@@ -159,16 +159,28 @@ class ContentModerator:
             logger.error("モデレーション: 判定に失敗したため通過扱いにします。", exc_info=error)
             return VERDICT_UNKNOWN, "", None
 
+    def _may_contain_ng_variant(self, text: str) -> bool:
+        """空白・記号除去やローマ字かな変換で登録された NG ワードの変形候補に当たるか（#496）。"""
+        checker = getattr(self._ng_filter, "may_contain_variant", None)
+        if callable(checker):
+            return bool(checker(text))
+        return contains_ng_word_variant(text, self._ng_filter.words)
+
     async def _decides_input_safe(self, text: str) -> bool:
         """判断モデルがユーザー入力を「安全」と確定したか（#450 のカスケードの一段目）。
 
         不適切である確率が閾値以下のときだけ True。それ以外（不適切寄り・確信度が低い・判断モデルが
         無い・判断できなかった）は False で、呼び出し側は生成モデルの判定に従う。
+        ★ 空白・記号除去やローマ字変換で登録語に一致する変形候補は安全と確定せず、文脈と NG リストを
+        持つ生成モデルの判定に従う（任意の ng_word_match が欠けても素通りさせない。#496）。
         ★ 判断モデルは単独ではブロックしない（不適切寄りでも False を返すだけ）。違反に数えるかは
         生成モデルが決める — 日本語での誤警報で利用者がブラックリストへ載らないようにするため。
         例外は外へ出さない（on_message の主経路から呼ばれる。Decider の実装が約束を破っても守る）。
         """
         if self._decider is None:
+            return False
+        if self._may_contain_ng_variant(text):
+            logger.debug("モデレーション: NGワードの変形候補を含むため、判断モデルの安全確定を使わず生成モデルで判定します。")
             return False
         try:
             answers = await self._decider.decide_binary(

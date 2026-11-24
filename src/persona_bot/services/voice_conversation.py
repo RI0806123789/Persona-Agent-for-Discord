@@ -36,7 +36,6 @@ from __future__ import annotations
 import logging
 import asyncio
 from collections import Counter
-from statistics import median, quantiles
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -48,8 +47,6 @@ from persona_bot.audio.playback import get_playback_controller
 from persona_bot.audio.voice_receive import LiveVoiceClient, VoiceReceiver
 from persona_bot.config.constants import (
     LIVE_AEC_ENABLED,
-    LIVE_INPUT_CHUNK_MS,
-    LIVE_INPUT_QUEUE_MAX_CHUNKS,
     LIVE_MAX_CONCURRENT_SESSIONS,
     LIVE_MAX_UTTERANCE_SECONDS,
     LIVE_OUTPUT_BUFFER_MS,
@@ -67,20 +64,19 @@ from persona_bot.services.voice_barge_in import (
 # 状態オブジェクトと、責務ごとに切り出したミックスイン（#415）。`_Utterance` などは
 # 従来どおりこのモジュールから import できる。
 from persona_bot.services.voice_conversation_consent import VoiceConsentMixin
+from persona_bot.services.voice_conversation_diagnostics import VoiceDiagnosticsMixin
 from persona_bot.services.voice_conversation_moderation import VoiceModerationMixin
 from persona_bot.services.voice_conversation_playback import VoicePlaybackMixin
 from persona_bot.services.voice_conversation_state import (
-    _INPUT_BYTES_PER_MS, ConsentState, _Participant, _PlaybackState, _SpeakerState, _TranscriptState, _Utterance,
+    ConsentState, _Participant, _PlaybackState, _SpeakerState, _TranscriptState, _Utterance,
 )
-from persona_bot.utils.usage_graph import log_tokens_safely
+from persona_bot.utils.usage_graph import log_conversation_safely, log_tokens_safely
 
 if TYPE_CHECKING:
     from persona_bot.services.voice_conversation_service import VoiceConversationService
 
 logger = logging.getLogger(__name__)
 
-# 送信 1 チャンクのバイト数（16kHz・モノラル・16bit）。
-_INPUT_CHUNK_BYTES = _INPUT_BYTES_PER_MS * LIVE_INPUT_CHUNK_MS
 # 再生を始めるまでに溜める応答音声（48kHz・ステレオ）のバイト数。
 _OUTPUT_BUFFER_BYTES = DISCORD_FRAME_BYTES * max(1, LIVE_OUTPUT_BUFFER_MS // 20)
 _PLAYBACK_STALL_FRAMES = int(LIVE_PLAYBACK_STALL_SECONDS * 50)
@@ -114,17 +110,18 @@ class ConsentPanelError(Exception):
     """同意パネルを出せない。同意を集められないため、音声会話を始めない。"""
 
 
-class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMixin):
+class VoiceConversation(VoiceDiagnosticsMixin, VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMixin):
     """1つのボイスチャンネルの音声会話（Persona Voice Controller）。
 
-    責務ごとに次のモジュールへ分けている（#415。動作は変えていない）:
+    責務ごとに次のモジュールへ分けている（#415・#495。動作は変えていない）:
       ・`voice_conversation_state.py`: 同意・参加者・発言・話者の管理・文字起こしの帰属の状態
       ・`voice_conversation_consent.py`: 同意の付与・撤回と同意パネルの更新（`VoiceConsentMixin`）
       ・`voice_conversation_moderation.py`: 入出力のモデレーション・違反記録・記憶と親密度への反映（`VoiceModerationMixin`）
       ・`voice_conversation_playback.py`: 返答の再生・フェードアウト・破棄の調停（`VoicePlaybackMixin`。#470。
         状態は `_PlaybackState` にまとめ、`self._playback_state` を通して読み書きする）
+      ・`voice_conversation_diagnostics.py`: Live への送信キューと終了時の診断統計ログ（`VoiceDiagnosticsMixin`。#495）
     サーバーごとの会話の管理（`VoiceConversationService`）は `voice_conversation_service.py`（#470）。
-    ここには、受信した音声の振り分け・Live への送信・応答の再生と、それらをつなぐ制御を残す。
+    ここには、受信した音声の振り分け・応答の受け取りと、それらをつなぐ制御を残す。
     """
 
     def __init__(
@@ -289,52 +286,6 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
         self._judge_tasks.add(task)
         task.add_done_callback(self._judge_tasks.discard)
         return task
-
-    def _log_barge_in_stats(self) -> None:
-        """割り込みの判定の件数（しきい値の実験用。#409）。本文・話者は出さない。"""
-        state = self._speaker_state
-        stats = self._barge_in_stats
-        if not state.holds_started and not stats:
-            return
-        logger.info(
-            "音声会話: 返答中の割り込み 候補 %d 回 / 相槌として見送り %d 回 / Live へ送信 %d 回 / "
-            "確定 %d 回 / 未確定のまま返答 %d 回 / 回り込みとして返答を破棄 %d 回",
-            state.holds_started, state.holds_dropped, stats["sent"], stats["confirmed"],
-            stats["unconfirmed"], stats["echo"],
-        )
-
-    def _log_echo_stats(self) -> None:
-        """エコー除去の推定遅延・除去量（しきい値の実験用。#409）。受信を止める前に読む。"""
-        receiver = self._receiver
-        if receiver is None or not hasattr(receiver, "echo_stats"):
-            return
-        try:
-            stats = list(receiver.echo_stats())
-            delays = [float(item.delay_ms) for item in stats if item.delay_ms is not None]
-            erles = [float(item.erle_db) for item in stats if item.erle_db is not None]
-        except Exception:
-            logger.debug("音声会話: エコー除去の診断値を読めませんでした。", exc_info=True)
-            return
-        if not delays:
-            return
-        logger.info(
-            "音声会話: エコー除去 回り込みの遅延を推定できた話者 %d 人（遅延の中央値 %.0f ミリ秒・除去量の中央値 %s）",
-            len(delays), median(delays), f"{median(erles):.1f}dB" if erles else "未計測",
-        )
-
-    def _log_latency(self) -> None:
-        if not self._latencies:
-            return
-        ordered = sorted(self._latencies)
-        if len(ordered) >= 2:
-            cuts = quantiles(ordered, n=20, method="inclusive")
-            p50, p95 = cuts[9], cuts[18]
-        else:
-            p50 = p95 = ordered[0]
-        logger.info(
-            "音声会話: 発話終了から初回音声までの遅延 P50=%.2f秒 / P95=%.2f秒（%d回）",
-            p50, p95, len(ordered),
-        )
 
     # ==================================================================
     # 参加者の出入り（同意の付与・撤回とパネルの更新は VoiceConsentMixin）
@@ -549,61 +500,6 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
 
     def _floor_available_for(self, user_id: int, now: float) -> bool:
         return self._speaker_state.floor_available(user_id, now)
-
-    # ==================================================================
-    # Live への送信（発話の区切りと音声の順序を保つため、1本の待ち行列で送る）
-    # ==================================================================
-
-    def _enqueue(self, kind: str, payload: bytes = b"") -> None:
-        self._send_queue.put_nowait((kind, payload))
-
-    def _queue_audio(self, pcm: bytes) -> None:
-        self._pending_chunk.extend(pcm)
-        if len(self._pending_chunk) >= _INPUT_CHUNK_BYTES:
-            self._flush_chunk()
-
-    def _flush_chunk(self) -> None:
-        if not self._pending_chunk:
-            return
-        chunk = bytes(self._pending_chunk)
-        self._pending_chunk.clear()
-        if self._send_queue.qsize() >= LIVE_INPUT_QUEUE_MAX_CHUNKS:
-            if not self._queue_full_warned:
-                self._queue_full_warned = True
-                logger.warning("音声会話: Live への送信が詰まっているため、音声の一部を捨てました。")
-            return
-        self._enqueue("audio", chunk)
-
-    def _clear_send_queue(self) -> None:
-        """送信待ちの音声だけを捨てる。
-
-        発話の区切り（start / end）は残す — 送信済みの start に対応する end まで消すと、
-        Live 側で発話が開いたままになる。対応の取れない区切りは送信側が捨てる。
-        """
-        self._pending_chunk.clear()
-        markers = []
-        while not self._send_queue.empty():
-            item = self._send_queue.get_nowait()
-            if item[0] != "audio":
-                markers.append(item)
-        for item in markers:
-            self._send_queue.put_nowait(item)
-
-    async def _run_sender(self) -> None:
-        while not self._stopped:
-            kind, payload = await self._send_queue.get()
-            generation = self._live.generation
-            if kind == "start":
-                if await self._live.activity_start():
-                    self._open_generation = generation
-            elif self._open_generation != generation:
-                # 再接続した新しい接続へ、対応する start の無い音声・end を送らない。
-                continue
-            elif kind == "audio":
-                await self._live.send_audio(payload)
-            else:
-                await self._live.activity_end()
-                self._open_generation = None
 
     # ==================================================================
     # 見回り（話し終わりの判定・接続の確認）
@@ -918,6 +814,9 @@ class VoiceConversation(VoicePlaybackMixin, VoiceConsentMixin, VoiceModerationMi
         if utterance.response_complete:
             return
         utterance.response_complete = True
+        if not utterance.discarded:
+            # 参加者の発話に対して返答が完了した1ターンを、管理コンソールの会話件数へ数える（#496）。
+            log_conversation_safely(self._service.usage, "音声会話")
         self._spawn_judge(self._judge_output(utterance), label="音声会話の出力判定")
 
     def _on_live_reconnected(self) -> None:

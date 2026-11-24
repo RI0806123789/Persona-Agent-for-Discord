@@ -48,6 +48,14 @@ class UsageTracker:
         self.output_tokens.append(self._read_output_token_count(usage_info))
         self.total_tokens.append(self._read_token_count(usage_info, "total_token_count", "totalTokenCount"))
 
+    def log_conversation(self, kind: str = "会話") -> None:
+        """利用者の発言・発話への応答が完了したことを計数用の見出しとして記録する（#496）。
+
+        トークン数が別メッセージで届く音声会話（Gemini Live）でも、1ターンの応答完了を管理コンソールの
+        「会話」件数と「最後の会話」に数えるために使う。本文や話者は出さない。
+        """
+        logger.info("User (%s)：会話を処理しました。", kind)
+
     def log_tokens(self, context_label: str, usage_info: Any | None) -> None:
         """会話ではない Gemini 呼び出し（サブエージェントの作業など）のトークンだけを記録する。
 
@@ -118,3 +126,16 @@ def log_tokens_safely(usage: UsageTracker | None, context_label: str, usage_info
         usage.log_tokens(context_label, usage_info)
     except Exception as error:
         logger.warning("トークンの記録に失敗しました: %s", type(error).__name__)
+
+
+def log_conversation_safely(usage: UsageTracker | None, kind: str = "会話") -> None:
+    """音声会話などの1ターン完了を会話件数へ安全に記録する。未接続や失敗で本処理を止めない（#496）。"""
+    if usage is None:
+        return
+    log_fn = getattr(usage, "log_conversation", None)
+    if not callable(log_fn):
+        return
+    try:
+        log_fn(kind)
+    except Exception as error:
+        logger.warning("会話の記録に失敗しました: %s", type(error).__name__)

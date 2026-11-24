@@ -189,10 +189,6 @@ class AutonomousStagePreparationTests(unittest.IsolatedAsyncioTestCase):
         self.member.edit.assert_not_awaited()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class DesignationWiringTests(unittest.IsolatedAsyncioTestCase):
     async def test_start_passes_saved_designation_from_guild_settings(self) -> None:
         from persona_bot.core.app_state import BotState
@@ -209,3 +205,7 @@ class DesignationWiringTests(unittest.IsolatedAsyncioTestCase):
         picker.assert_called_once_with(guild, stage_channel_id=202, voice_channel_id=302)
         self.assertEqual(settings.autonomous_start_failures, 0)
         self.assertIsNone(settings.autonomous_start_retry_at)
+
+
+if __name__ == "__main__":
+    unittest.main()

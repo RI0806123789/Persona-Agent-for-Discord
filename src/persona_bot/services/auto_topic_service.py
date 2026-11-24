@@ -18,7 +18,6 @@ from persona_bot.core.database import Database
 from persona_bot.services.auto_topic_anniversary import AnniversaryMixin
 from persona_bot.utils.discord_helpers import (
     can_bot_send_messages,
-    channel_display_name,
     fetch_channel_history_text,
     send_long_message,
 )
@@ -28,7 +27,7 @@ from persona_bot.services.ng_word_service import NgWordFilter
 from persona_bot.config.paths import load_persona_or_default, load_persona_template
 from persona_bot.services.prompting import build_anniversary_prompt, build_auto_topic_prompt
 from persona_bot.utils.timeutil import resolve_timezone
-from persona_bot.utils.usage_graph import UsageTracker
+from persona_bot.utils.usage_graph import UsageTracker, log_tokens_safely
 
 logger = logging.getLogger(__name__)
 
@@ -239,13 +238,8 @@ class AutoTopicService(AnniversaryMixin):
             return False
         # 生成に成功した時点で消費したトークンを記録する。後段のモデレーション・権限の再確認で
         # 投稿を見送っても、Gemini を呼んだ分が統計から欠けないようにする（#432）。
-        channel_label = channel_display_name(channel)
-        if anniversary:
-            self._usage.log_snapshot(log_label, f"{member.display_name} さんの{anniversary_label}",
-                                     channel_label, full_prompt, response_text, usage_info)
-        else:
-            self._usage.log_snapshot(log_label, f"{channel_label} への話題提供", "自動実行",
-                                     full_prompt, response_text, usage_info)
+        # ボットの自発投稿は利用者との会話件数（User ( 行）には数えない（#496）。
+        log_tokens_safely(self._usage, log_label, usage_info)
         screened, done = await self._screen_auto_post(response_text, log_label)
         if not eligible() or (anniversary and not channel.permissions_for(member).view_channel):
             return False
