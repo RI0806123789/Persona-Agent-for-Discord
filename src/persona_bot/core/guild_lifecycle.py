@@ -40,14 +40,14 @@ async def remove_guild_state(
     try:
         await autonomous.stop_session(guild_id, reason="サーバーからの退出")
     except Exception as error:
-        logger.error(f'サーバー退出時の配信停止に失敗しました: {type(error).__name__}', exc_info=error)
+        logger.error("サーバー退出時の配信停止に失敗しました。", exc_info=error)
     finally:
         try:
             # 音声会話（#268）の受信・Live の接続・同意パネルも、そのサーバー分を片付ける。
             if voice_conversation is not None and is_current():
                 await voice_conversation.stop(guild_id, reason="サーバーからの退出")
         except Exception as error:
-            logger.error(f'サーバー退出時の音声会話の停止に失敗しました: {type(error).__name__}', exc_info=error)
+            logger.error("サーバー退出時の音声会話の停止に失敗しました。", exc_info=error)
         finally:
             if is_current():
                 voice_guard.release(guild_id)

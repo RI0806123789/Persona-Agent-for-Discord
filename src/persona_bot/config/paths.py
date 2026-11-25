@@ -5,12 +5,8 @@ from pathlib import Path
 from persona_bot.config.constants import BASE_DIR, BUILTIN_PERSONA_PROMPT
 
 
-def resolve_script_path(relative_path: str) -> Path:
-    return (BASE_DIR / relative_path).resolve()
-
-
 def resolve_prompt_path(relative_path: str) -> Path:
-    return resolve_script_path(relative_path)
+    return (BASE_DIR / relative_path).resolve()
 
 
 # ペルソナのファイルを読めなかったときの例外。見つからない（FileNotFoundError）だけでなく、権限がない・

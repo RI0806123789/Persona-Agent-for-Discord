@@ -17,7 +17,7 @@ from persona_bot.core import chat_admission
 from persona_bot.core.app_state import BotState
 from persona_bot.core.background import run_in_thread
 from persona_bot.services.agent_plan import AgentPlan
-from tests.helpers.message_handler_helpers import make_message_handler
+from tests.helpers.message_handler_helpers import close_coroutine, make_message_handler
 from tests.helpers.network_guard import block_network
 from tests.helpers.persona_helpers import install_empty_persona_catalog
 from persona_bot.utils.logging_setup import LOG_DATE_FORMAT, LOG_FORMAT, OperationalFormatter
@@ -142,11 +142,6 @@ class ChatAdmissionTests(unittest.TestCase):
             self.assertIsNone(self.admission.try_acquire(user, 1))
             self.admission.release(1)
         self.assertEqual(self.admission.try_acquire(14, 1), chat_admission.CHAT_BUSY_NOTICE)
-
-
-def close_coroutine(coro, **kwargs):
-    # 会話統計の背景処理は実行せず、受付と枠の寿命だけを確認する。
-    coro.close()
 
 
 class MessageAdmissionTests(unittest.IsolatedAsyncioTestCase):
@@ -291,8 +286,9 @@ class MessageAdmissionTests(unittest.IsolatedAsyncioTestCase):
                 message.reply.side_effect = error
                 with self.assertLogs("persona_bot.core.message_handler", level="ERROR") as logs:
                     await self.handler.on_message(message)
-                self.assertIn(type(error).__name__, logs.records[-1].getMessage())
-                self.assertNotIn("架空の失敗", LOG_FORMATTER.format(logs.records[-1]))
+                formatted = LOG_FORMATTER.format(logs.records[-1])
+                self.assertIn(type(error).__name__, formatted)
+                self.assertNotIn("架空の失敗", formatted)
                 self.assertIs(logs.records[-1].exc_info[1], error)
                 await self.handler.on_message(message)
                 message.reply.assert_awaited_once()

@@ -21,7 +21,7 @@ from persona_bot.utils.discord_helpers import NO_MENTIONS
 
 if TYPE_CHECKING:
     from persona_bot.services.live_session import LiveSession
-    from persona_bot.services.voice_conversation_state import ConsentState, _SpeakerState, _Utterance
+    from persona_bot.services.voice_conversation_state import ConsentState
 
 logger = logging.getLogger("persona_bot.services.voice_conversation")
 
@@ -36,8 +36,6 @@ class VoiceConsentMixin:
         panel_message: Any
         panel_view: Any
         _live: LiveSession
-        _speaker_state: _SpeakerState
-        _current: _Utterance | None
         _stopped: bool
         _now: Callable[[], float]
         _panel_update_task: asyncio.Task[Any] | None
@@ -46,9 +44,7 @@ class VoiceConsentMixin:
 
         def _update_gate(self) -> None: ...
         def _pause(self) -> None: ...
-        def _end_activity(self, *, discard: bool = False) -> None: ...
-        def _remove_reservation(self, user_id: int) -> None: ...
-        def _discard_response(self, utterance: _Utterance, reason: str, *, fade: bool = False) -> None: ...
+        def _clear_participant_state(self, user_id: int, reason: str) -> None: ...
 
     def grant_voice(self, user_id: int) -> None:
         self.consent.voice.add(user_id)
@@ -68,12 +64,7 @@ class VoiceConsentMixin:
             # 張り替えが済むまでの間も、別の人の発話・ペルソナの返答を古い文脈のまま続けない
             # （再接続の完了通知を待たずに、進行中の発話と再生を止める）。
             self._pause()
-        if self._speaker_state.active_user == user_id:
-            self._end_activity(discard=True)
-        if self._current is not None and self._current.user_id == user_id:
-            self._discard_response(self._current, "同意の撤回")
-        self._speaker_state.participants.pop(user_id, None)
-        self._remove_reservation(user_id)
+        self._clear_participant_state(user_id, "同意の撤回")
         self._after_consent_change()
 
     def toggle_memory(self, user_id: int) -> bool:

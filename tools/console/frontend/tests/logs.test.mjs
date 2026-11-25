@@ -1,14 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { compileTs, readSource } from "./helpers/compile.mjs";
 
 // 既存の TypeScript だけで検証する。Node.js 20 でも動き、追加のテストライブラリは不要。
-const source = await readFile(new URL("../src/logs.ts", import.meta.url), "utf8");
-const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } });
-const { appendLogEntries, classifyEntries, displayMessage, MAX_LOG_ENTRIES } = await import(
-  `data:text/javascript;base64,${Buffer.from(compiled.outputText).toString("base64")}`
-);
+const { appendLogEntries, classifyEntries, displayMessage, MAX_LOG_ENTRIES } = compileTs(await readSource("logs.ts"));
 
 const entry = (message, overrides = {}) => ({ ts: 0, message, priority: 6, pid: 42, source: "python", ...overrides });
 

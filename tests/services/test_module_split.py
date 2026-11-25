@@ -215,6 +215,41 @@ class VoiceAndViewSplitTests(unittest.TestCase):
                 )
                 self.assertTrue(has_type_checking)
 
+    def test_unused_wrappers_are_removed_and_unified_entrypoints_exist(self):
+        """#497・#511: 未使用の関数を除き、参加者状態回収・パネルfollowup・利用量記録・コマンド説明を揃える。"""
+        import ast
+        from pathlib import Path
+
+        from persona_bot.config import paths
+        from persona_bot.core import commands
+        from persona_bot.utils import usage_graph
+        from persona_bot.views import view_parts
+
+        for removed in ("_request_floor", "_floor_available_for"):
+            self.assertFalse(hasattr(voice_conversation.VoiceConversation, removed), removed)
+        self.assertTrue(callable(getattr(voice_conversation.VoiceConversation, "_clear_participant_state", None)))
+        self.assertFalse(hasattr(paths, "resolve_script_path"))
+        self.assertEqual(paths.resolve_prompt_path("bot.py"), (paths.BASE_DIR / "bot.py").resolve())
+        self.assertTrue(callable(getattr(view_parts, "edit_panel_or_followup", None)))
+        self.assertTrue(callable(getattr(usage_graph, "log_snapshot_safely", None)))
+
+        cmd_tree = ast.parse(Path(commands.__file__).read_text(encoding="utf-8-sig"))
+        descriptions = [
+            kw.value.value
+            for node in ast.walk(cmd_tree)
+            if isinstance(node, ast.Call)
+            and any(
+                kw.arg == "name" and isinstance(kw.value, ast.Constant) and kw.value.value == "functions"
+                for kw in node.keywords
+            )
+            for kw in node.keywords
+            if kw.arg == "description" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str)
+        ]
+        self.assertEqual(len(descriptions), 1)
+        self.assertLessEqual(len(descriptions[0]), 100)
+        for keyword in ("グラフ", "検索", "使い方", "統計プライバシー"):
+            self.assertIn(keyword, descriptions[0])
+
 
 if __name__ == "__main__":
     unittest.main()

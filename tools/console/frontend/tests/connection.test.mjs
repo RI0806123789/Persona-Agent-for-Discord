@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import ts from "typescript";
 import * as React from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -440,10 +439,8 @@ test("伏せ字モードで通知の見出しと詳細、短いホーム名の�
 
 test("#217 通知の描画先はConsoleの現在のPrivacyContext内に一つだけ配置する", () => {
   const current = consoleHarness({}, true).render();
-  const children = (node) => Array.isArray(node) ? node.flatMap(children)
-    : node && typeof node === "object" ? [node, ...children(node.props?.children)] : [];
   assert.equal(current.tree.props.value, current.privacy);
-  assert.equal(children(current.tree).filter((node) => node.type === "ToastViewport").length, 1);
+  assert.equal(nodes(current.tree).filter((node) => node.type === "ToastViewport").length, 1);
 });
 
 test("#217 接続成功時に表示した通知も後から伏せ字へ切り替わる", async () => {

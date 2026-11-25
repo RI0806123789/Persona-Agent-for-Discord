@@ -18,10 +18,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from google.genai import types
 from persona_bot.core.database import Database
+from persona_bot.services.agent_plan import AgentPlan
+from persona_bot.services.agent_service import AgentService
 from persona_bot.services.content_moderator import ContentModerator
 from persona_bot.services.memory_service import MemoryService, _PromptBlockedError
 from persona_bot.services.stats_service import StatsService
-from persona_bot.utils.usage_graph import UsageTracker, log_conversation_safely, log_tokens_safely
+from persona_bot.utils.usage_graph import (
+    UsageTracker, log_conversation_safely, log_snapshot_safely, log_tokens_safely,
+)
 
 USAGE = {"promptTokenCount": 10, "candidatesTokenCount": 2, "totalTokenCount": 12}
 USAGE_LOGGER = "persona_bot.utils.usage_graph"
@@ -67,6 +71,24 @@ class LogTokensSafelyTests(unittest.TestCase):
         with self.assertLogs(USAGE_LOGGER, "WARNING") as warn_logs:
             log_conversation_safely(broken, "音声会話")
         self.assertIn("RuntimeError", warn_logs.output[0])
+        self.assertNotIn("架空の非公開の値", warn_logs.output[0])
+
+    def test_log_snapshot_safely_emits_conversation_and_tokens_and_swallows_errors(self):
+        """会話応答のトークン＋会話件数記録も同じ安全ラッパーを通す（#497）。"""
+        tracker = UsageTracker()
+        with self.assertLogs(USAGE_LOGGER, "INFO") as captured:
+            log_snapshot_safely(tracker, "会話", "架空の質問", None, "架空のプロンプト", "架空の応答", USAGE)
+        self.assertEqual(list(tracker.total_tokens), [12])
+        self.assertTrue(any("User (会話)：会話を処理しました。" in line for line in captured.output))
+        self.assertTrue(any("Total token count：12" in line for line in captured.output))
+        for secret in ("架空の質問", "架空のプロンプト", "架空の応答"):
+            self.assertFalse([line for line in captured.output if secret in line])
+
+        log_snapshot_safely(None, "会話", "質問", None, "プロンプト", "応答", USAGE)
+        broken = SimpleNamespace(log_snapshot=Mock(side_effect=ValueError("架空の非公開の値")))
+        with self.assertLogs(USAGE_LOGGER, "WARNING") as warn_logs:
+            log_snapshot_safely(broken, "会話", "質問", None, "プロンプト", "応答", USAGE)
+        self.assertIn("ValueError", warn_logs.output[0])
         self.assertNotIn("架空の非公開の値", warn_logs.output[0])
 
 
@@ -237,6 +259,28 @@ class StatsUsageTests(unittest.IsolatedAsyncioTestCase):
         analysis = await service.ensure_analysis("user-0", force=True)
         self.assertIsNotNone(analysis)
         self.assertEqual(analysis["personality"], "")  # サンプル不足のため性格推定は保存されない（従来どおり）
+
+
+class AgentUsageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recording_failure_does_not_abort_subagent_steps(self):
+        from persona_bot.services.gemini_service import GenerationResult
+
+        zone = patch("persona_bot.services.agent_service.resolve_timezone", return_value=timezone(timedelta(hours=9)))
+        zone.start()
+        self.addCleanup(zone.stop)
+        gemini = SimpleNamespace(
+            generate_with_metadata=AsyncMock(return_value=GenerationResult("架空の最終報告", USAGE, [], "selected-model")),
+        )
+        service = AgentService(gemini, failing_tracker())
+        plan = AgentPlan(
+            delegate=True, role="調査担当", task="架空の調査", expected_output="箇条書き", steps=("調査する",),
+        )
+        with self.assertLogs(USAGE_LOGGER, "WARNING") as warn_logs:
+            report = await service.run(plan, "selected-model")
+        self.assertIsNotNone(report)
+        self.assertEqual(report.text, "架空の最終報告")
+        self.assertIn("ValueError", warn_logs.output[0])
+        self.assertNotIn("架空の非公開の値", warn_logs.output[0])
 
 
 if __name__ == "__main__":

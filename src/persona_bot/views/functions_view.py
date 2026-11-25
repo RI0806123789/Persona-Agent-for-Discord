@@ -23,7 +23,8 @@ from persona_bot.views.unblock_view import UnblockView
 from persona_bot.utils.usage_graph import UsageTracker
 from persona_bot.views.view_parts import (
     authorize_administrator_operation, authorize_panel_operation, begin_current_panel_operation,
-    begin_panel_operation, edit_panel_message, PanelView, defer_and_render_graph, send_graph_ephemeral, swap_panel,
+    begin_panel_operation, edit_panel_message, edit_panel_or_followup, PanelView, defer_and_render_graph,
+    send_graph_ephemeral, swap_panel,
 )
 
 
@@ -226,8 +227,7 @@ class ReminderButton(ui.Button):
                 "⚠️ リマインダーの一覧を取得できませんでした。時間をおいて「⏰ リマインダー」を押してください。\n"
                 "パネルが時間切れの場合は /functions から開き直してください。"
             )
-            if not await edit_panel_message(interaction, deferred=True, content=notice, view=hub):
-                await interaction.followup.send(notice, ephemeral=True)
+            await edit_panel_or_followup(interaction, content=notice, view=hub)
             return
         reminder_view = ReminderView(hub.reminders, records, viewer_id, make_hub=hub.clone)
         # 同じ（エフェメラルな）メッセージをリマインダーパネルに差し替える

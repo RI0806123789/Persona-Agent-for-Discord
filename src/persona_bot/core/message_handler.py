@@ -21,7 +21,7 @@ from persona_bot.core.agent_request import confirm_reopened_work_thread, handle_
 from persona_bot.core.message_operations import MessageOperations
 from persona_bot.services.agent_plan import AgentPlan
 from persona_bot.services.violation_notice import record_violation_notice
-from persona_bot.utils.discord_helpers import REPLY_ALLOWED_MENTIONS
+from persona_bot.utils.discord_helpers import NO_MENTIONS, REPLY_ALLOWED_MENTIONS
 from persona_bot.views.agent_thread import AgentWebhooks, AgentWorkThreads, WorkThreadEntry, start_agent_progress
 
 # ★ 外部操作の差し替え口（MessageOperations のフィールドと同名）。ここで使っていなくても消さないこと。
@@ -116,7 +116,7 @@ class MessageHandler:
         try:
             await message.reply(text, allowed_mentions=REPLY_ALLOWED_MENTIONS)
         except discord.DiscordException as error:
-            logger.error(f'違反通知: 送信に失敗しました: {type(error).__name__}', exc_info=error)
+            logger.error("違反通知: 送信に失敗しました。", exc_info=error)
 
     async def _reject_ng_input(self, message: discord.Message, question: str, notice: str) -> bool:
         """入力にNGワードがあれば違反として記録し、True を返す（Gemini は呼ばない）。"""
@@ -135,9 +135,9 @@ class MessageHandler:
             return True
         if self._chat_admission.try_claim_notice(message.author.id):
             try:
-                await message.reply(notice, allowed_mentions=discord.AllowedMentions.none())
+                await message.reply(notice, allowed_mentions=NO_MENTIONS)
             except Exception as error:
-                logger.error(f'通常会話: 見送り案内の送信に失敗しました: {type(error).__name__}', exc_info=error)
+                logger.error("通常会話: 見送り案内の送信に失敗しました。", exc_info=error)
         return False
 
     async def on_message(self, message: discord.Message) -> None:

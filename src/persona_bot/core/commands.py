@@ -24,7 +24,12 @@ from persona_bot.services.autonomous_service import AutonomousService
 from persona_bot.services.voice_conversation_service import VoiceConversationService
 from persona_bot.services.blacklist_service import BlacklistService
 from persona_bot.services.content_moderator import ContentModerator
-from persona_bot.utils.discord_helpers import is_administrator, is_bot_owner, reject_blocked_interaction
+from persona_bot.utils.discord_helpers import (
+    NO_MENTIONS,
+    is_administrator,
+    is_bot_owner,
+    reject_blocked_interaction,
+)
 from persona_bot.views.functions_view import FunctionsView
 from persona_bot.views.view_parts import bind_panel_message, edit_panel_message
 from persona_bot.services.gemini_service import GeminiService
@@ -44,7 +49,7 @@ async def handle_command_error(
 ) -> None:
     """コマンドの失敗を応答状態に合わせて本人へ通知する。例外本文は公開しない。"""
     original = getattr(error, "original", error)
-    logger.error(f'スラッシュコマンドの実行に失敗しました: {type(original).__name__}', exc_info=original)
+    logger.error("スラッシュコマンドの実行に失敗しました。", exc_info=original)
     if isinstance(error, app_commands.NoPrivateMessage):
         notice = "このコマンドはサーバー内で実行してください。"
     elif (
@@ -64,7 +69,7 @@ async def handle_command_error(
         else:
             await interaction.response.send_message(notice, ephemeral=True)
     except Exception as send_error:
-        logger.error(f'スラッシュコマンドの失敗通知を送信できませんでした: {type(send_error).__name__}', exc_info=send_error)
+        logger.error("スラッシュコマンドの失敗通知を送信できませんでした。", exc_info=send_error)
 
 
 def register_commands(
@@ -113,7 +118,10 @@ def register_commands(
 
         return invoke
 
-    @tree.command(name="functions", description="各種機能パネルを開きます（キャラ設定 / 会話要約 / 会話統計 / 自発会話 / リマインダー）。")
+    @tree.command(
+        name="functions",
+        description="各種機能パネルを開きます（設定・要約・統計・自発会話・リマインダー・グラフ・検索・使い方・統計プライバシーなど）。",
+    )
     @owned_command
     async def functions(interaction: discord.Interaction) -> None:
         if await reject_blocked_interaction(interaction, blacklist.is_blocked):
@@ -170,7 +178,7 @@ def register_commands(
         # 接続を試す前に権限を確かめ、不足していれば原因を具体的に案内する。
         notice = join_permission_notice(voice_channel, guild.me if guild is not None else None)
         if notice is not None:
-            await interaction.response.send_message(notice, allowed_mentions=discord.AllowedMentions.none())
+            await interaction.response.send_message(notice, allowed_mentions=NO_MENTIONS)
             return
 
         await voice_coordinator.run(

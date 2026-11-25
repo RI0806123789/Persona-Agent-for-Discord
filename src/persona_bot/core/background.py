@@ -169,7 +169,7 @@ def _on_task_done(task: asyncio.Task[Any], label: str) -> None:
 
     error = task.exception()
     if error is not None:
-        logger.error(f'バックグラウンド処理エラー ({label}): {type(error).__name__}', exc_info=error)
+        logger.error("バックグラウンド処理エラー (%s)。", label, exc_info=error)
 
 
 async def run_in_thread(function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -199,7 +199,7 @@ async def run_in_thread(function: Callable[..., Any], *args: Any, **kwargs: Any)
                 close()
         except Exception as cleanup_error:
             # 回収の失敗で、本来のキャンセルを別の例外に置き換えない。
-            logger.error(f'キャンセル時の同期処理結果の回収に失敗しました: {type(cleanup_error).__name__}', exc_info=cleanup_error)
+            logger.error("キャンセル時の同期処理結果の回収に失敗しました。", exc_info=cleanup_error)
         raise asyncio.CancelledError
     if error is not None:
         raise error
@@ -253,7 +253,7 @@ def make_guarded_loop(
             のようにバウンドメソッドをそのまま渡す。**コルーチンオブジェクトではなく
             「呼ぶとコルーチンを返すもの」を渡すこと**（コルーチンは1度しか await
             できず、2回目の実行で RuntimeError になるため）。
-        label: エラーログでコロンの前に出す固定の文字列。"リマインダー確認エラー" のように**末尾まで含めた
+        label: エラーログに出す固定の文字列。"リマインダー確認エラー" のように**末尾まで含めた
             文言**を渡すこと（"リマインダー" だけを渡すとログの文言が変わる）。
         client: 接続完了を待つ対象の Discord クライアント。
         minutes: 実行間隔（分）。`seconds` とはどちらか一方だけを指定する。
@@ -284,7 +284,7 @@ def make_guarded_loop(
                 with owner.scope():
                     await coro_factory()
         except Exception as error:
-            logger.error(f'{label}: {type(error).__name__}', exc_info=error)
+            logger.error("%s", label, exc_info=error)
 
     @guarded_loop.before_loop
     async def before_guarded_loop() -> None:

@@ -80,7 +80,7 @@ async def _play_pcm_locked(voice_client: discord.VoiceClient, pcm: bytes) -> Non
         # このコールバックは discord.py の再生スレッドから呼ばれるため、
         # イベントループ側のオブジェクトへは call_soon_threadsafe 経由で触る。
         if error:
-            logger.error(f'読み上げの再生エラー: {type(error).__name__}', exc_info=error)
+            logger.error("読み上げの再生エラーが発生しました。", exc_info=error)
         loop.call_soon_threadsafe(finished.set)
 
     # 待ち時間の上限は「音声の実再生秒数 + 余裕」。16bit なので 1 サンプル 2 バイト、
@@ -98,10 +98,15 @@ async def _play_pcm_locked(voice_client: discord.VoiceClient, pcm: bytes) -> Non
         try:
             controller.stop(voice_client, source=audio_source)
         except Exception as error:
-            logger.error(f'TTS: キャンセル時の再生停止に失敗しました: {type(error).__name__}', exc_info=error)
+            logger.error("TTS: キャンセル時の再生停止に失敗しました。", exc_info=error)
         raise
     except asyncio.TimeoutError:
-        logger.warning(f'TTS: 再生の完了通知が {timeout_seconds:.1f} 秒以内に届かなかったため、この読み上げを打ち切って次へ進みます。ボイス接続が正常な切断を経ずに切れた可能性があります。', exc_info=True)
+        logger.warning(
+            "TTS: 再生の完了通知が %.1f 秒以内に届かなかったため、この読み上げを打ち切って次へ進みます。"
+            "ボイス接続が正常な切断を経ずに切れた可能性があります。",
+            timeout_seconds,
+            exc_info=True,
+        )
         try:
             # まだ鳴っている場合に次の読み上げと音が重ならないよう止めておく。
             # 既に切断されていると例外になりうるが、打ち切り自体は続行する。
@@ -117,7 +122,7 @@ async def _play_pcm_locked(voice_client: discord.VoiceClient, pcm: bytes) -> Non
             try:
                 audio_source.cleanup()
             except Exception as error:
-                logger.error(f'TTS: 音声ストリームの解放に失敗しました: {type(error).__name__}', exc_info=error)
+                logger.error("TTS: 音声ストリームの解放に失敗しました。", exc_info=error)
             finally:
                 # PCMAudio.cleanup() は入力ストリームを閉じないため、所有する側で解放する。
                 pcm_stream.close()
@@ -191,7 +196,11 @@ async def _run_speech_worker(guild: discord.Guild) -> None:
                     ),
                 )
             except asyncio.TimeoutError:
-                logger.warning(f'TTS: 音声合成が {TTS_TIMEOUT_SECONDS} 秒で完了しなかったため、この返信の読み上げを見送ります。', exc_info=True)
+                logger.warning(
+                    "TTS: 音声合成が %s 秒で完了しなかったため、この返信の読み上げを見送ります。",
+                    TTS_TIMEOUT_SECONDS,
+                    exc_info=True,
+                )
             except Exception as error:
                 # 読み上げはチャット本体の付随機能なので、失敗しても次の返信へ進む。
                 logger.error('TTSの音声合成に失敗しました。', exc_info=error)
