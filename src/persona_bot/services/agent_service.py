@@ -51,7 +51,7 @@ def render_agent_line(lines: Mapping[str, str], key: str, **values: Any) -> str:
     values = {"role": "", "step": "", "current": 0, "total": 0, **values}
     try:
         return lines[key].format(**values)
-    except (KeyError, IndexError, ValueError):
+    except (KeyError, IndexError, ValueError, AttributeError, TypeError):
         return AGENT_DEFAULT_LINES[key].format(**values)
 
 

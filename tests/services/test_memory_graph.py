@@ -173,6 +173,22 @@ class BuildMemoryGraphTests(unittest.TestCase):
             if node.kind == "category":
                 self.assertTrue(any(child.parent == node.id for child in graph.nodes))
 
+    def test_entry_without_room_for_a_child_collapses_into_leaf_and_keeps_applied_max_nodes(self):
+        """残り1枠の辞書・配列は空の key にせず葉ノードへ畳み、meta.maxNodes と pending_count も整合させる（#509）。"""
+        snap = snapshot(profile={"家族": {"ペット": "架空の犬"}, "予備": "値"}, pending_count=True)
+        graph = build_memory_graph(snap, max_nodes=3, tz=TOKYO)
+        self.assertEqual([node.kind for node in graph.nodes], ["root", "category", "value"])
+        self.assertTrue(graph.truncated)
+        self.assertEqual(graph.max_nodes, 3)
+        self.assertEqual(graph.pending_count, 0)
+        self.assertIn("ペット", graph.nodes[-1].detail)
+        payload = graph_payload(graph, generated_at=NOW, tz=TOKYO)
+        self.assertEqual(payload["meta"]["maxNodes"], 3)
+        self.assertEqual(payload["meta"]["pendingCount"], 0)
+        for bad_pending in (True, False, "不正", float("nan"), float("inf"), -3):
+            doc = build_memory_graph_document(snapshot(pending_count=bad_pending), generated_at=NOW)
+            self.assertEqual(doc.pending_count, 0)
+
     def test_payload_has_only_graph_fields_and_metadata(self):
         graph = build_memory_graph(snapshot(profile={"呼び名": "架空"}, pending_count=1), tz=TOKYO)
         payload = graph_payload(graph, generated_at=NOW, tz=TOKYO)

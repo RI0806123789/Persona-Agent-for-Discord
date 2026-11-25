@@ -278,3 +278,77 @@ test("検索語が空か一致が無いときは、範囲を返さない", () =>
   assert.deepEqual(findMatchRanges("error", "   "), []);
   assert.deepEqual(findMatchRanges("error", "warn"), []);
 });
+
+test("#510 データ画面は summary.path が null のとき「が見つかりません」を出さずエラー文だけを出す", async () => {
+  const { runtime, render } = loadDataPage(async () => ({
+    path: null, exists: false, errors: ["引数が足りません。"],
+  }));
+  try {
+    render();
+    runtime.commit();
+    await tick();
+    const inlineErrors = nodes(render()).filter((node) => node.type === "InlineError");
+    const texts = inlineErrors.map((node) => JSON.stringify(node.props.children));
+    assert.equal(texts.some((text) => text.includes("が見つかりません")), false, texts.join("|"));
+    assert.equal(texts.some((text) => text.includes("引数が足りません")), true, texts.join("|"));
+  } finally {
+    runtime.unmount();
+  }
+});
+
+test("#510 ログ画面の行絞り込みと強調表示は同じ照合結果を使う", async () => {
+  const runtime = hookRenderer();
+  let setQueryState;
+  const originalUseState = runtime.hooks.useState;
+  let stateIndex = 0;
+  const wrappedHooks = {
+    ...runtime.hooks,
+    useLayoutEffect: () => {},
+    useState(initial) {
+      const pair = originalUseState(initial);
+      if (stateIndex++ === 0) setQueryState = pair[1];
+      return pair;
+    },
+  };
+  const { LogsPage } = compile(await source("pages/LogsPage.tsx"), {
+    react: wrappedHooks,
+    "react/jsx-runtime": { jsx, jsxs: jsx },
+    "../components/expressive": names,
+    "../components/Icon": { Icon: "Icon" },
+    "../components/ui": names,
+    "../format": { formatClock: () => "12:00:00" },
+    "../logs": compileTs(await source("logs.ts")),
+    "../logPresentation": {
+      prepareLogEntries: (entries) => entries.map((entry) => ({ entry, level: "info", text: entry.message })),
+    },
+    "../privacy": { usePrivacy: () => ({ enabled: false }), redactError: (text) => text },
+    "./shared": { NotConnected: "NotConnected" },
+  });
+  const stream = {
+    entries: [
+      { ts: 1, pid: 1, priority: 6, source: "python", message: "İ だけの行" },
+      { ts: 2, pid: 1, priority: 6, source: "python", message: "info の行" },
+    ],
+    status: "live", paused: false, pendingCount: 0, message: null, messageSafe: null,
+    setPaused() {}, retry() {}, clear() {},
+  };
+  const draw = () => {
+    stateIndex = 0;
+    return runtime.render(LogsPage, {
+      stream, connected: true, connecting: false, onConnect() {}, selectedProfile: null, filterInputRef: { current: null },
+    });
+  };
+  try {
+    draw();
+    setQueryState("i");
+    const tree = draw();
+    const rows = nodes(tree).filter((node) => String(node.props?.className ?? "").startsWith("log-row "));
+    // "İ" だけの行は findMatchRanges("İ だけの行", "i") が空なので絞り込みでも残らず、残った行には必ず <mark> が付く
+    assert.equal(rows.length, 1);
+    const marks = nodes(rows[0]).filter((node) => node.type === "mark");
+    assert.equal(marks.length, 1);
+    assert.equal(marks[0].props.children, "i");
+  } finally {
+    runtime.unmount();
+  }
+});

@@ -110,19 +110,28 @@ def read_binary_answers(answers: Any, keys: Iterable[str]) -> dict[str, BinaryAn
     return result
 
 
+_USAGE_TOKEN_KEYS = ("total_input_tokens", "total_output_tokens", "total_tokens")
+
+
 def _usage_info(usage: Any) -> dict[str, int] | None:
     """Decisions API の usage を、利用量の記録（UsageTracker）が読む形へ直す。"""
     if not isinstance(usage, dict):
         return None
 
-    def count(key: str) -> int:
+    def read_int(key: str) -> int | None:
         value = usage.get(key)
-        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
+    values = {key: read_int(key) for key in _USAGE_TOKEN_KEYS}
+    if all(value is None for value in values.values()):
+        return None
+    input_tokens = values["total_input_tokens"] or 0
+    output_tokens = values["total_output_tokens"] or 0
+    total_tokens = max(values["total_tokens"] or 0, input_tokens + output_tokens)
     return {
-        "promptTokenCount": count("total_input_tokens"),
-        "candidatesTokenCount": count("total_output_tokens"),
-        "totalTokenCount": count("total_tokens"),
+        "promptTokenCount": input_tokens,
+        "candidatesTokenCount": output_tokens,
+        "totalTokenCount": total_tokens,
     }
 
 

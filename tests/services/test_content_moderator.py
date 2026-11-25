@@ -349,14 +349,30 @@ class DecisionCascadeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decider.calls, [])
 
     async def test_cancellation_while_waiting_is_propagated(self) -> None:
-        never = asyncio.Event()
-        decider = FakeDecider(unsafe_probability(0.01), wait_for=never)
-        with patch("persona_bot.services.content_moderator.generate_content", generation(SAFE_ROUTE)):
-            task = asyncio.create_task(self.moderator(decider).check_and_route("架空の発言"))
+        decide_cleaned = asyncio.Event()
+        judge_cleaned = asyncio.Event()
+
+        class BlockingDecider:
+            async def decide_binary(self, *_args, **_kwargs):
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    decide_cleaned.set()
+
+        async def slow_generate(*_args, **_kwargs):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                judge_cleaned.set()
+
+        with patch("persona_bot.services.content_moderator.generate_content", AsyncMock(side_effect=slow_generate)):
+            task = asyncio.create_task(self.moderator(BlockingDecider()).check_and_route("架空の発言"))
             await asyncio.sleep(0.01)
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
+        self.assertTrue(decide_cleaned.is_set())
+        self.assertTrue(judge_cleaned.is_set())
 
     async def test_ng_word_variants_skip_confident_safe_even_without_ng_word_match_mark(self) -> None:
         """空白・記号混入やローマ字の変形候補は、ng_word_match 印が無くても安全確定で上書きしない（#496）。"""

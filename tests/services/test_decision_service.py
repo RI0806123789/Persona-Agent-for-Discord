@@ -124,6 +124,22 @@ class GeminiDeciderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Total token count：12", messages)
         self.assertNotIn("User (", messages)
 
+    async def test_empty_usage_is_ignored_and_omitted_total_uses_sum(self) -> None:
+        """空辞書や不正キーだけの usage では 0 トークンを記録せず、total_tokens 省略時は合算を使う（#509）。"""
+        tracker = UsageTracker()
+        decider = GeminiDecider("架空のクライアント", usage=tracker)
+        for bad_usage in ({}, {"other": 5}, {"total_input_tokens": True}, {"total_input_tokens": -1}):
+            await self.decide(response({"q": {"type": "noul", "noul": 0.1, "confidence": 0.9}}, usage=bad_usage),
+                              decider=decider)
+        self.assertEqual(list(tracker.total_tokens), [])
+        with self.assertLogs("persona_bot.utils.usage_graph", level="INFO"):
+            await self.decide(response(
+                {"q": {"type": "noul", "noul": 0.1, "confidence": 0.9}},
+                usage={"total_input_tokens": 9, "total_output_tokens": 2},
+            ), decider=decider)
+        self.assertEqual((list(tracker.input_tokens), list(tracker.output_tokens), list(tracker.total_tokens)),
+                         ([9], [2], [11]))
+
     async def test_usage_recording_failure_does_not_change_the_answer(self) -> None:
         tracker = Mock(spec=UsageTracker)
         tracker.log_tokens.side_effect = RuntimeError("架空の記録の失敗")

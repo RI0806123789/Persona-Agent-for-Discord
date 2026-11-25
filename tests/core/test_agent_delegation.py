@@ -225,6 +225,23 @@ class AgentDelegationTests(unittest.IsolatedAsyncioTestCase):
         self.moderator.check_and_route.assert_awaited_once()
         self.moderator.check_route_and_plan.assert_not_awaited()
 
+    async def test_stream_ending_during_comment_moderation_delegates_on_fallback(self) -> None:
+        """配信コメントの判定待機中に配信が終了して通常会話へ移ったら、委任計画を補完する（#509）。"""
+        streaming = [True]
+        self.handler.autonomous.is_comment_channel.side_effect = lambda *_args: streaming[0]
+        self.handler.autonomous.claim_comment_slot.return_value = object()
+
+        async def finish_stream_during_route(question):
+            streaming[0] = False
+            return True, "", "none", None
+
+        self.moderator.check_and_route.side_effect = finish_stream_during_route
+        await self.handler.on_message(self.message)
+        self.moderator.check_and_route.assert_awaited_once()
+        self.moderator.check_route_and_plan.assert_awaited_once()
+        self.assertEqual(len(self.child_calls()), len(PLAN.steps))
+        self.send.assert_awaited_once()
+
 
     async def delegate_with_blocked_cleanup(self, trigger, *, repeat=False, broken=False):
         started, cleaning, release, cleaned = (asyncio.Event() for _ in range(4))

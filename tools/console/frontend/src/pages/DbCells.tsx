@@ -59,6 +59,7 @@ export function CellValue({ column, row, page, detail = false }: { column: Colum
     return <span className="body-small muted">統計の収集を止めているため、持ち帰っていません</span>;
   }
   if (column.kind === "guild" && isDm(value)) return <span>DM</span>;
+  if ((column.kind === "id" || column.kind === "user") && isDm(value)) return <span className="muted">—</span>;
   if (isEmpty(value)) return <span className="muted">—</span>;
   if (privacy.enabled && isSecretKind(column.kind)) {
     // 件数だけは分かっても困らないので残す（発言サンプルが何件あるか、など）
@@ -117,8 +118,10 @@ export function CellValue({ column, row, page, detail = false }: { column: Colum
       );
     case "status":
       return <StatusChip tone={statusTone(value)} label={typeof value === "string" ? (STATUS_LABELS[value] ?? value) : inlineText(value)} />;
-    case "persona":
-      return <span title={String(value)}>{personaName(value)}</span>;
+    case "persona": {
+      const redact = typeof privacy.redact === "function" ? privacy.redact : (text: string) => text;
+      return <span title={redact(String(value))}>{redact(personaName(value))}</span>;
+    }
     case "model":
       return <span className="mono">{String(value)}</span>;
     case "respondMode":
@@ -226,8 +229,8 @@ function AnalysisView({ value }: { value: DbValue }) {
         <div className="db-analysis-block">
           <span className="label-medium muted">よく話す話題</span>
           <span className="chips">
-            {analysis.topics.map((topic) => (
-              <Chip key={topic.label}>
+            {analysis.topics.map((topic, index) => (
+              <Chip key={`${index}-${topic.label}`}>
                 {topic.label}
                 {weightTotal > 0 && <span className="mono muted">{formatPercent(Math.max(0, topic.weight) / weightTotal)}</span>}
               </Chip>

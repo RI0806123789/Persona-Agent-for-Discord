@@ -792,6 +792,37 @@ class DbSummaryScriptTests(unittest.TestCase):
             self.assertTrue(any("bot.db を読み取れません" in error for error in data["errors"]))
             self.assertFalse(any("file is not a database" in error for error in data["errors"]))
 
+    def test_multiple_failing_table_counts_emit_a_single_error_and_zero_user_ids_are_skipped(self):
+        """複数テーブルの件数失敗でも同じエラー文を重複させず、未設定の author_id=0 は名前検索から除く（#510）。"""
+        class FailingCountConnection(sqlite3.Connection):
+            def execute(self, sql, *args, **kwargs):
+                if sql.startswith('SELECT COUNT(*) FROM "broken_'):
+                    raise sqlite3.OperationalError("broken table")
+                return super().execute(sql, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "bot.db"
+            con = sqlite3.connect(path)
+            try:
+                con.execute("CREATE TABLE broken_a (x INTEGER)")
+                con.execute("CREATE TABLE broken_b (x INTEGER)")
+                con.execute("CREATE TABLE queue_tasks (task_id TEXT, author_id INTEGER, created_at TEXT)")
+                con.execute("CREATE TABLE user_stats (user_id TEXT, user_name TEXT)")
+                con.execute("INSERT INTO queue_tasks VALUES ('t1', 0, '2026-10-18T00:00:00Z')")
+                con.execute("INSERT INTO user_stats VALUES ('0', '誤登録名')")
+                con.commit()
+            finally:
+                con.close()
+            connect = sqlite3.connect
+            with patch.object(sqlite3, "connect", side_effect=lambda *args, **kwargs: connect(
+                *args, factory=FailingCountConnection, **kwargs,
+            )):
+                summary = db_summary.collect(str(path), str(root / "missing.json"))
+            self.assertEqual(summary["errors"].count("一部のテーブルの件数を取得できませんでした。"), 1)
+            table_page = db_table.collect(str(path), "queue_tasks", 0, 50)
+            self.assertEqual(table_page["users"], {})
+
     def test_daily_feedback_excludes_future_and_old_days_at_jst_boundaries(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

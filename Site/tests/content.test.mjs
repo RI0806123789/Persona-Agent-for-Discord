@@ -87,6 +87,13 @@ test("免責事項で、ペルソナが架空であることを伝える", () =>
   assert.match(content.DISCLAIMER.body, /開発者の見解を反映するものではありません/);
 });
 
+test("判断専用モデル（Gemini Decision 1）が安全機能と技術スタックに反映されている", () => {
+  const safeGroup = content.FEATURE_GROUPS.find((group) => group.id === "safe");
+  assert.ok(safeGroup);
+  assert.ok(safeGroup.features.some((feature) => feature.body.includes("Gemini Decision 1")));
+  assert.ok(content.STACK.items.some((item) => item.role.includes("Gemini Decision 1")));
+});
+
 test("アクセスの計測や外部の読み込みを入れていない", async () => {
   const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   // 外部から読み込むスクリプト・スタイル・フォントが無いこと（閲覧者の通信先をこのサイトだけにする）

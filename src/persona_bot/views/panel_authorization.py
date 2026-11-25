@@ -11,6 +11,7 @@
 import logging
 
 from persona_bot.utils.discord_helpers import is_administrator, is_current_administrator
+from persona_bot.utils.discord_permissions import BLOCKED_USER_NOTICE
 from persona_bot.views.panel_state import begin_panel_operation, edit_panel_message, panel_operation_is_current
 
 logger = logging.getLogger("persona_bot.views.view_parts")
@@ -92,3 +93,12 @@ async def confirm_panel_permission(interaction, allowed: bool, *, notice: str, f
     else:
         await edit_panel_message(interaction, deferred=True, content=notice, view=None)
     return False
+
+
+async def confirm_panel_not_blocked(view, interaction, *, followup: bool = False) -> bool:
+    """長い待機の後にブラックリスト登録されていないかを確かめ、登録済みなら拒否を案内する（#509）。"""
+    check = getattr(view, "blocked_user_check", None)
+    user = getattr(interaction, "user", None)
+    user_id = getattr(user, "id", None)
+    allowed = check is None or user_id is None or not check(user_id)
+    return await confirm_panel_permission(interaction, allowed, notice=BLOCKED_USER_NOTICE, followup=followup)

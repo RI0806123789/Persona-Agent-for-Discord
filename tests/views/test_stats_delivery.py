@@ -137,6 +137,40 @@ class StatsDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(self.interaction.edit_original_response.await_args.kwargs["content"], "架空の統計")
         self.assertTrue(all(buffer.closed for buffer in self.buffers))
 
+    async def test_user_blocked_or_guild_left_during_generation_closes_buffers_without_sending(self) -> None:
+        """統計生成の待機中にブロックまたはサーバー退出が起きたら、送信せずバッファを閉じる（#509）。"""
+        from persona_bot.core.app_state import BotState
+
+        for case in ("blocked", "inactive"):
+            with self.subTest(case=case):
+                buffers = [io.BytesIO(b"png-1"), io.BytesIO(b"png-2")]
+                state = BotState()
+                settings = state.get_guild(1)
+                self.view = StatsView(self.stats, viewer_id="11", is_admin=False)
+                self.addCleanup(self.view.stop)
+                self.view.guild_settings = settings
+                blocked = False
+                self.view.blocked_user_check = lambda uid: blocked and uid == 11
+                button = next(item for item in self.view.children if isinstance(item, RunStatsButton))
+                interaction = make_interaction(
+                    user=make_member(admin=False),
+                    response=make_response("edit_message", "send_message"), without=("original_response",),
+                )
+
+                async def generate(*_args, **_kwargs):
+                    nonlocal blocked
+                    if case == "blocked":
+                        blocked = True
+                    else:
+                        state.forget_guild(1)
+                    return "架空の統計", [("a.png", buffers[0]), ("b.png", buffers[1])]
+
+                self.stats.build_dashboard.side_effect = generate
+                await button.callback(interaction)
+                interaction.followup.send.assert_not_awaited()
+                self.assertNotEqual(interaction.edit_original_response.await_args.kwargs["content"], "架空の統計")
+                self.assertTrue(all(buffer.closed for buffer in buffers))
+
 
 class AdministratorRecheckTests(unittest.IsolatedAsyncioTestCase):
     """送信直前の管理者の再確認が、押した時点の写しではなく最新の Member で行われることを確かめる（#208）。"""

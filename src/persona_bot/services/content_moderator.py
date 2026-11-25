@@ -16,12 +16,14 @@ APIエラーやタイムアウト時は安全側に倒して通過させる（fa
 
 import logging
 import asyncio
+from collections.abc import Coroutine
 from typing import Any
 
 from persona_bot.config.constants import (
     BOT_RESPONSE_REFUSAL_TEXT, DECISION_INPUT_SAFE_MAX_UNSAFE_PROBABILITY, MODERATION_MODEL_NAME,
     MODERATION_TIMEOUT_SECONDS, REMINDER_TIMEZONE,
 )
+from persona_bot.core.background import wait_for_cleanup
 from persona_bot.services.agent_plan import AgentPlan, normalize_agent_plan
 from persona_bot.services.decision_service import Decider
 from persona_bot.services.moderation_prompts import (  # noqa: F401（従来の import 先として再公開する名前を含む）
@@ -50,6 +52,29 @@ from persona_bot.utils.normalization import normalize_memory_category
 from persona_bot.utils.usage_graph import UsageTracker, log_tokens_safely
 
 logger = logging.getLogger(__name__)
+
+
+async def _gather_pair(
+    first: Coroutine[Any, Any, Any],
+    second: Coroutine[Any, Any, Any],
+    *,
+    label: str,
+) -> tuple[Any, Any]:
+    """2つの判定を並行して待ち、中断・例外時は両タスクをキャンセルして回収する（#509）。"""
+    first_task = asyncio.create_task(first)
+    second_task = asyncio.create_task(second)
+    try:
+        return await asyncio.gather(first_task, second_task)
+    except BaseException:
+        for task in (first_task, second_task):
+            if not task.done():
+                task.cancel()
+
+        async def _drain() -> None:
+            await asyncio.gather(first_task, second_task, return_exceptions=True)
+
+        await wait_for_cleanup(_drain(), label=label)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -253,14 +278,18 @@ class ContentModerator:
         if not text or not text.strip():
             return VERDICT_UNKNOWN
         prompt = _build_prompt(text, "ユーザー入力", self._ng_filter.words)
+        if self._decider is None:
+            verdict, _reason, _parsed = await self._judge_verdict(prompt, schema=_response_schema())
+            return verdict
         if not self._ng_filter.words:
             if await self._decides_input_safe(text):
                 return VERDICT_SAFE
             verdict, _reason, _parsed = await self._judge_verdict(prompt, schema=_response_schema())
             return verdict
-        decided_safe, (verdict, _reason, parsed) = await asyncio.gather(
+        decided_safe, (verdict, _reason, parsed) = await _gather_pair(
             self._decides_input_safe(text),
             self._judge_verdict(prompt, schema=_response_schema()),
+            label="音声入力モデレーションの回収",
         )
         if decided_safe and not (verdict == VERDICT_UNSAFE and self._is_ng_word_match(parsed)):
             return VERDICT_SAFE
@@ -355,10 +384,17 @@ class ContentModerator:
 
         # 記憶カテゴリ・リマインダー・委任のために生成モデルの呼び出しは必ず要るので、判断モデル（#450）は
         # 並行して待つ（直列にすると判断モデルの往復だけ応答が遅れる）。生成モデルの safe が再判定を兼ねる。
-        decided_safe, (is_safe, reason, parsed) = await asyncio.gather(
-            self._decides_input_safe(text),
-            self._judge(prompt, route=True, include_agent=agent_history is not None),
-        )
+        if self._decider is None:
+            decided_safe = False
+            is_safe, reason, parsed = await self._judge(
+                prompt, route=True, include_agent=agent_history is not None,
+            )
+        else:
+            decided_safe, (is_safe, reason, parsed) = await _gather_pair(
+                self._decides_input_safe(text),
+                self._judge(prompt, route=True, include_agent=agent_history is not None),
+                label="入力モデレーションの回収",
+            )
         if decided_safe and not is_safe:
             if self._is_ng_word_match(parsed):
                 # NG ワードの変形表現は判断モデルでは見分けられない（登録語を問いに載せないため）。

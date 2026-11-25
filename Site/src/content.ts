@@ -272,7 +272,7 @@ export const FEATURE_GROUPS: readonly FeatureGroup[] = [
       {
         icon: "🛡️",
         title: "不適切な発言を見張る",
-        body: "NG ワードと AI の判定で不適切な発言を検知し、3 回でその人への応答を止めます。ボット自身の返事も、送る前に確かめます。",
+        body: "NG ワードと、判断専用モデル（Gemini Decision 1）・生成モデルを組み合わせた AI の判定で不適切な発言を検知し、3 回でその人への応答を止めます。ボット自身の返事も、送る前に確かめます。",
       },
       {
         icon: "🔒",
@@ -362,7 +362,7 @@ export const STACK = {
   items: [
     { name: "Python 3.11 以上", role: "ボット本体の言語" },
     { name: "discord.py", role: "Discord とのやりとり（文字・ボイス）" },
-    { name: "Google Gemini", role: "会話の生成・内容の判定・文書の要約" },
+    { name: "Google Gemini", role: "会話の生成・内容の判定（Gemini Decision 1 を含む）・文書の要約" },
     { name: "Gemini Live", role: "ボイスチャンネルでの声の会話" },
     { name: "SQLite", role: "記憶・設定・リマインダーの保存" },
     { name: "edge-tts / gTTS", role: "配信での読み上げ" },

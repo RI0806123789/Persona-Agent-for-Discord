@@ -558,6 +558,21 @@ class VoiceGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(self.guild.voice_client, replacement)
         self.assertEqual(self.guard.home_channel_id(1), HOME_ID)
 
+    async def test_release_and_disconnect_still_disconnects_when_stop_raises_or_cancels(self) -> None:
+        """会話停止の待機が例外・キャンセルで中断されても、保護を解いた接続を必ず切断する（#509）。"""
+        for error in (RuntimeError("架空の停止失敗"), asyncio.CancelledError()):
+            with self.subTest(error=type(error).__name__):
+                await self.asyncSetUp()
+                self.event(None, self.home)
+                with self.assertRaises(type(error)):
+                    await voice_guard_module.release_and_disconnect(
+                        self.guard, 1, self.voice_client,
+                        label="テスト切断", failure_message="架空の切断失敗",
+                        stop=AsyncMock(side_effect=error),
+                    )
+                self.assertIsNone(self.guard.home_channel_id(1))
+                self.voice_client.disconnect.assert_awaited_once_with(force=True)
+
 
 if __name__ == "__main__":
     unittest.main()

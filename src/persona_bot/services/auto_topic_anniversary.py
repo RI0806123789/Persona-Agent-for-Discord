@@ -197,7 +197,7 @@ class AnniversaryMixin:
                 # 権限が戻れば次回の見回りで投稿される。
                 continue
             try:
-                done = await self._post_anniversary(channel, guild_settings, member, label)
+                done = await self._post_anniversary(channel, guild_settings, member, label, today_str=today_str)
             except discord.Forbidden:
                 # 生成中に権限が変わった場合も、同じ日に毎時間 API を呼び続けない
                 # （自発的な会話の Forbidden と同じ扱い）。今日の分は処理済みとして記録する。
@@ -240,16 +240,22 @@ class AnniversaryMixin:
         guild_settings: GuildSettings,
         member: discord.Member,
         label: str,
+        today_str: str | None = None,
     ) -> bool:
         """お祝いメッセージを生成し、チャンネルへ投稿する。戻り値の意味は _post_topic と同様。"""
+        target_date = today_str or datetime.now(self._tz).date().isoformat()
+        posted_key = f"{member.id}:{label}"
+
         def eligible() -> bool:
-            # 生成の前後・送信の前に何度も呼ばれる。待機中にブロックされた場合も止める。
+            # 生成の前後・送信の前に何度も呼ばれる。待機中にブロックされた場合や、並行する見回りで
+            # 同日分がすでに記録された場合も止める（#509）。
             # 待機中にサーバーから退出した設定（is_active が偽）でも止める（#466。古い設定のまま投稿すると、
             # 記録は保存されず、再参加後の新しい設定が同じ日にもう一度祝ってしまう）。
             return (
                 guild_settings.is_active
                 and guild_settings.auto_topic_enabled and guild_settings.autonomous_session is None
                 and channel.id in guild_settings.auto_topic_channels
+                and guild_settings.anniversary_posted_dates.get(posted_key) != target_date
                 and not self._is_user_blocked(member.id)
             )
 

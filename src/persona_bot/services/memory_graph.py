@@ -102,6 +102,7 @@ class MemoryGraph:
     # ノード数の上限に達して、記憶の一部を図に載せられなかったか。
     truncated: bool = False
     pending_count: int = 0
+    max_nodes: int = MEMORY_GRAPH_MAX_NODES
 
     @property
     def memory_node_count(self) -> int:
@@ -177,13 +178,23 @@ def _format_saved_at(raw: Any, tz) -> str | None:
     return moment.astimezone(tz).strftime("%Y-%m-%d %H:%M")
 
 
+def _normalize_pending_count(value: Any) -> int:
+    """未圧縮の会話件数を 0 以上の整数に揃える（bool・非数値・非有限の数は 0）。"""
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 class _GraphBuilder:
     def __init__(self, *, max_nodes: int, max_depth: int, label_max: int, detail_max: int) -> None:
         self._max_nodes = max_nodes
         self._max_depth = max_depth
         self._label_max = label_max
         self._detail_max = detail_max
-        self.graph = MemoryGraph()
+        self.graph = MemoryGraph(max_nodes=max_nodes)
         self._depths: dict[str, int] = {}
 
     def add(self, label: str, kind: str, parent: str | None, detail: str, path: Iterable[str]) -> str | None:
@@ -219,8 +230,11 @@ class _GraphBuilder:
         node_path = path + (name,)
         depth = self._depths[parent] + 1
         if isinstance(value, (dict, list)) and value:
-            if depth >= self._max_depth:
-                # これ以上は枝を伸ばさず、中身をまとめて詳細に載せる（図が細かくなりすぎないため）。
+            no_room_for_children = len(self.graph.nodes) + 2 > self._max_nodes
+            if depth >= self._max_depth or no_room_for_children:
+                # 深さの上限、または子を1つも置けない残り枠では枝を伸ばさず、中身をまとめて詳細に載せる。
+                if no_room_for_children:
+                    self.graph.truncated = True
                 self.add(f"{name} …", "value", parent, _json_text(value), node_path)
                 return
             count = f"{len(value)} 項目" if isinstance(value, dict) else f"{len(value)} 件"
@@ -332,7 +346,7 @@ def build_memory_graph(
     tz = tz if tz is not None else resolve_timezone(MEMORY_GRAPH_TIMEZONE, purpose="記憶の可視化")
     builder = _GraphBuilder(max_nodes=max(max_nodes, 2), max_depth=max(max_depth, 2),
                             label_max=max(label_max, 2), detail_max=max(detail_max, 1))
-    builder.graph.pending_count = max(int(snapshot.pending_count or 0), 0)
+    builder.graph.pending_count = _normalize_pending_count(snapshot.pending_count)
     root = builder.add("あなた", "root", None, _ROOT_DETAIL, ("あなた",))
     if root is None:  # 上限は2以上にしてあるので通らない（念のため）。
         return None
@@ -384,7 +398,7 @@ def graph_payload(graph: MemoryGraph, *, generated_at: datetime, tz) -> dict[str
             "timezone": timezone_label(tz),
             "pendingCount": graph.pending_count,
             "truncated": graph.truncated,
-            "maxNodes": MEMORY_GRAPH_MAX_NODES,
+            "maxNodes": graph.max_nodes,
             "memoryNodeCount": graph.memory_node_count,
         },
         "nodes": [asdict(node) for node in graph.nodes],
@@ -407,7 +421,7 @@ def build_memory_graph_document(snapshot: MemorySnapshot, *, generated_at: datet
     """記憶の写しから、添付する HTML（UTF-8）を作る。テンプレートを読むのでワーカーで呼ぶこと。"""
     tz = resolve_timezone(MEMORY_GRAPH_TIMEZONE, purpose="記憶の可視化")
     graph = build_memory_graph(snapshot, tz=tz)
-    pending = max(int(snapshot.pending_count or 0), 0)
+    pending = _normalize_pending_count(snapshot.pending_count)
     if graph is None:
         return MemoryGraphDocument(html=None, memory_node_count=0, pending_count=pending, truncated=False)
     html = render_memory_graph_html(graph, template=load_memory_graph_template(), generated_at=generated_at, tz=tz)

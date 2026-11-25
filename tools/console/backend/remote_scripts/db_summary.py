@@ -19,11 +19,15 @@ def collect(db_path, blacklist_path):
     blacklist_path = str(blacklist_path)
     result = {"path": db_path, "exists": os.path.exists(db_path), "errors": []}
 
+    def add_error(message):
+        if message not in result["errors"]:
+            result["errors"].append(message)
+
     def count_by(con, sql, label):
         try:
             return {str(key): int(value) for key, value in con.execute(sql)}
         except sqlite3.Error:
-            result["errors"].append(label + "を集計できませんでした。旧版のテーブル・列と読み取り権限を確認してください。")
+            add_error(label + "を集計できませんでした。旧版のテーブル・列と読み取り権限を確認してください。")
             return None
 
     if result["exists"]:
@@ -42,7 +46,7 @@ def collect(db_path, blacklist_path):
                         result["tables"][name] = con.execute(
                             "SELECT COUNT(*) FROM " + quote(name)).fetchone()[0]
                     except sqlite3.Error:
-                        result["errors"].append("一部のテーブルの件数を取得できませんでした。")
+                        add_error("一部のテーブルの件数を取得できませんでした。")
                 result["reminders_by_status"] = count_by(con, "SELECT status, COUNT(*) FROM reminders GROUP BY status", "リマインダー")
                 result["queue_by_status"] = count_by(con, "SELECT status, COUNT(*) FROM queue_tasks GROUP BY status", "文書キュー")
                 rating = count_by(con, "SELECT rating, COUNT(*) FROM feedback GROUP BY rating", "評価")
@@ -67,11 +71,11 @@ def collect(db_path, blacklist_path):
                             "GROUP BY day ORDER BY day")
                     ]
                 except sqlite3.Error:
-                    result["errors"].append("評価の日別推移を取得できませんでした。旧版のテーブル・列を確認してください。")
+                    add_error("評価の日別推移を取得できませんでした。旧版のテーブル・列を確認してください。")
             finally:
                 con.close()
         except (OSError, sqlite3.Error):
-            result["errors"].append("bot.db を読み取れませんでした。ファイルの形式と読み取り権限を確認してください。")
+            add_error("bot.db を読み取れませんでした。ファイルの形式と読み取り権限を確認してください。")
 
     try:
         with open(blacklist_path, encoding="utf-8-sig") as file:
@@ -84,7 +88,7 @@ def collect(db_path, blacklist_path):
         result["blacklist"] = None
     except (OSError, ValueError):
         result["blacklist"] = None
-        result["errors"].append("blacklist.json を読み取れませんでした。ファイルの形式と読み取り権限を確認してください。")
+        add_error("blacklist.json を読み取れませんでした。ファイルの形式と読み取り権限を確認してください。")
 
     return result
 

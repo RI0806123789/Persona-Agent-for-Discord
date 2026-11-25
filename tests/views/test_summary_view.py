@@ -58,6 +58,22 @@ class RunSummaryFailureTests(unittest.IsolatedAsyncioTestCase):
         await self.button.callback(self.interaction)
         self.assertIs(self.generate.await_args.kwargs["is_blocked"], check)
 
+    async def test_user_blocked_during_generation_never_posts_summary_publicly(self) -> None:
+        """要約生成の待機中にブロックされた利用者の依頼は、完了後に公開投稿せず拒否する（#509）。"""
+        blocked = False
+        self.interaction.user = SimpleNamespace(id=11)
+        self.view.blocked_user_check = lambda user_id: blocked and user_id == 11
+
+        async def generate_then_block(*_args, **_kwargs):
+            nonlocal blocked
+            blocked = True
+            return True, "📋 公開してはいけない架空の要約"
+
+        self.generate.side_effect = generate_then_block
+        await self.button.callback(self.interaction)
+        self.send_long.assert_not_awaited()
+        self.assertIn("利用が制限されているため", self.last_panel())
+
     async def test_blank_summary_finishes_panel_without_public_or_private_post(self) -> None:
         for private in (False, True):
             with self.subTest(private=private):

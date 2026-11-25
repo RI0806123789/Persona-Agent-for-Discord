@@ -161,7 +161,7 @@ def read_table(con, table, offset, limit, result):
                     cells[column] = value
             else:
                 cells[column] = to_json_value(column, value)
-            if column in USER_COLUMNS and value not in (None, ""):
+            if column in USER_COLUMNS and not isinstance(value, bool) and value not in (None, "", 0, "0"):
                 seen_users.add(str(value))
         item = {"cells": cells}
         if hidden:

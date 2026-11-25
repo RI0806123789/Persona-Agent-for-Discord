@@ -34,6 +34,7 @@ const DEPLOY_DONE: Record<Exclude<DeployStatus, "running">, { tone: "good" | "cr
 export function useDeployController(
   { requestScope, wasConnected, connectionChanging, connectionProfileId }: Scope & { connectionProfileId: RefObject<string | null> },
   notify: Notify, refreshAfterChange: () => void, connected: boolean, connectionKey: string,
+  refreshConnection?: () => Promise<void> | void,
 ) {
   const [deploy, setDeploy] = useState<DeployRecord | null>(null);
   const [deployRunning, setDeployRunning] = useState(false);
@@ -53,12 +54,13 @@ export function useDeployController(
         const done = DEPLOY_DONE[result.deploy.status];
         notify({ tone: done.tone, title: done.title, detail: result.deploy.message });
         refreshAfterChange();
+        if (result.deploy.status === "unknown") void refreshConnection?.();
       }
       deployWasRunning.current = result.running;
     } catch {
       // 記録は補助情報なので、取れなくても画面は止めない
     }
-  }, [notify, refreshAfterChange]);
+  }, [notify, refreshAfterChange, refreshConnection]);
   // 状態不明でタスクが終わった後は、手動更新・再接続まで定期取得を止める。
   usePolling(refreshDeploy, deployRunning ? 1000 : 15000, connected && (deployRunning || deploy?.status !== "unknown"), connectionKey);
 
@@ -75,6 +77,7 @@ export function useDeployController(
       notify({ tone: "info", title: "デプロイを始めました", detail: "サービス操作のページで、1ステップずつ進み具合を確かめられます。" });
     } catch (error) {
       if (!isCurrent()) return;
+      void refreshConnection?.();
       notify({
         tone: "critical",
         title: "デプロイを始められませんでした",
@@ -84,7 +87,7 @@ export function useDeployController(
     } finally {
       if (deployStarting.current === isCurrent) deployStarting.current = null;
     }
-  }, [notify]);
+  }, [notify, refreshConnection]);
 
   return { deploy, deployRunning, deployWasRunning, setDeploy, setDeployRunning, refreshDeploy, runDeploy };
 }
@@ -92,6 +95,7 @@ export function useDeployController(
 export function useServiceController(
   { requestScope, wasConnected, connectionChanging }: Scope,
   notify: Notify, refreshOperations: () => Promise<void>, refreshAfterChange: () => void,
+  refreshConnection?: () => Promise<void> | void,
 ) {
   const [actionState, setActionState] = useState<{ action: ServiceAction; current: () => boolean } | null>(null);
   const busyAction = actionState?.current() ? actionState.action : null;
@@ -119,13 +123,14 @@ export function useServiceController(
       } finally {
         if (isCurrent()) {
           setActionState(null);
+          void refreshConnection?.();
           void refreshOperations();
           refreshAfterChange();
           requestScope.current.schedule(() => { if (isCurrent()) refreshAfterChange(); }, 2500); // 起動直後の状態変化を拾う
         }
       }
     },
-    [notify, refreshOperations, refreshAfterChange],
+    [notify, refreshOperations, refreshAfterChange, refreshConnection],
   );
 
   return { busyAction, runAction };

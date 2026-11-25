@@ -14,6 +14,7 @@ from typing import Any
 
 from persona_bot.config.constants import BLACKLIST_PATH, BLACKLIST_MAX_VIOLATIONS
 from persona_bot.core.background import run_in_thread
+from persona_bot.utils.normalization import normalize_bool_flag
 from persona_bot.utils.storage import load_json_file, write_json_file
 from persona_bot.utils.timeutil import utc_now_iso
 
@@ -60,6 +61,11 @@ class BlacklistService:
         except (TypeError, ValueError, OverflowError):
             return 0
 
+    @staticmethod
+    def _blocked_of(record: dict[str, Any]) -> bool:
+        """ブロック状態。手書きの "false" や "0" を誤ってブロック扱いにしない。"""
+        return normalize_bool_flag(record.get("blocked", False), accept_numbers=True) is True
+
     # ------------------------------------------------------------------
     # 参照系
     # ------------------------------------------------------------------
@@ -67,7 +73,7 @@ class BlacklistService:
     def is_blocked(self, user_id: int) -> bool:
         """指定ユーザーがブロック中かどうかを返す。"""
         record = self._record_of(self._data, str(user_id))
-        return record is not None and bool(record.get("blocked", False))
+        return record is not None and self._blocked_of(record)
 
     def get_violation_count(self, user_id: int) -> int:
         """指定ユーザーの現在の違反回数を返す。"""
@@ -79,7 +85,7 @@ class BlacklistService:
         blocked: list[dict[str, Any]] = []
         for uid, record in self._data.items():
             # 解除パネルへ渡す ID は数値でなければならないため、読めない行は飛ばす
-            if (not isinstance(record, dict) or not record.get("blocked", False)
+            if (not isinstance(record, dict) or not self._blocked_of(record)
                     or not isinstance(uid, str) or not uid.isascii() or not uid.isdigit()):
                 continue
             try:
@@ -111,14 +117,15 @@ class BlacklistService:
         record = self._record_of(data, key) or {"count": 0, "blocked": False}
 
         # 既にブロック済みの場合はカウントを増やさずに現在の状態を返す
-        if record.get("blocked", False):
+        if self._blocked_of(record):
             return max(BLACKLIST_MAX_VIOLATIONS, self._count_of(record)), False
 
         record["count"] = self._count_of(record) + 1
         record["user_name"] = user_name
+        record["blocked"] = False
 
         just_blocked = False
-        if record["count"] >= BLACKLIST_MAX_VIOLATIONS and not record.get("blocked", False):
+        if record["count"] >= BLACKLIST_MAX_VIOLATIONS:
             record["blocked"] = True
             record["blocked_at"] = utc_now_iso()
             just_blocked = True

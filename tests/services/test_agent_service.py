@@ -87,11 +87,20 @@ class ConcurrencyTests(unittest.TestCase):
 
 class LineTests(unittest.TestCase):
     def test_placeholders_are_filled_and_broken_lines_fall_back(self) -> None:
-        lines = dict(AGENT_DEFAULT_LINES, progress="{step}だよ（{current}/{total}）", start="{壊れた")
+        lines = dict(
+            AGENT_DEFAULT_LINES,
+            progress="{step}だよ（{current}/{total}）",
+            start="{壊れた",
+            done="{role.missing}",
+        )
         self.assertEqual(render_agent_line(lines, "progress", step="検索", current=1, total=2), "検索だよ（1/2）")
         self.assertEqual(
             render_agent_line(lines, "start", role="架空の担当"),
             AGENT_DEFAULT_LINES["start"].format(role="架空の担当"),
+        )
+        self.assertEqual(
+            render_agent_line(lines, "done", role="架空の担当"),
+            AGENT_DEFAULT_LINES["done"].format(role="架空の担当"),
         )
 
 

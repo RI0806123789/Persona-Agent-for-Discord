@@ -67,10 +67,12 @@ async def _process_accepted_message(
         memory_category = "none"
         reminder_request: dict[str, str] | None = None
         agent_plan: AgentPlan | None = None
+        planned_subagent = False
         if question:
             if not is_autonomous_comment and requests_subagent(question):
                 # サブエージェントの使用が明記された発言だけ、同じ1回の判定に委任の判定を足す（#170）。
                 # 「さっきの件」のような依頼を子へ渡せる形に整理させるため、直近の会話も渡す。
+                planned_subagent = True
                 router_history = await ops.fetch_channel_history_text(
                     message.channel,
                     guild_settings.channel_reset_points.get(message.channel.id),
@@ -112,6 +114,24 @@ async def _process_accepted_message(
             normal_slot_acquired = await self._try_acquire_chat_slot(message, guild_id)
             if not normal_slot_acquired:
                 return
+
+        # 配信コメントとして受け付けた後に入力判定・画像読込の待機中に配信が終了した場合、
+        # 通常会話へフォールバックした時点で明記されたサブエージェント依頼の委任計画を補完する（#509）。
+        if question and not planned_subagent and agent_plan is None and requests_subagent(question):
+            router_history = await ops.fetch_channel_history_text(
+                message.channel,
+                guild_settings.channel_reset_points.get(message.channel.id),
+                self.client.user,
+                AGENT_ROUTER_HISTORY_LIMIT,
+                is_blocked=self.blacklist.is_blocked,
+            )
+            is_safe, _reason, memory_category, reminder_request, agent_plan = (
+                await self.moderator.check_route_and_plan(question, router_history)
+            )
+            if not is_safe:
+                await self.notify_violation(message, "不適切な内容が検出されたため、メッセージを処理できません。")
+                return
+            self.state.touch()
 
         # 配信の再確認と通常枠の確保が済んだ発言だけ、話題提供の監視へ登録する。
         # 入力判定中に配信が終わった場合も対象にし、配信中のコメントとDMは登録しない。

@@ -1045,6 +1045,11 @@ class StatsAnalysisTests(unittest.IsolatedAsyncioTestCase):
         normalized = stats_service.normalize_hourly(entry["hourly"])
         self.assertEqual(normalized, [1.0] + [0.0] * 23)
 
+    async def test_string_false_or_zero_opt_out_is_not_treated_as_opted_out(self) -> None:
+        """opt_out の文字列 "false" や "0" を収集停止と誤認しない（#509）。"""
+        for raw, expected in (("false", False), ("0", False), (0, False), ("true", True), ("1", True), (1, True)):
+            self.assertIs(StatsService._entry_opted_out({"opt_out": raw}), expected)
+
 
 if __name__ == "__main__":
     unittest.main()

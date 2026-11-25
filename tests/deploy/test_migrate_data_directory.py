@@ -113,12 +113,20 @@ class MigrateDataDirectoryTests(unittest.TestCase):
         self.assertEqual(self.snapshot(), before)
 
     def test_read_only_legacy_files_are_preserved_and_moved(self) -> None:
-        original = self.write("memory/legacy.json")
+        nested = self.root / "memory/nested"
+        nested.mkdir(parents=True)
+        original = self.write("memory/nested/legacy.json")
         original.chmod(stat.S_IREAD)
+        nested.chmod(stat.S_IREAD | stat.S_IXUSR)
         result = migrate_data_directory(self.root)
         self.assertFalse(original.exists())
-        self.assertEqual((self.root / "data/memory/legacy.json").read_bytes(), b"fictional")
-        self.assertEqual((result.backup / "memory/legacy.json").read_bytes(), b"fictional")
+        self.assertFalse((self.root / "memory").exists())
+        migrated = self.root / "data/memory/nested/legacy.json"
+        self.assertEqual(migrated.read_bytes(), b"fictional")
+        self.assertTrue(migrated.stat().st_mode & stat.S_IWRITE)
+        migrated.write_bytes(b"updated")
+        self.assertEqual(migrated.read_bytes(), b"updated")
+        self.assertEqual((result.backup / "memory/nested/legacy.json").read_bytes(), b"fictional")
 
     def test_changed_source_during_backup_is_not_removed(self) -> None:
         original = self.write("memory/projects.json", b"before")

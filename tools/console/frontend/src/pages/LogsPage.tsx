@@ -45,11 +45,21 @@ export function LogsPage({
     return result;
   }, [withLevels]);
   const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const filtered = withLevels.filter(
-      (item) => (level === "all" || item.level === level) && (!needle || item.text.toLowerCase().includes(needle)),
-    );
-    return filtered.slice(-MAX_RENDERED);
+    const trimmed = query.trim();
+    const matched: Array<(typeof withLevels)[number] & { ranges: Array<[number, number]> }> = [];
+    for (const item of withLevels) {
+      if (level !== "all" && item.level !== level) continue;
+      if (!trimmed) {
+        matched.push({ ...item, ranges: [] });
+        continue;
+      }
+      // 行絞り込みも強調表示と同じ findMatchRanges で判定し、大小文字展開文字での食い違いと再コンパイルを防ぐ（#510）。
+      const ranges = findMatchRanges(item.text, trimmed);
+      if (ranges.length > 0) {
+        matched.push({ ...item, ranges });
+      }
+    }
+    return matched.slice(-MAX_RENDERED);
   }, [withLevels, level, query]);
 
   // 末尾を追いかける（上へスクロールしたら追跡をやめる）
@@ -115,12 +125,12 @@ export function LogsPage({
           {visible.length === 0 ? (
             <p className="terminal-empty">{stream.entries.length ? "条件に合うログはありません。" : "ログを待っています…"}</p>
           ) : (
-            visible.map(({ entry, level: entryLevel, text }, index) => (
+            visible.map(({ entry, level: entryLevel, text, ranges }, index) => (
               <div key={`${entry.ts}-${index}`} className={`log-row log-${entryLevel}`}>
                 <time>{formatClock(entry.ts)}</time>
                 <span className={`level level-${entryLevel}`}>{LEVEL_LABELS[entryLevel]}</span>
                 <span className="log-source">{entry.source || "-"}</span>
-                <span className="log-message">{highlight(text, query)}</span>
+                <span className="log-message">{highlight(text, ranges)}</span>
               </div>
             ))
           )}
@@ -172,8 +182,7 @@ export function StreamIndicator({ stream }: { stream: LogStream }) {
   }
 }
 
-function highlight(text: string, query: string): ReactNode {
-  const ranges = findMatchRanges(text, query);
+function highlight(text: string, ranges: Array<[number, number]>): ReactNode {
   if (!ranges.length) return text;
   const parts: ReactNode[] = [];
   let cursor = 0;

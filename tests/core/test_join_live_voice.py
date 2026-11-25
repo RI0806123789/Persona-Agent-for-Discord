@@ -390,6 +390,40 @@ class JoinLiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order, ["stop", "disconnect"])
         self.assertIn("退出しました", self.interaction.followup.send.await_args.args[0])
 
+    async def test_leave_disconnects_even_when_stop_raises_or_cancels(self):
+        """/leave の会話停止待機が例外・キャンセルで中断されても、VC 接続を切断してから抜ける（#509）。"""
+        for error in (RuntimeError("架空の停止失敗"), asyncio.CancelledError()):
+            with self.subTest(error=type(error).__name__):
+                voice_client = FakeLiveVoiceClient(None, self.channel)
+                self.guild.voice_client = voice_client
+                self.live.stop = AsyncMock(side_effect=error)
+                self.interaction.command = SimpleNamespace(name="leave")
+                if isinstance(error, asyncio.CancelledError):
+                    with self.assertRaises(asyncio.CancelledError):
+                        await self.commands["leave"](self.interaction)
+                else:
+                    with patch("persona_bot.core.commands.logger"):
+                        await self.commands["leave"](self.interaction)
+                voice_client.disconnect.assert_awaited_once_with(force=True)
+
+    async def test_restart_on_same_connection_disconnects_when_requester_moves_during_stop(self):
+        """同じ接続での会話始め直し中に実行者が離脱したら、接続を切って開始しない（#509）。"""
+        voice_client = FakeLiveVoiceClient(None, self.channel)
+        self.guild.voice_client = voice_client
+        self.live.get.return_value = SimpleNamespace(stopped=False, voice_client=voice_client, channel_id=30)
+
+        async def stop(*args, **kwargs):
+            self.interaction.user.voice = SimpleNamespace(channel=None)
+            return True
+
+        self.live.stop = AsyncMock(side_effect=stop)
+        self.live.release_reservation.reset_mock()
+        reply = await self.join()
+        voice_client.disconnect.assert_awaited_once_with(force=True)
+        self.live.start.assert_not_awaited()
+        self.live.release_reservation.assert_called_with(1, reservation=self.live.reserve.return_value)
+        self.assertIn("接続を中止しました", reply)
+
 
 class _no_logs:
     def __enter__(self):

@@ -1153,6 +1153,60 @@ class TranscriptOwnershipTests(ConversationTestBase):
         self.assertEqual(current.input_text, "架空のBの発言")
         self.assertFalse(current.transcript_incomplete)
 
+    async def test_mid_utterance_ng_word_ends_activity_and_closes_transcript(self):
+        """発話途中に NG ワードで却下したら即座に発話を切り、無音後も文字起こし帰属を残さない（#509）。"""
+        self.speak(USER_A, self.start_frames())
+        rejected = self.conversation._current
+        self.assertTrue(self.conversation._speaker_state.speaking)
+        await self.transcript("架空のNG")
+        await self.settle()
+        self.assertFalse(self.conversation._speaker_state.speaking)
+        self.assertIsNone(self.conversation._speaker_state.active_user)
+        self.assertTrue(rejected.discarded)
+        self.assertTrue(rejected.transcript_closed)
+        self.advance(constants.LIVE_VAD_SILENCE_MS / 1000 + 0.1)
+        self.conversation.tick()
+        await self.settle()
+        self.service.moderator.judge_voice_input.assert_not_awaited()
+        # 次の話者の文字起こしも遮断されない
+        self.speak(USER_B, self.start_frames())
+        self.assertIsNone(self.conversation._transcript_state.blocked)
+        await self.transcript("架空のBの発言")
+        self.assertEqual(self.conversation._current.input_text, "架空のBの発言")
+
+    async def test_blocking_violation_evicts_active_turn_and_reservation(self):
+        """3回目違反でブロックされたら、ゲートが開いたままでも進行中発話と予約を回収する（#509）。"""
+        blocked = set()
+        self.service.blacklist.is_blocked = Mock(side_effect=lambda uid: uid in blocked)
+
+        async def record_third(user_id, _name):
+            blocked.add(user_id)
+            return 3, True
+
+        self.service.blacklist.record_violation = AsyncMock(side_effect=record_third)
+        self.speak(USER_A, self.start_frames())
+        self.conversation._speaker_state.request_floor(USER_A, self.conversation._now())
+        self.assertTrue(any(uid == USER_A for uid, _ in self.conversation._speaker_state.reservations))
+        await self.conversation._record_violation(USER_A)
+        self.assertTrue(self.conversation.is_open)  # USER_B は残っているので通話自体は続く
+        self.assertIsNone(self.conversation._speaker_state.active_user)
+        self.assertNotIn(USER_A, self.conversation._speaker_state.participants)
+        self.assertFalse(any(uid == USER_A for uid, _ in self.conversation._speaker_state.reservations))
+
+    async def test_waiting_count_change_while_paused_schedules_panel_update(self):
+        """一時停止のまま同意待ち人数だけが変わった場合も、_update_gate がパネル表示を更新する（#509）。"""
+        self.conversation.withdraw(USER_A)
+        self.conversation.withdraw(USER_B)
+        self.assertFalse(self.conversation.is_open)
+        self.assertEqual(self.conversation._waiting_count, 2)
+        with patch.object(self.conversation, "_schedule_panel_update") as schedule:
+            leaving = self.members[USER_B]
+            self.channel.members.remove(leaving)
+            self.conversation._update_gate()
+        self.assertFalse(self.conversation.is_open)
+        self.assertEqual(self.conversation._waiting_count, 1)
+        schedule.assert_called_once()
+
     async def test_interrupted_notice_closes_the_previous_transcript(self):
         await self.barge_in()
         current = self.conversation._current
