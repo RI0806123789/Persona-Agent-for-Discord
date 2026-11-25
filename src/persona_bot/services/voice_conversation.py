@@ -295,6 +295,15 @@ class VoiceConversation(VoiceDiagnosticsMixin, VoicePlaybackMixin, VoiceConsentM
         """ボット自身の移動・切断。ゲートの開閉を見回り（tick）を待たずに更新する。"""
         self._update_gate()
 
+    def _clear_participant_state(self, user_id: int, reason: str) -> None:
+        """退出・同意撤回・ブロック登録で対象外になった参加者の発話権・進行中ターン・予約を回収する。"""
+        if self._speaker_state.active_user == user_id:
+            self._end_activity(discard=True)
+        if self._current is not None and self._current.user_id == user_id:
+            self._discard_response(self._current, reason)
+        self._speaker_state.participants.pop(user_id, None)
+        self._remove_reservation(user_id)
+
     def handle_member_update(self, member: Any, before: Any, after: Any) -> None:
         """参加者の出入り。抜けた人の発話権・発話希望・プリロールを無効にする。"""
         before_id = getattr(getattr(before, "channel", None), "id", None)
@@ -302,12 +311,7 @@ class VoiceConversation(VoiceDiagnosticsMixin, VoicePlaybackMixin, VoiceConsentM
         if before_id == after_id:
             return
         if before_id == self.channel_id:
-            if self._speaker_state.active_user == member.id:
-                self._end_activity(discard=True)
-            if self._current is not None and self._current.user_id == member.id:
-                self._discard_response(self._current, "チャンネルから退出")
-            self._speaker_state.participants.pop(member.id, None)
-            self._remove_reservation(member.id)
+            self._clear_participant_state(member.id, "チャンネルから退出")
         self._update_gate()
         self._schedule_panel_update()
 
@@ -496,14 +500,8 @@ class VoiceConversation(VoiceDiagnosticsMixin, VoicePlaybackMixin, VoiceConsentM
         # 待っていた人に、少しの間だけ優先して話す機会を渡す。
         self._speaker_state.extend_reservations(now)
 
-    def _request_floor(self, user_id: int, now: float) -> None:
-        self._speaker_state.request_floor(user_id, now)
-
     def _remove_reservation(self, user_id: int) -> None:
         self._speaker_state.remove_reservation(user_id)
-
-    def _floor_available_for(self, user_id: int, now: float) -> bool:
-        return self._speaker_state.floor_available(user_id, now)
 
     # ==================================================================
     # 見回り（話し終わりの判定・接続の確認）

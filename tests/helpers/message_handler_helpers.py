@@ -8,6 +8,11 @@ from persona_bot.core.message_handler import MessageHandler
 from persona_bot.core.message_operations import operation_names
 
 
+def close_coroutine(coro, **kwargs):
+    """会話統計の記録など、テスト対象外の背景コルーチンを実行せずに閉じる。"""
+    coro.close()
+
+
 def make_message_handler(dependencies, test_case):
     """サービス（MessageHandler のフィールド）と外部操作（MessageOperations）を差し替えて組み立てる。
 

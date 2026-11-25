@@ -14,13 +14,8 @@ import discord
 from persona_bot.config import constants
 from persona_bot.config.constants import BLACKLIST_MAX_VIOLATIONS
 from persona_bot.core.app_state import BotState
-from tests.helpers.message_handler_helpers import make_message_handler
+from tests.helpers.message_handler_helpers import close_coroutine, make_message_handler
 from tests.helpers.discord_mocks import make_spec_channel
-
-
-def close_coroutine(coro, **kwargs):
-    # 会話統計の記録など、裏で走らせる処理はこのテストの対象外なので実行せずに閉じる
-    coro.close()
 
 
 class MessageGateTests(unittest.IsolatedAsyncioTestCase):

@@ -102,7 +102,7 @@ async def load_image_attachments(attachments: Sequence[discord.Attachment]) -> l
                 width, height = image.size
                 total_rgb_bytes += width * height * IMAGE_RGB_BYTES_PER_PIXEL
             except Exception as error:
-                logger.error(f'画像読み込みエラー: {type(error).__name__}', exc_info=error)
+                logger.error("画像読み込みエラーが発生しました。", exc_info=error)
         return image_objects
     except BaseException:
         # 中断時に受取先がなくなる画像も回収する。処理中の画像はrun_in_threadが回収する。
@@ -118,4 +118,4 @@ def close_image_attachments(images: Sequence[Any]) -> None:
             if callable(close):
                 close()
         except Exception as error:
-            logger.error(f'画像の解放に失敗しました: {type(error).__name__}', exc_info=error)
+            logger.error("画像の解放に失敗しました。", exc_info=error)

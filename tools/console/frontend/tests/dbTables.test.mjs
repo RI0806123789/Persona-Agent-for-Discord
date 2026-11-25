@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { compileStrict, compileTs, readSource } from "./helpers/compile.mjs";
 
-const source = await readFile(new URL("../src/dbTables.ts", import.meta.url), "utf8");
-const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
+const source = await readSource("dbTables.ts");
 const {
   DB_TABLE_SPECS,
   hourlyCounts,
@@ -19,7 +18,7 @@ const {
   STATUS_LABELS,
   STATUS_TONES,
   statusTone,
-} = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputText).toString("base64")}`);
+} = compileTs(source);
 
 test("文書の送信中を進行中として表示する", () => {
   assert.equal(STATUS_LABELS.sending, "送信中");
@@ -110,28 +109,16 @@ test("範囲外の日時が1行あっても、同じページのほかの行は�
   const React = await import("react");
   const jsxRuntime = await import("react/jsx-runtime");
   const { renderToStaticMarkup } = await import("react-dom/server");
-  const compileCjs = (text, modules) => {
-    const exports = {};
-    const output = ts.transpileModule(text, { compilerOptions: {
-      module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
-    } }).outputText;
-    new Function("require", "exports", output)((name) => {
-      assert.ok(name in modules, `未定義の依存: ${name}`);
-      return modules[name];
-    }, exports);
-    return exports;
-  };
-  const read = (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
-  const tables = compileCjs(source, {});
-  const detailSource = (await read("pages/DbTableDetail.tsx"));
-  const format = compileCjs(await read("format.ts"), {});
+  const tables = compileStrict(source, {});
+  const detailSource = await readSource("pages/DbTableDetail.tsx");
+  const format = compileStrict(await readSource("format.ts"), {});
   const privacy = { MASK: "MASKED", usePrivacy: () => ({ enabled: false }) };
   // 行・セルの描画は DbCells.tsx にあり、DbTableDetail が RowFields を再公開している（#481）。
   // どちらも「表に無い依存は失敗」の厳格な表で読み込む。
-  const cells = compileCjs(await read("pages/DbCells.tsx"), {
+  const cells = compileStrict(await readSource("pages/DbCells.tsx"), {
     "react/jsx-runtime": jsxRuntime, "../components/ui": {}, "../dbTables": tables, "../format": format, "../privacy": privacy,
   });
-  const { RowFields } = compileCjs(detailSource, {
+  const { RowFields } = compileStrict(detailSource, {
     react: React, "react/jsx-runtime": jsxRuntime,
     "../api": { api: {}, errorMessage: String, errorSafeMessage: () => null },
     "../components/Collapse": {}, "../components/expressive": {}, "../components/ui": {}, "../hooks": {},
@@ -194,17 +181,8 @@ test("ページに出てくる表示名を、重複なく集める", () => {
 
 test("#510 未設定 ID の 0 は伏せ字にせず、ペルソナ列は伏せ字を通し、同名トピックの key を分ける", async () => {
   const jsx = (type, props, key) => ({ type, props, key });
-  const read = (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
-  const compileCjs = (text, modules) => {
-    const exports = {};
-    const output = ts.transpileModule(text, { compilerOptions: {
-      module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
-    } }).outputText;
-    new Function("require", "exports", output)((name) => modules[name], exports);
-    return exports;
-  };
-  const tables = compileCjs(source, {});
-  const format = compileCjs(await read("format.ts"), {});
+  const tables = compileStrict(source, {});
+  const format = compileStrict(await readSource("format.ts"), {});
   const privacy = {
     MASK: "••••••",
     usePrivacy: () => ({
@@ -212,7 +190,7 @@ test("#510 未設定 ID の 0 は伏せ字にせず、ペルソナ列は伏せ�
       redact: (text) => text.replaceAll("SECRET_NAME", "••••••"),
     }),
   };
-  const { CellValue } = compileCjs(await read("pages/DbCells.tsx"), {
+  const { CellValue } = compileStrict(await readSource("pages/DbCells.tsx"), {
     "react/jsx-runtime": { jsx, jsxs: jsx },
     "../components/ui": { Chip: "Chip", StatusChip: "StatusChip" },
     "../dbTables": tables,
@@ -238,7 +216,7 @@ test("#510 未設定 ID の 0 は伏せ字にせず、ペルソナ列は伏せ�
 
   // 伏せ字 OFF のときだけ開く話題チップで、同名トピックが並んでも key が重ならない
   const openPrivacy = { MASK: "••••••", usePrivacy: () => ({ enabled: false }) };
-  const { CellValue: OpenCellValue } = compileCjs(await read("pages/DbCells.tsx"), {
+  const { CellValue: OpenCellValue } = compileStrict(await readSource("pages/DbCells.tsx"), {
     "react/jsx-runtime": { jsx, jsxs: jsx },
     "../components/ui": { Chip: "Chip", StatusChip: "StatusChip" },
     "../dbTables": tables,

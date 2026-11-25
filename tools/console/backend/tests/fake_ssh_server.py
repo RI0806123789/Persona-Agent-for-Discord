@@ -508,6 +508,9 @@ FAKE_DB_TABLES = (
     "CREATE TABLE feedback (message_id INTEGER NOT NULL, user_id TEXT NOT NULL, guild_id INTEGER NOT NULL DEFAULT 0, "
     "channel_id INTEGER NOT NULL DEFAULT 0, target_user_id TEXT NOT NULL DEFAULT '', model_name TEXT NOT NULL DEFAULT '', "
     "prompt_file TEXT NOT NULL DEFAULT '', rating INTEGER NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (message_id, user_id))",
+    "CREATE INDEX idx_reminders_due ON reminders (status, remind_at)",
+    "CREATE INDEX idx_feedback_guild ON feedback (guild_id, created_at)",
+    "CREATE INDEX idx_reminders_user_status ON reminders (user_id, status, remind_at)",
     "CREATE INDEX idx_feedback_created_message ON feedback (created_at DESC, message_id DESC)",
     "CREATE INDEX idx_pending_log_user_id ON pending_log (user_id, id)",
     "CREATE INDEX idx_profile_key_user ON profile (key, user_id)",

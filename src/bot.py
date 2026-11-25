@@ -79,7 +79,7 @@ reload_persona_catalog()
 # 保存済みのサーバーごとの設定（ペルソナ・モデル・応答モード・Google検索・自発会話）と
 # 記念日の投稿記録をメモリへ復元する。以降の設定変更は各 GuildSettings.persist() で保存される。
 state.restore_from_database(database)
-gemini = GeminiService(genai_client)
+gemini = GeminiService(genai_client, usage=usage)
 memory = MemoryService(genai_client, database, usage=usage)
 affinity = AffinityService(database)
 ng_filter = NgWordFilter()

@@ -37,7 +37,7 @@ export function ConfirmDialog({ request, open, onClose }: { request: ConfirmRequ
     if (open) setTyped("");
   }, [open, request]);
 
-  const allowed = !request?.requireText || typed === request.requireText;
+  const allowed = request !== null && (!request.requireText || typed === request.requireText);
 
   return (
     <div

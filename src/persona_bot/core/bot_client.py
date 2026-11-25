@@ -65,7 +65,7 @@ class PersonaClient(discord.Client):
                 try:
                     await callback()
                 except (Exception, asyncio.CancelledError) as error:
-                    logger.error(f'終了前のバックグラウンド処理の回収に失敗しました: {type(error).__name__}', exc_info=error)
+                    logger.error("終了前のバックグラウンド処理の回収に失敗しました。", exc_info=error)
 
         # 新規受付停止後もサービスの後片付けは保護して実行する。
         deadline = asyncio.get_running_loop().time() + BACKGROUND_SHUTDOWN_TIMEOUT_SECONDS

@@ -194,7 +194,7 @@ class GuildSettings:
             if valid:
                 setattr(self, attribute, value)
             else:
-                logger.warning(f'サーバー設定: 保存済みの {key} が無効なため既定値へ戻します。')
+                logger.warning("サーバー設定: 保存済みの %s が無効なため既定値へ戻します。", key)
                 setattr(self, attribute, default)
         for key, attribute, kind, _ in GUILD_SETTINGS_FIELDS:
             if kind == "bool" and values.get(key) is not None:
@@ -253,7 +253,7 @@ class GuildSettings:
                     **{name: getattr(self, attribute) for name, attribute, _, _ in GUILD_SETTINGS_FIELDS},
                 )
             except Exception as error:
-                logger.error(f'ギルド設定の保存に失敗しました (guild_id=<ID>): {type(error).__name__}', exc_info=error)
+                logger.error("ギルド設定の保存に失敗しました (guild_id=<ID>)。", exc_info=error)
 
     async def record_anniversary_post(self, user_id: str, label: str, posted_date: str) -> None:
         """記念日のお祝いを投稿したことを、メモリと DB の両方へ記録する。
@@ -276,7 +276,7 @@ class GuildSettings:
                         self._db.anniversary_post_record, self.persist_key, user_id, label, posted_date
                     )
                 except Exception as error:
-                    logger.error(f'記念日の投稿記録の保存に失敗しました (guild_id=<ID>): {type(error).__name__}', exc_info=error)
+                    logger.error("記念日の投稿記録の保存に失敗しました (guild_id=<ID>)。", exc_info=error)
 
         await wait_for_cleanup(save(), label="記念日の投稿記録")
 
@@ -291,7 +291,7 @@ def _persisted_channel_id(key: str, value: Any) -> int | None:
         return None
     if type(value) is int and value > 0:
         return value
-    logger.warning(f'サーバー設定: 保存済みの {key} が無効なため「指定なし」へ戻します。')
+    logger.warning("サーバー設定: 保存済みの %s が無効なため「指定なし」へ戻します。", key)
     return None
 
 
@@ -480,7 +480,7 @@ class BotState:
         try:
             saved_settings, saved_posts = db.guild_state_load_all()
         except Exception as error:
-            logger.error(f'保存済みのギルド設定の読み込みに失敗しました: {type(error).__name__}', exc_info=error)
+            logger.error("保存済みのギルド設定の読み込みに失敗しました。", exc_info=error)
             return
 
         for guild_key, values in saved_settings.items():
@@ -489,7 +489,7 @@ class BotState:
             self._settings_for_key(guild_key).anniversary_posted_dates.update(posted)
 
         if saved_settings:
-            logger.info(f'データベース: {len(saved_settings)} 件のサーバー設定を復元しました。')
+            logger.info("データベース: %d 件のサーバー設定を復元しました。", len(saved_settings))
 
     def _settings_for_key(self, guild_key: int) -> GuildSettings:
         """起動時の一括復元先を返す。取得済みの値を使うため、ここではDBを読み直さない。"""

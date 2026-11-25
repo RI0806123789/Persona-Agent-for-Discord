@@ -33,6 +33,7 @@ from persona_bot.config.constants import AGENT_PROGRESS_MIN_INTERVAL_SECONDS, AG
 from persona_bot.core.background import TaskOwner, spawn, wait_for_cleanup
 from persona_bot.services.agent_plan import AgentPlan
 from persona_bot.services.agent_service import AgentReport, render_agent_line
+from persona_bot.utils.discord_helpers import NO_MENTIONS
 from persona_bot.views.view_parts import OwnedView
 
 
@@ -191,7 +192,7 @@ class AgentProgress(AgentProgressBase):
         content = f"{self._header}\n{self._line('progress', step=first_step)}"
         try:
             self._message = await self._source.reply(
-                content, view=self._view, allowed_mentions=discord.AllowedMentions.none(),
+                content, view=self._view, allowed_mentions=NO_MENTIONS,
             )
             self._last_edit = monotonic()
         except discord.DiscordException as error:
@@ -213,7 +214,7 @@ class AgentProgress(AgentProgressBase):
             # 進捗メッセージを出せなかった場合も、失敗と中止だけは伝える（完了は人格役の返信で分かる）。
             if key != "done":
                 try:
-                    await self._source.reply(self._line(key), allowed_mentions=discord.AllowedMentions.none())
+                    await self._source.reply(self._line(key), allowed_mentions=NO_MENTIONS)
                 except discord.DiscordException as error:
                     logger.warning("サブエージェント: 終了の案内を送れませんでした。", exc_info=error)
             return

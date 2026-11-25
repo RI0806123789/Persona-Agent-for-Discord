@@ -348,7 +348,10 @@ class DocumentResponseTests(unittest.IsolatedAsyncioTestCase):
             self.addCleanup(replacement.stop)
 
     async def asyncTearDown(self) -> None:
-        await asyncio.gather(*self.tasks)
+        for task in self.tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
 
     async def process_response(self, text: str, sources=None) -> None:
         self.gemini.generate.return_value = (text, None, sources or [])

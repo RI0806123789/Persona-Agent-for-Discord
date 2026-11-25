@@ -46,7 +46,7 @@ from persona_bot.utils.discord_helpers import (
     send_long_message,
     send_long_reply,
 )
-from persona_bot.utils.usage_graph import log_tokens_safely
+from persona_bot.utils.usage_graph import log_snapshot_safely, log_tokens_safely
 
 if TYPE_CHECKING:
     from persona_bot.services.content_moderator import ContentModerator
@@ -334,7 +334,7 @@ class AutonomousSpeechMixin:
             logger.error("自律行動: 発言の生成に失敗しました。")
             return None
         if is_conversation:
-            self._usage.log_snapshot(f"自律行動/{label}", detail, "自動実行", full_prompt, response_text, usage_info)
+            log_snapshot_safely(self._usage, f"自律行動/{label}", detail, "自動実行", full_prompt, response_text, usage_info)
         else:
             log_tokens_safely(self._usage, f"自律行動/{label}", usage_info)
         return response_text

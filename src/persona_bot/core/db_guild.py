@@ -16,14 +16,21 @@ from persona_bot.core.db_base import DbMixinBase
 class GuildDbMixin(DbMixinBase):
     """サーバーごとの設定（guild_settings）と記念日のお祝い投稿記録（anniversary_posts）。"""
 
+    def _load_all_guild_settings_unlocked(self) -> dict[int, dict[str, Any]]:
+        rows = self._conn.execute("SELECT * FROM guild_settings").fetchall()
+        return self._settings_by_guild(rows)
+
+    def _load_all_anniversary_posts_unlocked(self) -> dict[int, dict[str, str]]:
+        rows = self._conn.execute("SELECT * FROM anniversary_posts").fetchall()
+        return self._posts_by_guild(rows)
+
     def guild_settings_load_all(self) -> dict[int, dict[str, Any]]:
         """保存済みのギルド設定を {guild_id: {列名: 値}} 形式で全件返す（起動時の復元用）。
 
         DM の設定は guild_id=0 の行として保存されている（DM にはギルドIDが無いため）。
         """
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM guild_settings").fetchall()
-        return self._settings_by_guild(rows)
+            return self._load_all_guild_settings_unlocked()
 
     @staticmethod
     def _guild_settings_values(row: sqlite3.Row) -> dict[str, Any]:
@@ -54,9 +61,7 @@ class GuildDbMixin(DbMixinBase):
     def guild_state_load_all(self) -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, str]]]:
         """起動時の設定と投稿記録を同じロック内で読み出す。"""
         with self._lock:
-            settings = self._conn.execute("SELECT * FROM guild_settings").fetchall()
-            posts = self._conn.execute("SELECT * FROM anniversary_posts").fetchall()
-        return self._settings_by_guild(settings), self._posts_by_guild(posts)
+            return self._load_all_guild_settings_unlocked(), self._load_all_anniversary_posts_unlocked()
 
     def guild_state_load(self, guild_id: int) -> tuple[dict[str, Any], dict[str, str]]:
         """1サーバー分の設定と記念日の投稿記録を、同じロック内で読み出す。
@@ -123,8 +128,7 @@ class GuildDbMixin(DbMixinBase):
         起動時にそのまま代入して復元できる。
         """
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM anniversary_posts").fetchall()
-        return self._posts_by_guild(rows)
+            return self._load_all_anniversary_posts_unlocked()
 
     def anniversary_post_record(self, guild_id: int, user_id: str, label: str, posted_date: str) -> None:
         """お祝いを投稿したことを記録する（同じサーバー・同じ記念日の行は上書き）。

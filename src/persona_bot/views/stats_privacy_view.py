@@ -6,7 +6,7 @@ from persona_bot.services.memory_service import MemoryService
 from persona_bot.services.stats_service import StatsService
 from persona_bot.views.memory_graph_view import MemoryGraphButton
 from persona_bot.views.view_parts import (
-    begin_current_panel_operation, edit_panel_message, BackButton,
+    begin_current_panel_operation, edit_panel_or_followup, BackButton,
     HubFactory, PanelView,
 )
 
@@ -92,9 +92,7 @@ class StatsPrivacyConfirmButton(ui.Button):
             )
         else:
             result = "✅ 統計収集を再開しました。以降のあなたの発言が記録されます。"
-        shown = await edit_panel_message(interaction, deferred=True, content=result, view=None)
-        if not shown:
-            await interaction.followup.send(result, ephemeral=True)
+        await edit_panel_or_followup(interaction, content=result, view=None)
 
 
 class StatsDataDeleteButton(ui.Button):
@@ -126,9 +124,7 @@ class StatsDataDeleteButton(ui.Button):
             # プライバシー操作の失敗は隠さない（黙って成功したように見せない）。
             result = "⚠️ データを削除できませんでした。時間をおいて再度お試しください。"
 
-        shown = await edit_panel_message(interaction, deferred=True, content=result, view=None)
-        if not shown:
-            await interaction.followup.send(result, ephemeral=True)
+        await edit_panel_or_followup(interaction, content=result, view=None)
 
 
 class StatsPrivacyView(PanelView):
