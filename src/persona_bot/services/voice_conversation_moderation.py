@@ -29,7 +29,7 @@ from persona_bot.utils.discord_helpers import NO_MENTIONS
 
 if TYPE_CHECKING:
     from persona_bot.services.voice_conversation_service import VoiceConversationService
-    from persona_bot.services.voice_conversation_state import ConsentState
+    from persona_bot.services.voice_conversation_state import ConsentState, _SpeakerState
 
 logger = logging.getLogger("persona_bot.services.voice_conversation")
 
@@ -46,14 +46,22 @@ class VoiceModerationMixin:
         guild: discord.Guild
         notice_channel: Any
         consent: ConsentState
+        _speaker_state: _SpeakerState
+        _current: _Utterance | None
         _stopped: bool
         _now: Callable[[], float]
 
         def _update_gate(self) -> None: ...
+        def _end_activity(self, *, discard: bool = False) -> None: ...
+        def _remove_reservation(self, user_id: int) -> None: ...
         def _discard_response(self, utterance: _Utterance, reason: str, *, fade: bool = False) -> None: ...
 
     def _reject_input(self, utterance: _Utterance, reason: str) -> None:
         self._discard_response(utterance, reason)
+        if self._speaker_state.speaking and self._current is utterance:
+            # 発話途中に NG ワードが検出された場合は、話し続けても Live へ音声を送り続けたり
+            # 発話権と文字起こしの帰属を塞いだりしないよう、その場で発話を打ち切る（#509）。
+            self._end_activity(discard=True)
         if utterance.violation_recorded:
             return
         # 同じ発言の違反は1回だけ数える（文字起こしは少しずつ届くため）。
@@ -69,7 +77,14 @@ class VoiceModerationMixin:
         )
         if text is not None:
             await self._notify(text, member)
-        if just_blocked:
+        if just_blocked and not self._stopped:
+            # 3回目違反でブロックされた話者が次の発話を始めていたり予約を持っていたりしても残さない（#509）。
+            if self._speaker_state.active_user == user_id:
+                self._end_activity(discard=True)
+            if self._current is not None and self._current.user_id == user_id:
+                self._discard_response(self._current, "ブラックリスト登録")
+            self._speaker_state.participants.pop(user_id, None)
+            self._remove_reservation(user_id)
             self._update_gate()
 
     async def _judge_input(self, utterance: _Utterance) -> None:

@@ -83,6 +83,21 @@ class PanelNavigationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(hub.is_finished())
         self.assertFalse(panel.is_finished())
 
+    async def test_back_stops_generated_parent_on_exception_and_skips_when_superseded(self):
+        """生成後の例外でも戻り先 View を止め、閉じたパネルでは make_hub 自体を呼ばない（#509）。"""
+        hub, panel, button, interaction = self.make_back_navigation()
+        panel.ensure_settings_current = AsyncMock(side_effect=[True, RuntimeError("架空の確認失敗")])
+        with self.assertRaises(RuntimeError):
+            await button.callback(interaction)
+        self.assertTrue(hub.is_finished())
+
+        _, closed_panel, closed_button, _ = self.make_back_navigation()
+        closed_panel.stop()
+        stale = make_interaction(response=make_response("defer", "is_done"), without=ONLY_RESPONSE)
+        await closed_button.callback(stale)
+        closed_panel.make_hub.assert_not_called()
+        stale.response.defer.assert_awaited_once_with(ephemeral=True)
+
     async def test_back_without_hub_closes_panel_without_fetch(self):
         panel = self.make_panel()
         button = BackButton(row=0)

@@ -96,6 +96,20 @@ export function displayMessage(entry: LogEntry): string {
   return entry.message.replace(LOGGING_PREFIX, "");
 }
 
+let cachedSearchQuery = "";
+let cachedSearchPattern: RegExp | null = null;
+
+function searchPatternOf(query: string): RegExp | null {
+  const needle = query.trim();
+  if (!needle) return null;
+  if (needle !== cachedSearchQuery || cachedSearchPattern === null) {
+    cachedSearchQuery = needle;
+    cachedSearchPattern = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  }
+  cachedSearchPattern.lastIndex = 0;
+  return cachedSearchPattern;
+}
+
 /**
  * 検索語に一致する範囲 `[開始, 終了)` を、**元の文字列**での位置で返す（大文字小文字は区別しない）。
  *
@@ -104,8 +118,7 @@ export function displayMessage(entry: LogEntry): string {
  *   正規表現の大文字小文字を無視する照合は、元の文字列の上で一致を探すので位置がずれない。
  */
 export function findMatchRanges(text: string, query: string): Array<[number, number]> {
-  const needle = query.trim();
-  if (!needle) return [];
-  const pattern = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  const pattern = searchPatternOf(query);
+  if (!pattern) return [];
   return Array.from(text.matchAll(pattern), (match) => [match.index, match.index + match[0].length] as [number, number]);
 }

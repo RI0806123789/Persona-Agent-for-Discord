@@ -18,6 +18,7 @@ from persona_bot.views.panel_authorization import (  # noqa: F401（再公開）
     authorize_panel_operation,
     begin_current_panel_operation,
     confirm_administrator_operation,
+    confirm_panel_not_blocked,
     confirm_panel_permission,
 )
 from persona_bot.views.panel_state import (  # noqa: F401（再公開）
@@ -215,13 +216,16 @@ class PanelView(OwnedView):
         # 画面を更新するコールバックだけが、待機前に操作世代を確保する。
         return not self.is_finished() and self._panel_state.current is self
 
-    async def ensure_settings_current(self, interaction: discord.Interaction) -> bool:
+    async def ensure_settings_current(
+        self, interaction: discord.Interaction, *, deferred: bool = False,
+    ) -> bool:
         """退出前の設定を使う操作は、受付時と非同期待機後に拒否する。"""
         settings = getattr(self, "guild_settings", None)
         if not isinstance(settings, GuildSettings) or settings.is_active:
             return True
         await edit_panel_message(
             interaction,
+            deferred=deferred,
             content="このパネルはサーバー退出により無効になりました。再度 /functions を実行して開き直してください。",
             view=None,
             source=self,
@@ -293,21 +297,25 @@ class BackButton(ui.Button):
                 view.stop()
             return
 
-        begin_panel_operation(view, interaction)
+        if not await begin_current_panel_operation(view, interaction):
+            return
         if isinstance(view, PanelView) and not await view.ensure_settings_current(interaction):
             return
         hub = make_parent(interaction)
         if isawaitable(hub):
             hub = await hub
-        if isinstance(view, PanelView) and not await view.ensure_settings_current(interaction):
-            # 生成済みの戻り先は表示されないまま捨てる。止めないとタイムアウトの
-            # タイマーが残る（swap_panel と同じ扱い）。
-            hub.stop()
-            return
-        hub.blocked_user_check = getattr(view, "blocked_user_check", None)
-        if not await edit_panel_message(interaction, content=hub.build_preview(), view=hub, source=view):
-            hub.stop()
-            return
+        adopted = False
+        try:
+            if isinstance(view, PanelView) and not await view.ensure_settings_current(interaction):
+                return
+            hub.blocked_user_check = getattr(view, "blocked_user_check", None)
+            if not await edit_panel_message(interaction, content=hub.build_preview(), view=hub, source=view):
+                return
+            adopted = True
+        finally:
+            # 生成済みの戻り先が不採用・例外・中断で表示されなかった場合は止めてタイマーを残さない。
+            if not adopted and hasattr(hub, "stop"):
+                hub.stop()
         if view is not None:
             view.stop()
         # エフェメラルはチャンネル経由では編集できないためWebhookの参照を保持する。

@@ -101,18 +101,21 @@ async def release_and_disconnect(
     - `stop`（音声会話の停止など）は同意パネルの編集などで待たされるので、保護の解除の後、
       切断の前に行う（切断済みの接続を会話の受信・再生が触らないように）。
     - 切断の失敗は `failure_message` を `log` へ警告で残して False を返す（例外は外へ出さない。
-      キャンセルは伝播する）。`stop` の例外は呼出元へそのまま伝える。
+      キャンセルは伝播する）。`stop` が例外やキャンセルで中断しても切断は済ませてからそのまま伝える。
     """
     if voice_guard is not None:
         voice_guard.release(guild_id)
-    if stop is not None:
-        await stop()
+    disconnected = False
     try:
-        await wait_for_cleanup(voice_client.disconnect(force=True), label=label)
-    except Exception:
-        log.warning(failure_message, exc_info=True)
-        return False
-    return True
+        if stop is not None:
+            await stop()
+    finally:
+        try:
+            await wait_for_cleanup(voice_client.disconnect(force=True), label=label)
+            disconnected = True
+        except Exception:
+            log.warning(failure_message, exc_info=True)
+    return disconnected
 
 
 class VoiceGuard:

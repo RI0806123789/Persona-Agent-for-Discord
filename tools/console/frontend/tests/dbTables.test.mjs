@@ -191,3 +191,75 @@ test("ページに出てくる表示名を、重複なく集める", () => {
   });
   assert.deepEqual(names.sort(), ["架空のさくら", "架空のたろう", "記録時の別名"].sort());
 });
+
+test("#510 未設定 ID の 0 は伏せ字にせず、ペルソナ列は伏せ字を通し、同名トピックの key を分ける", async () => {
+  const jsx = (type, props, key) => ({ type, props, key });
+  const read = (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
+  const compileCjs = (text, modules) => {
+    const exports = {};
+    const output = ts.transpileModule(text, { compilerOptions: {
+      module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
+    } }).outputText;
+    new Function("require", "exports", output)((name) => modules[name], exports);
+    return exports;
+  };
+  const tables = compileCjs(source, {});
+  const format = compileCjs(await read("format.ts"), {});
+  const privacy = {
+    MASK: "••••••",
+    usePrivacy: () => ({
+      enabled: true,
+      redact: (text) => text.replaceAll("SECRET_NAME", "••••••"),
+    }),
+  };
+  const { CellValue } = compileCjs(await read("pages/DbCells.tsx"), {
+    "react/jsx-runtime": { jsx, jsxs: jsx },
+    "../components/ui": { Chip: "Chip", StatusChip: "StatusChip" },
+    "../dbTables": tables,
+    "../format": format,
+    "../privacy": privacy,
+  });
+  const page = { users: {} };
+  const stageNode = CellValue({
+    column: { key: "autonomous_stage_channel_id", label: "配信先のステージ", kind: "id" },
+    row: { cells: { autonomous_stage_channel_id: "0" } },
+    page,
+    detail: true,
+  });
+  assert.equal(stageNode.props.children, "—");
+
+  const personaNode = CellValue({
+    column: { key: "prompt_file", label: "ペルソナ", kind: "persona" },
+    row: { cells: { prompt_file: "../prompts/SECRET_NAME.txt" } },
+    page,
+  });
+  assert.equal(personaNode.props.title, "../prompts/••••••.txt");
+  assert.equal(personaNode.props.children, "••••••");
+
+  // 伏せ字 OFF のときだけ開く話題チップで、同名トピックが並んでも key が重ならない
+  const openPrivacy = { MASK: "••••••", usePrivacy: () => ({ enabled: false }) };
+  const { CellValue: OpenCellValue } = compileCjs(await read("pages/DbCells.tsx"), {
+    "react/jsx-runtime": { jsx, jsxs: jsx },
+    "../components/ui": { Chip: "Chip", StatusChip: "StatusChip" },
+    "../dbTables": tables,
+    "../format": format,
+    "../privacy": openPrivacy,
+  });
+  const analysisNode = OpenCellValue({
+    column: { key: "analysis", label: "解析", kind: "analysis" },
+    row: { cells: { analysis: { topics: [{ label: "音楽", weight: 1 }, { label: "音楽", weight: 1 }], big_five: {} } } },
+    page,
+    detail: true,
+  });
+  const chipKeys = [];
+  const collectChips = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(collectChips); return; }
+    if (typeof node.type === "function") { collectChips(node.type(node.props)); return; }
+    if (node.type === "Chip") chipKeys.push(node.key);
+    if (node.props?.children) collectChips(node.props.children);
+  };
+  collectChips(analysisNode);
+  assert.equal(chipKeys.length, 2);
+  assert.notEqual(chipKeys[0], chipKeys[1]);
+});

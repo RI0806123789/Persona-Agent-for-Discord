@@ -189,19 +189,48 @@ export function Console() {
     if (connectedProfileId) setSelectedProfileId(connectedProfileId);
   }, [connectedProfileId, setSelectedProfileId]);
 
+  const setSelectedProfileIdRef = useRef(setSelectedProfileId);
+  setSelectedProfileIdRef.current = setSelectedProfileId;
+
+  const refreshProfiles = useCallback(async (): Promise<{ profiles: Profile[]; source: string } | null> => {
+    if (typeof api.profiles !== "function") return null;
+    try {
+      const result = await api.profiles();
+      setProfiles(result.profiles);
+      setProfilesSource(result.source);
+      setProfilesError(null);
+      setSelectedProfileIdRef.current((current) =>
+        result.profiles.some((p) => p.id === current) ? current : (result.profiles[0]?.id ?? ""),
+      );
+      return result;
+    } catch (error: unknown) {
+      setProfilesError(errorMessage(error));
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
-    api
-      .profiles()
-      .then((result) => {
-        setProfiles(result.profiles);
-        setProfilesSource(result.source);
-        setProfilesError(null);
-        setSelectedProfileId((current) =>
-          result.profiles.some((p) => p.id === current) ? current : (result.profiles[0]?.id ?? ""),
-        );
-      })
-      .catch((error: unknown) => setProfilesError(errorMessage(error)));
-  }, [setSelectedProfileId]);
+    void refreshProfiles();
+  }, []);
+
+  const previousPage = useRef<PageId | null>(null);
+  useEffect(() => {
+    const enteredConnection = previousPage.current !== null && previousPage.current !== "connection" && page === "connection";
+    previousPage.current = page;
+    if (enteredConnection) void refreshProfiles();
+  }, [page]);
+
+  const hadBackendError = useRef(false);
+  useEffect(() => {
+    if (backendError !== null) {
+      hadBackendError.current = true;
+      return;
+    }
+    if (hadBackendError.current) {
+      hadBackendError.current = false;
+      void refreshProfiles();
+    }
+  }, [backendError]);
 
   // ---- 状態の定期取得
   const refreshOperations = useCallback(async () => {
@@ -220,10 +249,12 @@ export function Console() {
     void refreshInsights(true);
   }, [refreshStatus, refreshInsights]);
   const { deploy, deployRunning, deployWasRunning, setDeploy, setDeployRunning, refreshDeploy, runDeploy } = useDeployController(
-    { requestScope, wasConnected, connectionChanging, connectionProfileId }, notify, refreshAfterChange, connected, connectionKey,
+    { requestScope, wasConnected, connectionChanging, connectionProfileId },
+    notify, refreshAfterChange, connected, connectionKey, refreshConnection,
   );
   const { busyAction, runAction } = useServiceController(
-    { requestScope, wasConnected, connectionChanging }, notify, refreshOperations, refreshAfterChange,
+    { requestScope, wasConnected, connectionChanging },
+    notify, refreshOperations, refreshAfterChange, refreshConnection,
   );
   const stateUnknown = connection?.state_unknown === true || deploy?.status === "unknown";
 
@@ -238,17 +269,33 @@ export function Console() {
 
   // ---- 接続・切断
   const handleConnect = useCallback(async () => {
-    if (!selectedProfileId) return;
-    // 見本の値のままの接続先は、バックエンドも断るが、要求を送る前に直し方を案内する
-    const target = profiles.find((p) => p.id === selectedProfileId);
-    const unset = unsetFieldsOf(target);
+    if (!selectedProfileId && !profilesError) return;
+    // 見本の値のままの接続先は、バックエンドも断るが、要求を送る前に最新の profiles を取り直して確かめる（#510）
+    let activeProfileId = selectedProfileId;
+    let currentProfiles = profiles;
+    let currentSource = profilesSource;
+    let target = currentProfiles.find((p) => p.id === activeProfileId);
+    let unset = unsetFieldsOf(target);
+    if ((!target || unset.length > 0 || profilesError) && typeof api.profiles === "function") {
+      const latest = await refreshProfiles();
+      if (latest) {
+        currentProfiles = latest.profiles;
+        currentSource = latest.source;
+        activeProfileId = currentProfiles.some((p) => p.id === activeProfileId)
+          ? activeProfileId
+          : (currentProfiles[0]?.id ?? activeProfileId);
+        target = currentProfiles.find((p) => p.id === activeProfileId);
+        unset = unsetFieldsOf(target);
+      }
+    }
+    if (!activeProfileId) return;
     if (target && unset.length > 0) {
       notify({
         tone: "critical",
         title: `「${target.label}」はまだ設定されていません`,
         // 見本（Git に含まれる）へ実際の接続先を書かせないよう、見本を読んでいるときはコピーから案内する
         detail:
-          profilesSource === "profiles.json"
+          currentSource === "profiles.json"
             ? `backend/profiles.json の ${unsetFieldsText(unset)}を書き換えてください。手順は tools/console/README.md にあります。`
             : `backend/profiles.example.json を backend/profiles.json にコピーし、${unsetFieldsText(unset)}を書き換えてください。手順は tools/console/README.md にあります。`,
       });
@@ -259,7 +306,7 @@ export function Console() {
     requestScope.current.invalidate();
     setConnecting(true);
     try {
-      const state = await api.connect(selectedProfileId);
+      const state = await api.connect(activeProfileId);
       applyConnection(state);
       notify({ tone: "good", title: "SSH で接続しました", detail: state.profile?.label });
     } catch (error) {
@@ -275,7 +322,7 @@ export function Console() {
       setConnecting(false);
       void refreshConnection();
     }
-  }, [selectedProfileId, profiles, profilesSource, applyConnection, notify, refreshConnection]);
+  }, [selectedProfileId, profiles, profilesSource, profilesError, refreshProfiles, applyConnection, notify, refreshConnection]);
   // 通知の「再試行」からは、その時点の最新の接続処理を呼ぶ
   const handleConnectRef = useRef(handleConnect);
   handleConnectRef.current = handleConnect;

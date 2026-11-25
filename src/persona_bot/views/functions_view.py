@@ -22,8 +22,8 @@ from persona_bot.views.summary_view import SummaryView
 from persona_bot.views.unblock_view import UnblockView
 from persona_bot.utils.usage_graph import UsageTracker
 from persona_bot.views.view_parts import (
-    authorize_administrator_operation, authorize_panel_operation, begin_panel_operation, edit_panel_message,
-    PanelView, defer_and_render_graph, send_graph_ephemeral, swap_panel,
+    authorize_administrator_operation, authorize_panel_operation, begin_current_panel_operation,
+    begin_panel_operation, edit_panel_message, PanelView, defer_and_render_graph, send_graph_ephemeral, swap_panel,
 )
 
 
@@ -40,11 +40,10 @@ class OpenSettingsButton(ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         hub: "FunctionsView" = self.view  # type: ignore[assignment]
-        begin_panel_operation(hub, interaction)
-
         # prompts/ に足したペルソナを再起動なしで選べるよう、開くたびに一覧を読み直す。
-        # ファイルを読むので先に応答を保留する。
-        await interaction.response.defer(ephemeral=True)
+        # ファイルを読むので先に応答を保留する。閉じた・旧世代のパネルなら実行しない。
+        if not await begin_current_panel_operation(hub, interaction, defer=True):
+            return
         # ペルソナ一覧の読み直し・違反件数の開示範囲・管理者判定は、配信先パネルから戻る経路と
         # 同じ組み立て（build_settings_view）にそろえる。管理者判定は応答の保留後なので最新の Member で行う。
         settings_view = await build_settings_view(
@@ -217,9 +216,8 @@ class ReminderButton(ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         hub: "FunctionsView" = self.view  # type: ignore[assignment]
-        begin_panel_operation(hub, interaction)
-
-        await interaction.response.defer(ephemeral=True)
+        if not await begin_current_panel_operation(hub, interaction, defer=True):
+            return
         viewer_id = str(interaction.user.id)
         try:
             records = await hub.reminders.list_pending(viewer_id)

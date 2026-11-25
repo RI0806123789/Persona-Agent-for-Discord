@@ -723,6 +723,100 @@ test("#218 接続失敗通知はAPIの安全な診断と原文を両方保持す
   assert.equal(harness.notices.length, 1);
 });
 
+test("#510 見本状態の接続先を書き換えた後に接続を押すと profiles を再取得してそのまま接続する", async (t) => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { documentElement: { dataset: {} } };
+  t.after(() => { globalThis.document = previousDocument; });
+  let configured = false;
+  let profileCalls = 0;
+  const connectedIds = [];
+  const api = {
+    profiles: async () => {
+      profileCalls += 1;
+      return configured
+        ? { source: "profiles.json", profiles: [{ id: "prod", label: "本番", unset_fields: [] }] }
+        : { source: "profiles.example.json", profiles: [{ id: "prod", label: "本番", unset_fields: ["host", "bot_dir"] }] };
+    },
+    operations: async () => ({ operations: [] }),
+    connect: async (id) => {
+      connectedIds.push(id);
+      return connection(id);
+    },
+    connection: async () => connection(connectedIds.at(-1) ?? null),
+  };
+  const runtime = renderer();
+  const notices = [];
+  const privacy = compile(privacySource, { react: runtime.hooks });
+  const profilesModule = compile(await source("profiles.ts"), {});
+  const modules = {
+    react: runtime.hooks,
+    "react/jsx-runtime": { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
+    "./hooks": { useStoredState: (_key, initial) => runtime.hooks.useState(initial), useNow: () => 0,
+      useMediaQuery: () => true, usePolling: () => {} },
+    "./useLogStream": { useLogStream: () => ({ setPaused: () => {} }) },
+    "./api": { api, errorMessage: (error) => error.message, errorSafeMessage: () => null, ApiError: Error },
+    "./useConsoleShortcuts": { useConsoleShortcuts: () => false },
+    "./components/toast": { useToast: () => (notice) => notices.push(notice), ToastViewport: "ToastViewport" },
+    "./privacy": privacy, "./requestScope": scopes,
+    "./navigation": { PAGES: [{ id: "overview" }, { id: "connection" }], isPageId: () => true },
+    "./profiles": profilesModule, "./status": statusModule, "./deployPlan": deployPlan,
+    "./theme/theme": { SEED_OPTIONS: [{ id: "test", hex: "#123456" }], applyTheme: () => {} },
+    "./pages/OverviewPage": { OverviewPage: "OverviewPage" },
+    "./pages/OperationsPage": { OperationsPage: "OperationsPage" },
+    "./pages/ConnectionPage": { ConnectionPage: "ConnectionPage" },
+  };
+  modules["./controllers"] = compile(controllerSource, modules);
+  modules["./confirmations"] = compile(confirmationsSource, modules);
+  const instrumented = appSource.replace(
+    "  return (\n    <PrivacyContext.Provider",
+    "  return { handleConnect, setStoredPage, profiles, selectedProfileId };\n  return (\n    <PrivacyContext.Provider",
+  );
+  const Console = compile(instrumented, modules).Console;
+  runtime.render(Console);
+  runtime.commit();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(profileCalls, 1);
+  // profiles.json を書き換えた直後に「接続」を押すと、再取得してそのまま接続できる
+  configured = true;
+  await runtime.render(Console).handleConnect();
+  assert.equal(profileCalls, 2);
+  assert.deepEqual(connectedIds, ["prod"]);
+  // 別の画面から接続ページへ戻ったときも再取得する
+  runtime.render(Console).setStoredPage("connection");
+  runtime.render(Console);
+  runtime.commit();
+  await Promise.resolve();
+  assert.equal(profileCalls, 3);
+});
+
+test("#510 サービス操作・デプロイ開始の失敗直後に connection を取り直して stateUnknown を即時反映する", async (t) => {
+  const previousWindow = globalThis.window;
+  globalThis.window = { setTimeout: () => 1, clearTimeout: () => {} };
+  t.after(() => { globalThis.window = previousWindow; });
+  for (const kind of ["service", "deploy"]) {
+    let unknown = false;
+    const harness = consoleHarness({
+      connection: async () => ({ ...connection("A"), state_unknown: unknown }),
+      operations: async () => ({ operations: [] }),
+      status: async () => ({ fetched_at: 1 }),
+      insights: async () => ({ data: null, fetched_at: 1 }),
+      service: async () => { unknown = true; throw new Error("終了未確認"); },
+      startDeploy: async () => { unknown = true; throw new Error("終了未確認"); },
+    });
+    harness.render().applyConnection({ ...connection("A"), state_unknown: false });
+    if (kind === "service") {
+      await harness.render().runAction("restart", { profile_id: "A", connected_at: 1 });
+    } else {
+      await harness.render().runDeploy({ profile_id: "A", connected_at: 1 });
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(harness.render().stateUnknown, true, kind);
+    harness.render().applyConnection(connection(null));
+  }
+});
+
 test("#218 接続状態からの通知も保持された安全な診断を使う", () => {
   const harness = consoleHarness({});
   const raw = "known_hosts が見つかりません: /" + ["home", "LOCAL_OWNER", ".ssh", "known_hosts"].join("/");

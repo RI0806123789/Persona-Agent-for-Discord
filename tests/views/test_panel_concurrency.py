@@ -405,3 +405,17 @@ class PanelConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(view.is_finished())
                 self.assertTrue(await view.interaction_check(self.interaction()))
                 database.assert_awaited_once()
+
+    async def test_closed_hub_skips_settings_and_reminder_io(self):
+        """閉じた・旧世代のハブでは、キャラ設定の読込やリマインダー DB 検索を行わない（#509）。"""
+        from persona_bot.views.functions_view import OpenSettingsButton
+
+        self.hub.stop()
+        with patch.object(functions_view, "build_settings_view", AsyncMock()) as build_settings:
+            for button_type in (OpenSettingsButton, ReminderButton):
+                interaction = self.interaction()
+                button = next(item for item in self.hub.children if isinstance(item, button_type))
+                await button.callback(interaction)
+                interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+            build_settings.assert_not_awaited()
+            self.reminders.list_pending.assert_not_awaited()

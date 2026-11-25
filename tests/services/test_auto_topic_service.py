@@ -776,3 +776,14 @@ class AnniversaryChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.gemini.generate.await_count, 2)
         self.channels[10].send.assert_awaited_once()
         self.assert_recorded(True)
+
+    async def test_concurrent_same_day_record_during_generation_prevents_duplicate_post(self):
+        """生成待機中に同日の投稿記録が入ったら、eligible 再確認で二重投稿を止める（#509）。"""
+        async def mark_posted(*_args, **_kwargs):
+            self.settings.anniversary_posted_dates["11:誕生日"] = self.TODAY
+            return "架空のお祝い", None, []
+
+        self.gemini.generate.side_effect = mark_posted
+        await self.celebrate()
+        for channel in self.channels.values():
+            channel.send.assert_not_awaited()

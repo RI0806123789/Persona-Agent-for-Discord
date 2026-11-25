@@ -75,6 +75,9 @@ async def is_current_administrator(interaction: discord.Interaction) -> bool:
     return is_administrator(member)
 
 
+BLOCKED_USER_NOTICE = "利用が制限されているため、この操作は実行できません。"
+
+
 async def reject_blocked_interaction(
     interaction: discord.Interaction, is_blocked: Callable[[int], bool],
 ) -> bool:
@@ -82,6 +85,6 @@ async def reject_blocked_interaction(
     if not is_blocked(interaction.user.id):
         return False
     await interaction.response.send_message(
-        "利用が制限されているため、この操作は実行できません。", ephemeral=True,
+        BLOCKED_USER_NOTICE, ephemeral=True,
     )
     return True

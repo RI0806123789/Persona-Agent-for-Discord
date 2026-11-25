@@ -94,6 +94,22 @@ class BlacklistFileTests(unittest.IsolatedAsyncioTestCase):
         saved = self.saved(path)
         self.assertEqual((saved["11"]["count"], saved["12"]["count"]), (1, 1))
 
+    async def test_string_false_or_zero_blocked_flag_is_not_treated_as_blocked(self) -> None:
+        """手書きの "false" や "0" をブロック中と誤認せず、違反カウントを進められる（#509）。"""
+        path = self.root / "blacklist.json"
+        path.write_text(json.dumps({
+            "11": {"count": 2, "blocked": "false"},
+            "12": {"count": 1, "blocked": "0"},
+            "13": {"count": 3, "blocked": "true"},
+        }), encoding="utf-8")
+        service = BlacklistService(path)
+        self.assertFalse(service.is_blocked(11))
+        self.assertFalse(service.is_blocked(12))
+        self.assertTrue(service.is_blocked(13))
+        self.assertEqual([user["user_id"] for user in service.get_all_blocked_users()], [13])
+        self.assertEqual(await service.record_violation(11, "架空の利用者"), (3, True))
+        self.assertTrue(service.is_blocked(11))
+
 
 if __name__ == "__main__":
     unittest.main()

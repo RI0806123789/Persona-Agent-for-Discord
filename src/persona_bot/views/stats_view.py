@@ -7,8 +7,8 @@ from persona_bot.utils.select_options import limit_keeping_selected
 from persona_bot.services.feedback_service import FeedbackService, get_default_service
 from persona_bot.services.stats_service import StatsService
 from persona_bot.views.view_parts import (
-    ADMIN_ONLY_NOTICE, begin_panel_operation, confirm_panel_permission, edit_panel_message, panel_operation_is_current,
-    report_panel_failure, send_panel_result,
+    ADMIN_ONLY_NOTICE, begin_panel_operation, confirm_panel_not_blocked, confirm_panel_permission,
+    edit_panel_message, panel_operation_is_current, report_panel_failure, send_panel_result,
     BackButton, HubFactory, PanelView,
     defer_and_render_graph, select_option_text, send_graph_ephemeral,
 )
@@ -106,11 +106,15 @@ class RunStatsButton(ui.Button):
             caption, images = await view.stats.build_dashboard(
                 target_id, item, viewer_id=view.viewer_id
             )
+            if not panel_operation_is_current(view, interaction):
+                return
+            if not await view.ensure_settings_current(interaction, deferred=True):
+                return
+            if not await confirm_panel_not_blocked(view, interaction):
+                return
             # 描画・解析の待機中にも権限は変わりうる。interaction.user は押した時点の写しなので、
             # 送信直前に最新の Member で他人のデータを守る（本人の統計は管理者でなくてよい）。
             allowed = target_id == view.viewer_id or await is_current_administrator(interaction)
-            if not panel_operation_is_current(view, interaction):
-                return
             if not await confirm_panel_permission(
                 interaction, allowed, notice=ADMIN_ONLY_NOTICE,
             ):

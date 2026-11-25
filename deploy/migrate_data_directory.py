@@ -46,6 +46,14 @@ def _digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def _ensure_owner_writable(path: Path, *, directory: bool = False) -> None:
+    """読み取り専用の旧データでも移行先での更新と旧配置の削除ができるよう、所有者の書き込み権限を付与する。"""
+    mode = path.stat().st_mode | stat.S_IWRITE | stat.S_IWUSR
+    if directory:
+        mode |= stat.S_IRUSR | stat.S_IXUSR
+    path.chmod(mode)
+
+
 def migrate_data_directory(project_root: Path, *, check_only: bool = False) -> MigrationResult:
     """全件を事前確認し、原本のバックアップとコピー検証後に旧配置を片付ける。"""
     project_root = project_root.resolve()
@@ -99,23 +107,24 @@ def migrate_data_directory(project_root: Path, *, check_only: bool = False) -> M
     # 新配置へ全件をコピーしてから原本を片付ける。既存ファイルは上書きしない。
     for _, destination in directories:
         destination.mkdir(parents=True, exist_ok=True)
+        _ensure_owner_writable(destination, directory=True)
     for source, destination, digest in files:
         if not destination.exists():
             with source.open("rb") as original, destination.open("xb") as copied:
                 shutil.copyfileobj(original, copied)
             shutil.copystat(source, destination)
+        _ensure_owner_writable(destination)
         if _digest(destination) != digest:
             raise MigrationError("移行先の検証に失敗しました。旧配置とバックアップを保持して確認してください。")
     # コピー中に書き込まれた原本も消さない。
     if any(_digest(source) != digest for source, _, digest in files):
         raise MigrationError("移行中にデータが変化しました。ボットを停止し、バックアップと比較してください。")
+    for source, _ in directories:
+        _ensure_owner_writable(source, directory=True)
     for source, _, _ in files:
-        if os.name == "nt":
-            source.chmod(source.stat().st_mode | stat.S_IWRITE)
+        _ensure_owner_writable(source)
         source.unlink()
     for source, _ in sorted(directories, key=lambda pair: len(pair[0].parts), reverse=True):
-        if os.name == "nt":
-            source.chmod(source.stat().st_mode | stat.S_IWRITE)
         source.rmdir()
     return MigrationResult(len(files), backup)
 

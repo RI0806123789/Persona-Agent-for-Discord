@@ -219,14 +219,19 @@ def run_console(root: Path, notify_ready) -> None:
     for port in (8765, 5173):
         check_port_available(port)
     run = root / ".run"
-    environment = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1", PERSONA_CONSOLE_MANAGED="1")
+    run.mkdir(exist_ok=True)
+    base_environment = {
+        key: value for key, value in os.environ.items() if key != "PERSONA_CONSOLE_MANAGED"
+    }
+    base_environment.update(PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+    backend_environment = {**base_environment, "PERSONA_CONSOLE_MANAGED": "1"}
     commands = (
-        ([str(python), "-B", "app.py"], root / "backend", "backend.log"),
-        ([node, str(vite)], root / "frontend", "frontend.log"),
+        ([str(python), "-B", "app.py"], root / "backend", "backend.log", backend_environment),
+        ([node, str(vite)], root / "frontend", "frontend.log", base_environment),
     )
     with ExitStack() as resources:
         services = []
-        for command, directory, log_name in commands:
+        for command, directory, log_name, environment in commands:
             log = resources.enter_context((run / log_name).open("wb"))
             process = subprocess.Popen(
                 command, cwd=directory, env=environment,

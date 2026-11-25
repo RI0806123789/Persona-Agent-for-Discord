@@ -36,6 +36,7 @@ from persona_bot.services.stats_normalization import (  # noqa: F401（BIG_FIVE_
     normalize_hourly,
     normalize_topics,
 )
+from persona_bot.utils.normalization import normalize_bool_flag
 from persona_bot.utils.storage import extract_json_object
 from persona_bot.utils.timeutil import as_utc, parse_iso_datetime, resolve_timezone, timezone_label, utc_now_iso
 from persona_bot.utils.usage_graph import UsageTracker, log_tokens_safely
@@ -110,8 +111,9 @@ class StatsService:
 
     @staticmethod
     def _entry_opted_out(entry: dict) -> bool:
-        """エントリが収集停止中かを返す（キーが無い旧形式は既定値で扱う）。"""
-        return bool(entry.get("opt_out", STATS_OPT_OUT_DEFAULT))
+        """エントリが収集停止中かを返す（キーが無い・読めない値は既定値で扱う）。"""
+        flag = normalize_bool_flag(entry.get("opt_out", STATS_OPT_OUT_DEFAULT), accept_numbers=True)
+        return STATS_OPT_OUT_DEFAULT if flag is None else flag
 
     @staticmethod
     def _total_count(entry: dict) -> int:

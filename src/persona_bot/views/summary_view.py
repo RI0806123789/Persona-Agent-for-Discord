@@ -15,7 +15,7 @@ from persona_bot.services.gemini_service import GeminiService
 from persona_bot.services.ng_word_service import NgWordFilter
 from persona_bot.utils.usage_graph import UsageTracker
 from persona_bot.views.view_parts import (
-    begin_panel_operation, edit_panel_message, panel_operation_is_current,
+    begin_panel_operation, confirm_panel_not_blocked, edit_panel_message, panel_operation_is_current,
     BackButton, HubFactory, PanelView, report_panel_failure, send_panel_result,
 )
 
@@ -120,7 +120,9 @@ class RunSummaryButton(ui.Button):
 
             if not panel_operation_is_current(view, interaction):
                 return
-            if not await view.ensure_settings_current(interaction):
+            if not await view.ensure_settings_current(interaction, deferred=True):
+                return
+            if not await confirm_panel_not_blocked(view, interaction):
                 return
 
             # 通知・エラーはパネル（本人だけに見える）にそのまま表示して終了。

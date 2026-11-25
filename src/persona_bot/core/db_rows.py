@@ -18,6 +18,7 @@ from persona_bot.config.constants import (
     STATS_HOURLY_BUCKETS,
     STATS_OPT_OUT_DEFAULT,
 )
+from persona_bot.utils.normalization import normalize_bool_flag
 
 
 # queue_tasks の列名一覧。UPDATE 文へ列名を埋め込む際のホワイトリストに使う。
@@ -98,8 +99,9 @@ def _user_stats_row_params(user_id: Any, entry: dict[str, Any]) -> tuple[Any, ..
     opt_out = entry.get("opt_out")
     if opt_out is None:
         opt_out = entry.get("stats_opt_out")
-    if opt_out is None:
-        opt_out = STATS_OPT_OUT_DEFAULT
+    normalized_opt_out = normalize_bool_flag(opt_out, accept_numbers=True)
+    if normalized_opt_out is None:
+        normalized_opt_out = STATS_OPT_OUT_DEFAULT
     return (
         str(user_id),
         str(entry.get("user_name") or ""),
@@ -109,7 +111,7 @@ def _user_stats_row_params(user_id: Any, entry: dict[str, Any]) -> tuple[Any, ..
         str(entry.get("last_seen") or ""),
         json.dumps(entry.get("recent_samples") or [], ensure_ascii=False),
         json.dumps(analysis, ensure_ascii=False) if analysis else None,
-        int(bool(opt_out)),
+        int(normalized_opt_out),
     )
 
 

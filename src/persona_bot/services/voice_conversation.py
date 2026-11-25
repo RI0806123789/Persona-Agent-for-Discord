@@ -331,8 +331,12 @@ class VoiceConversation(VoiceDiagnosticsMixin, VoicePlaybackMixin, VoiceConsentM
         eligible = self._eligible_members()
         waiting = [member for member in eligible if member.id not in self.consent.voice]
         is_open = bool(eligible) and not waiting
-        self._waiting_count = len(waiting)
+        waiting_count = len(waiting)
+        waiting_changed = waiting_count != self._waiting_count
+        self._waiting_count = waiting_count
         if is_open == self._gate_open:
+            if waiting_changed:
+                self._schedule_panel_update()
             return
         self._gate_open = is_open
         if is_open:
@@ -482,7 +486,7 @@ class VoiceConversation(VoiceDiagnosticsMixin, VoicePlaybackMixin, VoiceConsentM
         now = self._now()
         if utterance is not None:
             utterance.ended_at = now
-            if discard:
+            if discard or utterance.discarded:
                 utterance.discarded = True
                 # 破棄した発言の文字起こしは使わない。閉じておかないと、次に話し始めた人の断片が
                 # 破棄済みの発言の帰属待ちに阻まれて捨てられ、その発言が記憶から外れる。

@@ -117,7 +117,7 @@ export function DataPage({
         }
       >
         {error && <InlineError>{redactError(error, errorSafe, privacy)}</InlineError>}
-        {summary && !summary.exists && <InlineError>{privacy.mask(summary.path)} が見つかりません。</InlineError>}
+        {summary && !summary.exists && summary.path && <InlineError>{privacy.mask(summary.path)} が見つかりません。</InlineError>}
         {!summary && !error && <LoadingIndicator size={40} />}
         {summary?.exists && (
           <>
@@ -201,8 +201,8 @@ export function DataPage({
 
       {summary && summary.errors.length > 0 && (
         <div className="span-12">
-          {summary.errors.map((message) => (
-            <InlineError key={message}>{message}</InlineError>
+          {summary.errors.map((message, index) => (
+            <InlineError key={`${index}-${message}`}>{message}</InlineError>
           ))}
         </div>
       )}

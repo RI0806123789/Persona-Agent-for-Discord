@@ -72,9 +72,20 @@ class ConsoleLifetimeTests(unittest.TestCase):
         self.assertIn(f"--user-data-dir={self.root / '.run/browser-profile-chrome'}", commands[2].args[0])
         self.assertEqual(commands[0].kwargs["stdin"], subprocess.PIPE)
         self.assertEqual(commands[0].kwargs["env"]["PERSONA_CONSOLE_MANAGED"], "1")
+        self.assertNotIn("PERSONA_CONSOLE_MANAGED", commands[1].kwargs["env"])
         if os.name == "nt":
             for command in commands[:2]:
                 self.assertEqual(command.kwargs["creationflags"], subprocess.CREATE_NO_WINDOW)
+
+    def test_run_console_creates_missing_run_dir_and_strips_managed_env_from_frontend(self):
+        """main() を通さず run_console を呼んでも .run を作り、Vite には PERSONA_CONSOLE_MANAGED を渡さない（#510）。"""
+        (self.root / ".run").rmdir()
+        with patch.dict(launcher.os.environ, {"PERSONA_CONSOLE_MANAGED": "1"}):
+            launcher.run_console(self.root, self.notify)
+        self.assertTrue((self.root / ".run").is_dir())
+        commands = self.spawn.call_args_list
+        self.assertEqual(commands[0].kwargs["env"]["PERSONA_CONSOLE_MANAGED"], "1")
+        self.assertNotIn("PERSONA_CONSOLE_MANAGED", commands[1].kwargs["env"])
 
     def test_window_stays_open_across_refreshes(self):
         checks = iter([True, True, True, False])
