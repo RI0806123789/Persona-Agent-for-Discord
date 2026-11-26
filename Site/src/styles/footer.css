@@ -36,10 +36,34 @@
   margin-top: 36px;
 }
 
+/* ガイドとリポジトリへのリンクを、見出し付きの 2 つのまとまりで並べる（Issue #528） */
+.footer__navs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 48px;
+}
+
+.footer__group {
+  display: grid;
+  gap: 6px;
+}
+
+.footer__label {
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
 .footer__links {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 20px;
+}
+
+.footer__links a[aria-current="page"] {
+  color: var(--accent-strong);
+  font-weight: 700;
 }
 
 .footer__links a,

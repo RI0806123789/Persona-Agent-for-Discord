@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>使い方 — Persona Agent for Discord</title>
+    <meta name="description" content="Persona Agent for Discord の使い方。話しかけ方と、/functions の機能パネル、/join・/leave の音声会話。" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="使い方 — Persona Agent for Discord" />
+    <meta property="og:description" content="Persona Agent for Discord の使い方。話しかけ方と、/functions の機能パネル、/join・/leave の音声会話。" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#fbf6ee" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d1413" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <script>
+      // 最初の描画より前に配色を決める（読み込み後に切り替えると、一瞬だけ別の配色が見える）。
+      // 保存した選択が無ければ端末の設定に従う。localStorage が使えない環境でも止めない。
+      (function () {
+        var theme = null;
+        try {
+          theme = localStorage.getItem("site-theme");
+        } catch (error) {
+          theme = null;
+        }
+        if (theme !== "light" && theme !== "dark") {
+          theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+  </head>
+  <body data-guide="usage">
+    <div id="root"></div>
+    <noscript>
+      <p style="padding: 24px; font-family: sans-serif">
+        このページの表示には JavaScript が必要です。
+      </p>
+    </noscript>
+    <script type="module" src="/src/guide.tsx"></script>
+  </body>
+</html>

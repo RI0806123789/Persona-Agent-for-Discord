@@ -59,7 +59,7 @@ data/ng/*
 # --- ペルソナ（キャラ別のプロンプト）---
 # 公開するのは書式見本のテンプレート（プロンプトの .txt と personas.json の .json）だけ。
 # キャラ別の .txt と表示名・声の設定（personas.json）は利用者が各自のパソコン・サーバーで
-# 作って管理する（README「ペルソナを作る」）。
+# 作って管理する（紹介サイトの「ペルソナの作り方」。文言は Site/src/guides/persona.ts）。
 # 除外は prompts/ の直下全体にかけ、テンプレートだけを否定行で戻す（新しく作ったファイルを
 # 名前に関係なく誤ってコミットしないため）。テンプレートの名前を変えたら否定行も直すこと。
 prompts/*
@@ -74,7 +74,13 @@ data/ng/blacklist.json
 # ---dev---
 memo/
 chatlog/
+# 手元の素材（assets/）は除外したまま、README のバナー画像（#528）だけを公開する。
+# 除外したフォルダの中のファイルは戻せないので、ルートの assets/ だけフォルダを戻してから中身を除外し直す
+# （ほかの場所の assets/ は従来どおり丸ごと除外する）。
 assets/
+!/assets/
+/assets/*
+!/assets/banner.png
 .claude/
 .codex/
 .vscode/

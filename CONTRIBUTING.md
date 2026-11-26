@@ -118,9 +118,9 @@ npm run build
 
 ## Discord・Geminiを使う確認
 
-接続や応答の実動作が必要な変更は、[READMEのセットアップ手順](README.md) に従い、自分の検証用DiscordサーバーとAPIキーを使います。Geminiの呼び出しは利用量として計上されます。
+接続や応答の実動作が必要な変更は、[紹介サイトのセットアップの手順](https://ri0806123789.github.io/Persona-Agent-for-Discord/setup.html) に従い、自分の検証用DiscordサーバーとAPIキーを使います。Geminiの呼び出しは利用量として計上されます。
 
-`.env.example` をリポジトリルートの `.env` へコピーし、キーを設定してから、`src/` 内で `python bot.py` を実行します。ボイス機能を確認する場合は、LinuxのOpusライブラリなどREADMEに記載された準備も行ってください。
+`.env.example` をリポジトリルートの `.env` へコピーし、キーを設定してから、`src/` 内で `python bot.py` を実行します。ボイス機能を確認する場合は、LinuxのOpusライブラリなど[セットアップの手順](https://ri0806123789.github.io/Persona-Agent-for-Discord/setup.html#opus)に記載された準備も行ってください。
 
 ## コーディング規約
 
@@ -133,7 +133,7 @@ npm run build
 - DBの変更は既存スキーマを直接書き換えず、マイグレーションと保存・復元処理を揃える。
 - 依存ライブラリの追加はメンテナーと合意してから行う。
 
-詳しい構成と注意点は [CLAUDE.md](CLAUDE.md) にあります。ボットの起動時は `src/` を作業ディレクトリとします。記憶・DBは `data/memory/`、NGワード・違反記録は `data/ng/`、ペルソナはルート直下の `prompts/` を参照します。旧配置のデータを持つ環境では、[READMEのデータ移行手順](README.md#data-directory-migration)に従ってボット停止中に移してください。
+詳しい構成と注意点は [CLAUDE.md](CLAUDE.md) にあります。ボットの起動時は `src/` を作業ディレクトリとします。記憶・DBは `data/memory/`、NGワード・違反記録は `data/ng/`、ペルソナはルート直下の `prompts/` を参照します。旧配置のデータを持つ環境では、[紹介サイトの「運用」のデータの移行手順](https://ri0806123789.github.io/Persona-Agent-for-Discord/operations.html#data-migration)に従ってボット停止中に移してください。
 
 ## Pull Requestを出す
 

@@ -177,7 +177,7 @@ Edge も入っている環境でも Chrome を使います。Chrome は `Program
 
 ## デプロイする
 
-旧配置の `memory/`・`ng/` を持つサーバーは、[データ移行手順](../../README.md#data-directory-migration)に従ってボット停止中に `data/` 配下へ移してください。管理コンソールは `data/memory/bot.db`・`data/ng/blacklist.json` を読み取り、旧配置へは切り替えません。
+旧配置の `memory/`・`ng/` を持つサーバーは、[データの移行手順](https://ri0806123789.github.io/Persona-Agent-for-Discord/operations.html#data-migration)（紹介サイトの「運用」）に従ってボット停止中に `data/` 配下へ移してください。管理コンソールは `data/memory/bot.db`・`data/ng/blacklist.json` を読み取り、旧配置へは切り替えません。
 
 概要ページかサービス操作ページの「デプロイする」から、**接続中のサーバー上のコード**を `origin/<deploy_branch>` の最新へ更新できます。
 サーバーにボット・仮想環境・systemd のサービスを用意し、SSH ユーザーが `origin` を取得できることと、上記の sudo の許可を先に確かめてください。

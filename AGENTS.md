@@ -7,7 +7,7 @@
 - `src/`：Pythonのボット本体。`bot.py`が設定とサービスを配線し、`persona_bot/`を設定（`config/`）・中核処理（`core/`）・機能（`services/`）・画面（`views/`）・音声（`audio/`）・共通処理（`utils/`）に分ける。SQLは`core/database.py`（スキーマ定義は`db_migrations.py`、旧データの読み取りは`db_legacy_importers.py`）、プロンプトは`services/prompting.py`が担当する。
 - `tests/`：設定・中核処理・機能・画面・共通処理・運用・結合テストを用途別に配置し、`helpers/`に共通補助を置く。
 - `prompts/`：ペルソナ。Git管理は書式見本`00_prompt_format.txt`と`personas.json`の見本`00_prompt_format.json`だけで、キャラ別の`.txt`と`personas.json`は利用者がローカルで作る。`assets/`・`docs/`：素材と図。`deploy/`：運用設定例。`.github/`：Issue・PRテンプレート、CI（回帰テスト・依存の脆弱性検査）、Dependabotの設定。
-- `Site/`：紹介用ホームページ（React + TypeScript + Vite。GitHub Pagesで公開）。ボットとは依存・ビルドを分け、文言は`Site/src/content.ts`に集約する。機能や既定値を変えたら、README・ヘルプと合わせて直す。
+- `Site/`：紹介用ホームページと、セットアップ・ペルソナの作り方・使い方・運用の説明ページ（React + TypeScript + Vite。GitHub Pagesで公開）。ボットとは依存・ビルドを分け、文言はトップページが`Site/src/content.ts`、説明ページが`Site/src/guides/`に置く。手順や使い方の詳細は説明ページにだけ書き、READMEは概要・リンク集・開発者向けの要点に絞る。機能や既定値を変えたら、README・ヘルプと合わせて直す。
 - `data/memory/`・`data/ng/`：実行時の記憶とモデレーション関連データ。実データを検証やコミットに含めない。`prompts/`のキャラ別ファイルも同様に扱う。
 
 ## 開発・起動コマンド
@@ -26,7 +26,7 @@ cd src
 ..\.venv\Scripts\python.exe bot.py
 ```
 
-Linuxではルートで `python3 -m venv .venv` を実行し、`src/` から `../.venv/bin/python bot.py` で起動する。ボイス機能の準備は[README](README.md)を参照する。
+Linuxではルートで `python3 -m venv .venv` を実行し、`src/` から `../.venv/bin/python bot.py` で起動する。ボイス機能の準備は紹介サイトの[セットアップ](https://ri0806123789.github.io/Persona-Agent-for-Discord/setup.html#opus)を参照する。
 
 ## コーディング規約
 
@@ -56,6 +56,6 @@ push・PR作成は利用者の「作業完了を宣言します」を待つ。�
 
 ## バージョン・リリース
 
-更新履歴は版ごとに `docs/release-notes/ver0.x.x.md` へ書き、READMEには書かない。変更は見出しが `# ver0.x.x(BETA)` の既存ファイルへ追記する。なければ最新Releaseのパッチ番号を1つ上げたファイルを作り、一覧（`docs/release-notes/README.md`）の先頭とREADMEの「📋 更新履歴」の最新リンクも更新する。見出しは版を `#`、分類（新機能・不具合修正など）を `##` にする。BETA見出しには日付を付けず、READMEの未リリース機能の紹介にも `(BETA)` を付ける。機能ごとに番号を上げない。★ 管理コンソール（`tools/console/backend/remote_scripts/insights.py`）は、番号が最大のファイルの `#` 見出しを配備中の版として表示する。ファイル名と見出しの形を変えるなら、そちらとテストも直す。
+更新履歴は版ごとに `docs/release-notes/ver0.x.x.md` へ書き、READMEには書かない。変更は見出しが `# ver0.x.x(BETA)` の既存ファイルへ追記する。なければ最新Releaseのパッチ番号を1つ上げたファイルを作り、一覧（`docs/release-notes/README.md`）の先頭とREADMEのリンク集の「📋 更新履歴」の最新リンクも更新する。見出しは版を `#`、分類（新機能・不具合修正など）を `##` にする。BETA見出しには日付を付けず、READMEの主な機能と紹介サイトの説明ページの未リリース機能の紹介にも `(BETA)` を付ける。機能ごとに番号を上げない。★ 管理コンソール（`tools/console/backend/remote_scripts/insights.py`）は、番号が最大のファイルの `#` 見出しを配備中の版として表示する。ファイル名と見出しの形を変えるなら、そちらとテストも直す。
 
-マイナー番号の変更とRelease公開は利用者の指示で行う。リリース時は対象PRのmainへのマージとタグ重複を確認し、リリース用PRでBETA表示を解除して、ファイルの見出し・一覧・READMEの最新リンクに日付を付ける。そのファイルをリリースノートに使い（`gh release create ver0.x.x --notes-file docs/release-notes/ver0.x.x.md`）、タグ・タイトルは `ver0.x.x` に揃える。
+マイナー番号の変更とRelease公開は利用者の指示で行う。リリース時は対象PRのmainへのマージとタグ重複を確認し、リリース用PRでBETA表示を解除して（READMEと説明ページの `(BETA)` も外す）、ファイルの見出し・一覧・READMEの最新リンクに日付を付ける。そのファイルをリリースノートに使い（`gh release create ver0.x.x --notes-file docs/release-notes/ver0.x.x.md`）、タグ・タイトルは `ver0.x.x` に揃える。

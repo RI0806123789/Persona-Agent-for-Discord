@@ -1,0 +1,340 @@
+/* 説明ページ（ガイド。Issue #528）の骨組みと、トップページからの入口。
+   本文の中の段落・表・コードの例は prose.css。読み込む順番は styles.css が決める。 */
+/* --- トップページの「くわしい説明」 ----------------------------------------- */
+
+.guide-cards {
+  margin-top: 56px;
+}
+
+.guide-cards__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  margin-bottom: 18px;
+}
+
+.guide-cards__head h3 {
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+
+.guide-cards__head p {
+  color: var(--text-soft);
+  font-size: 0.95rem;
+}
+
+.guide-cards__list {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 232px), 1fr));
+}
+
+.guide-cards__list li,
+.guide-card-wrap {
+  display: flex;
+}
+
+.guide-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 22px 22px 24px;
+  text-decoration: none;
+}
+
+.guide-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-strong);
+}
+
+.guide-card__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-s);
+  background: var(--warm-soft);
+  font-size: 1.3rem;
+}
+
+.guide-card__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 1.08rem;
+  font-weight: 700;
+}
+
+.guide-card__title svg {
+  color: var(--accent-strong);
+  transition: transform 0.3s var(--ease);
+}
+
+.guide-card:hover .guide-card__title svg {
+  transform: translateX(3px);
+}
+
+.guide-card__summary {
+  color: var(--text-soft);
+  font-size: 0.92rem;
+}
+
+/* --- ページの見出し ------------------------------------------------------- */
+
+.guide-head {
+  position: relative;
+  overflow: hidden;
+  padding: 48px 0 36px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* トップページの光（.hero__glow）を、見出しの高さに合わせて小さく使う */
+.guide-head__glow {
+  height: 460px;
+}
+
+.guide-head__inner {
+  position: relative;
+}
+
+.guide-head__title {
+  margin-top: 12px;
+  font-size: clamp(1.9rem, 6.4vw, 2.8rem);
+  font-weight: 900;
+}
+
+.guide-head__lead {
+  margin-top: 14px;
+  max-width: 40em;
+  color: var(--text-soft);
+  font-size: 1.02rem;
+}
+
+/* --- 骨組み（狭い画面では縦に積み、広い画面では左に一覧と目次） --------------- */
+
+.guide-layout {
+  display: grid;
+  gap: 28px;
+  padding-top: 28px;
+  padding-bottom: 72px;
+}
+
+.guide-side {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  min-width: 0;
+}
+
+.guide-body {
+  min-width: 0;
+}
+
+.guide-body:focus {
+  outline: none;
+}
+
+/* ガイドの一覧。狭い画面では横に並べ、はみ出した分は横に送る */
+.guide-list ul {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.guide-list a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: 0.92rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color 0.25s var(--ease), border-color 0.25s var(--ease), color 0.25s var(--ease);
+}
+
+.guide-list a:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.guide-list a.is-current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.guide-toc__title {
+  margin-bottom: 8px;
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.guide-toc__list {
+  display: grid;
+  gap: 2px;
+}
+
+.guide-toc__list a {
+  display: block;
+  padding: 4px 12px;
+  border-left: 2px solid var(--border);
+  color: var(--text-soft);
+  font-size: 0.88rem;
+  line-height: 1.6;
+  text-decoration: none;
+  transition: border-color 0.25s var(--ease), color 0.25s var(--ease);
+}
+
+.guide-toc__list a:hover {
+  border-left-color: var(--accent);
+  color: var(--text);
+}
+
+/* 狭い画面では、目次を開閉できる形で出す */
+.guide-toc--wide {
+  display: none;
+}
+
+.guide-toc--narrow {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+}
+
+.guide-toc--narrow summary {
+  padding: 12px 16px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.guide-toc--narrow nav {
+  padding: 0 12px 14px;
+}
+
+@media (min-width: 980px) {
+  .guide-layout {
+    grid-template-columns: 232px minmax(0, 1fr);
+    gap: 48px;
+    padding-top: 40px;
+    padding-bottom: 104px;
+  }
+
+  /* 一覧と目次は、本文を読み進めても見える位置に留める */
+  .guide-side {
+    position: sticky;
+    top: 88px;
+    max-height: calc(100vh - 104px);
+    overflow-y: auto;
+    gap: 28px;
+  }
+
+  .guide-list ul {
+    display: grid;
+    gap: 4px;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  .guide-list a {
+    display: flex;
+    border-color: transparent;
+    border-radius: var(--radius-s);
+    background: transparent;
+  }
+
+  .guide-toc--wide {
+    display: block;
+  }
+
+  .guide-toc--narrow {
+    display: none;
+  }
+}
+
+/* --- 節 ----------------------------------------------------------------- */
+
+.guide-section + .guide-section {
+  margin-top: 56px;
+}
+
+.guide-section h2 {
+  font-size: clamp(1.35rem, 4vw, 1.7rem);
+  font-weight: 800;
+}
+
+.guide-section__anchor {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* 見出しの横に、ページ内リンクであることを示す印を出す */
+.guide-section__anchor::after {
+  content: "#";
+  margin-left: 0.4em;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.25s var(--ease);
+}
+
+.guide-section__anchor:hover::after,
+.guide-section__anchor:focus-visible::after {
+  opacity: 1;
+}
+
+/* --- 前後のページ --------------------------------------------------------- */
+
+.guide-pager {
+  display: grid;
+  gap: 12px;
+  margin-top: 72px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+}
+
+.guide-pager__link {
+  display: grid;
+  gap: 2px;
+  padding: 18px 22px;
+  text-decoration: none;
+}
+
+.guide-pager__link:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.guide-pager__link--next {
+  text-align: right;
+}
+
+.guide-pager__label {
+  color: var(--text-soft);
+  font-size: 0.82rem;
+}
+
+.guide-pager__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+
+.guide-pager__link--next .guide-pager__title {
+  justify-content: flex-end;
+}
+
+.guide-pager__title svg {
+  color: var(--accent-strong);
+}

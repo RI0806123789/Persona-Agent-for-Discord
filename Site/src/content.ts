@@ -1,7 +1,8 @@
-// 紹介サイトに出す文言の、唯一の置き場所。
+// 紹介サイトに出す文言の置き場所。トップページと全ページ共通の部分（ヘッダー・フッター・ガイドの一覧）はここ、
+// 説明ページ（ガイド。Issue #528）の本文は src/guides/ の各ファイルに置く。部品（App.tsx など）に文を直接書かない。
 //
 // ★ ボットの機能を足したり既定値を変えたりしたら、README・ヘルプ（src/persona_bot/views/help_view.py）と
-//   合わせて、このファイルの文言も直すこと（本文が実装と食い違わないことが最優先）。
+//   合わせて、このファイルと src/guides/ の文言も直すこと（本文が実装と食い違わないことが最優先）。
 // ★ 公開ページなので、個人情報・Discord の ID・API キー・サーバーの実パス・実際の会話や記憶・
 //   キャラ別のプロンプトを書かないこと。疑似 Discord 画面の登場人物と会話はすべて架空。
 // ★ ボットの招待 URL は載せない（Issue #410 の決定。自分でホストする前提の説明にとどめる）。
@@ -10,15 +11,16 @@
 // （型だけの import は実行時に消えるのでよい）。
 
 import type { DemoAuthor, DemoMessage } from "./demoTimeline";
+import type { GuideId } from "./guides/types";
 
 export const SITE_NAME = "Persona Agent for Discord";
 
 const REPOSITORY_URL = "https://github.com/RI0806123789/Persona-Agent-for-Discord";
 
-/** 外部へのリンク。すべてこのリポジトリの中を指す */
+/** リンク。サイト内のページか、このリポジトリの中だけを指す（外部のサイトへはリンクしない。#410・#528） */
 export const LINKS = {
   repository: REPOSITORY_URL,
-  setup: `${REPOSITORY_URL}#readme`,
+  setup: "./setup.html",
   releases: `${REPOSITORY_URL}/releases`,
   contributing: `${REPOSITORY_URL}/blob/main/CONTRIBUTING.md`,
   codeOfConduct: `${REPOSITORY_URL}/blob/main/CODE_OF_CONDUCT.md`,
@@ -26,12 +28,67 @@ export const LINKS = {
   license: `${REPOSITORY_URL}/blob/main/LICENSE.md`,
 } as const;
 
+/** トップページの節への移動。説明ページでは ./index.html#… に読み替えて使う */
 export const NAV_ITEMS = [
   { href: "#features", label: "できること" },
   { href: "#story", label: "制作背景" },
-  { href: "#start", label: "使い方" },
+  { href: "#start", label: "はじめかた" },
   { href: "#stack", label: "技術" },
 ] as const;
+
+// ---------------------------------------------------------------------------
+// 説明ページ（ガイド。Issue #528）
+// ---------------------------------------------------------------------------
+
+export type GuideLink = { id: GuideId; href: string; icon: string; title: string; summary: string };
+
+/**
+ * 説明ページの一覧（並びは読む順）。Site/ の直下に、id と同じ名前の HTML（setup.html など）を置く。
+ * ★ ページを足したら、HTML（index.html と同じ head）と src/guides/<id>.ts を足し、src/guide.tsx の対応表へ載せる
+ *   （vite.config.ts はこの一覧からビルドの入口を作る。tests/guides.test.mjs が食い違いを検出する）。
+ */
+export const GUIDES: readonly GuideLink[] = [
+  {
+    id: "setup",
+    href: "./setup.html",
+    icon: "🛠️",
+    title: "セットアップ",
+    summary: "Python と 2 つのキーを用意して、自分のボットとして起動するまで。",
+  },
+  {
+    id: "persona",
+    href: "./persona.html",
+    icon: "🎭",
+    title: "ペルソナの作り方",
+    summary: "キャラクターの性格・口調を書いたファイルと、表示名・声の設定。",
+  },
+  {
+    id: "usage",
+    href: "./usage.html",
+    icon: "💬",
+    title: "使い方",
+    summary: "話しかけ方と、/functions・/join・/leave でできること。",
+  },
+  {
+    id: "operations",
+    href: "./operations.html",
+    icon: "🖥️",
+    title: "運用",
+    summary: "サーバーでの常時稼働、更新、古い版からのデータの移行。",
+  },
+];
+
+/** 説明ページの共通部分の文言 */
+export const GUIDE_PAGE = {
+  eyebrow: "ガイド",
+  navLabel: "ガイド",
+  listLabel: "ガイドの一覧",
+  tocLabel: "このページの内容",
+  previousLabel: "前のページ",
+  nextLabel: "次のページ",
+  backToTop: { href: "./index.html", label: "トップページへ戻る" },
+  copy: { idle: "コピー", done: "コピーしました", failed: "コピーできませんでした" },
+} as const;
 
 export const HERO = {
   eyebrow: "キャラクターと暮らす Discord ボット",
@@ -329,13 +386,13 @@ export const PURPOSE = {
 // ---------------------------------------------------------------------------
 
 export const START = {
-  eyebrow: "使い方",
+  eyebrow: "はじめかた",
   title: "はじめるまでの 3 ステップ",
   lead: "このボットは、公開の招待リンクを配っていません。ソースコードを受け取り、自分のボットとして動かして使います。",
   steps: [
     {
       title: "自分の環境で動かす",
-      body: "Python と、Google Gemini・Discord の 2 つのキーを用意して起動します。手順は README に順番に書いてあります。",
+      body: "Python と、Google Gemini・Discord の 2 つのキーを用意して起動します。手順はセットアップのページに順番に書いてあります。",
       action: { href: LINKS.setup, label: "セットアップの手順を読む" },
     },
     {
@@ -347,6 +404,8 @@ export const START = {
       body: "/functions と入力すると、自分にだけ見えるパネルが開きます。キャラクターの切り替えや、まとめ・統計・リマインダーの確認はここから。",
     },
   ],
+  guidesTitle: "くわしい説明",
+  guidesLead: "手順や機能の細かい説明は、目的ごとのページにまとめています。",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -411,9 +470,10 @@ export const DISCLAIMER = {
 } as const;
 
 export const FOOTER = {
+  guidesLabel: "ガイド",
+  relatedLabel: "リポジトリ",
   links: [
     { href: LINKS.repository, label: "GitHub" },
-    { href: LINKS.setup, label: "セットアップ" },
     { href: LINKS.releases, label: "更新履歴" },
     { href: LINKS.contributing, label: "貢献ガイド" },
     { href: LINKS.codeOfConduct, label: "行動規範" },
