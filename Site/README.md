@@ -36,7 +36,7 @@ npm run preview  # http://127.0.0.1:4174 でビルド結果を確認
 Site/
 ├── index.html            # トップページ。最初の描画より前に配色を決めるスクリプトを含む
 ├── setup.html ほか       # 説明ページ（setup・persona・usage・operations）。head は index.html と同じで、<body data-guide> でページを選ぶ
-├── public/               # そのまま配信するファイル（favicon）
+├── public/               # そのまま配信するファイル（favicon。README の見出しのアイコンにも使うので、名前・場所を変えたら README も直す）
 ├── src/
 │   ├── content.ts        # トップページと全ページ共通の部分（ヘッダー・フッター・説明ページの一覧 GUIDES）の文言
 │   ├── guides/           # 説明ページの本文（setup.ts など）と、その型（types.ts）・文中の書式の読み分け（markup.ts）
