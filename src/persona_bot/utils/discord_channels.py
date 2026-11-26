@@ -14,6 +14,7 @@ import discord
 from persona_bot.config.constants import (
     WELCOME_MESSAGE_ENABLED,
 )
+from persona_bot.utils.discord_send import NO_MENTIONS
 
 # 運用ログの出元は分割前と同じ `persona_bot.utils.discord_helpers`。
 logger = logging.getLogger("persona_bot.utils.discord_helpers")
@@ -114,13 +115,13 @@ async def post_welcome_message(
     posted_guild_ids.add(guild.id)
 
     try:
-        await channel.send(body, allowed_mentions=discord.AllowedMentions.none())
+        await channel.send(body, allowed_mentions=NO_MENTIONS)
     # Forbidden は HTTPException の派生クラスなので、必ず先に捕まえること。
     except discord.Forbidden:
         logger.error('ウェルカムメッセージの送信を拒否されました（guild=<ID> / channel=<ID>）。', exc_info=True)
         return False
     except discord.HTTPException as error:
-        logger.error(f'ウェルカムメッセージの送信に失敗しました（guild=<ID>）: {type(error).__name__}', exc_info=error)
+        logger.error("ウェルカムメッセージの送信に失敗しました（guild=<ID>）。", exc_info=error)
         return False
 
     logger.info('ウェルカムメッセージを投稿しました（guild=<ID> / channel=<ID>）。')

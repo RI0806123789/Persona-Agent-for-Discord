@@ -22,6 +22,7 @@ from persona_bot.utils.discord_helpers import (
     REPLY_ALLOWED_MENTIONS, close_image_attachments, describe_supported_attachments,
     format_grounding_sources, mask_grounding_sources,
 )
+from persona_bot.utils.usage_graph import log_snapshot_safely
 
 if TYPE_CHECKING:
     from persona_bot.core.message_handler import MessageHandler
@@ -137,7 +138,8 @@ async def handle_chat_message(
             if delegated:
                 grounding_sources = delegated_sources
 
-            self.usage.log_snapshot(
+            log_snapshot_safely(
+                self.usage,
                 "サブエージェント経由" if delegated else "直接会話",
                 question, f"画像添付: {len(image_objects)}枚", full_prompt, response_text, usage_info,
             )
@@ -199,7 +201,7 @@ def _track_reply_for_feedback(
             prompt_file=response_settings.prompt_file,
         )
     except Exception as error:
-        logger.error(f'評価対象の登録に失敗しました（返信は送信済み）: {type(error).__name__}', exc_info=error)
+        logger.error("評価対象の登録に失敗しました（返信は送信済み）。", exc_info=error)
 
 
 async def _remember_reply(self: MessageHandler, user_id: str, question: str, response_text: str) -> bool:
@@ -211,6 +213,6 @@ async def _remember_reply(self: MessageHandler, user_id: str, question: str, res
     try:
         await self.memory.append_pending_log(user_id, question, response_text)
     except Exception as error:
-        logger.error(f'会話記憶: 返信は送信済みですが、記憶への追記に失敗しました（user_id=<ID>）: {type(error).__name__}', exc_info=error)
+        logger.error("会話記憶: 返信は送信済みですが、記憶への追記に失敗しました（user_id=<ID>）。", exc_info=error)
         return False
     return True

@@ -163,7 +163,7 @@ class Database(
             self._validate_guild_settings_schema(force=True)
         # 途中失敗で取り消された移行を、成功したように記録しない。
         for version in applied_versions:
-            logger.info(f'データベース: スキーマをバージョン {version} へ移行しました。')
+            logger.info("データベース: スキーマをバージョン %d へ移行しました。", version)
         self._legacy.migrate_profile_rows()
         self._legacy.import_files()
         self._legacy.absorb_profile_json()

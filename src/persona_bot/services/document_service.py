@@ -43,7 +43,7 @@ from persona_bot.services.memory_service import MemoryService
 from persona_bot.services.ng_word_service import NgWordFilter
 from persona_bot.config.paths import load_persona_or_default, load_persona_template
 from persona_bot.services.prompting import build_full_prompt, build_memory_sections
-from persona_bot.utils.usage_graph import UsageTracker, log_tokens_safely
+from persona_bot.utils.usage_graph import UsageTracker, log_snapshot_safely, log_tokens_safely
 
 logger = logging.getLogger(__name__)
 
@@ -310,15 +310,15 @@ class DocumentService:
 
             # 生成に成功した時点で消費したトークンを記録する。タグ除去後に空になった場合や
             # 後段のモデレーションで却下された場合も、Gemini を呼んだ分は統計に含める（#432）。
-            if self._usage is not None:
-                self._usage.log_snapshot(
-                    "文書タスク",
-                    question,
-                    f"文書添付: {len(attachments)}件",
-                    full_prompt,
-                    response_text,
-                    usage_info,
-                )
+            log_snapshot_safely(
+                self._usage,
+                "文書タスク",
+                question,
+                f"文書添付: {len(attachments)}件",
+                full_prompt,
+                response_text,
+                usage_info,
+            )
 
             # タグのみの応答は、空本文や参考リンクだけを送らず生成失敗として扱う。
             if not response_text:

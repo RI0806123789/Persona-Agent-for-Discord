@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import ts from "typescript";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as jsxRuntime from "react/jsx-runtime";

@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { compileTs, readSource } from "./helpers/compile.mjs";
 
-const source = await readFile(new URL("../src/data.ts", import.meta.url), "utf8");
-const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } });
-const { lastSevenDays } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputText).toString("base64")}`);
+const { lastSevenDays } = compileTs(await readSource("data.ts"));
 
 test("日本時間の午前0時で表示日を切り替える", () => {
   assert.equal(lastSevenDays([], Date.UTC(2026, 0, 1, 14, 59, 59)).at(-1).key, "2026-01-01");

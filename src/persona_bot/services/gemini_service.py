@@ -3,7 +3,7 @@ import asyncio
 from math import ceil
 from pathlib import Path
 from time import monotonic
-from typing import Any, Callable, NamedTuple, Sequence
+from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Sequence
 
 from google.genai import types
 
@@ -23,9 +23,14 @@ from persona_bot.services.genai_client import (
 from persona_bot.services.prompting import build_document_summary_prompt
 from persona_bot.utils.storage import (
     contains_internal_response_text,
+    describe_response_parts,
     read_json_response,
     safe_response_text,
 )
+from persona_bot.utils.usage_graph import log_tokens_safely
+
+if TYPE_CHECKING:
+    from persona_bot.utils.usage_graph import UsageTracker
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +77,9 @@ class GenerationResult(NamedTuple):
 class GeminiService:
     """共有クライアントを使い、呼び出し元が選んだモデルで非同期生成する。"""
 
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, *, usage: "UsageTracker | None" = None) -> None:
         self._client = client
+        self._usage = usage
 
     async def generate(
         self,
@@ -144,7 +150,13 @@ class GeminiService:
                 if text is not None and contains_internal_response_text(text):
                     # Discord・読み上げ・会話記憶・ログへ内部形式を流さないよう、ここで応答ごと捨てる。
                     # 診断には本文・プロンプト・検索語を含めず、モデルと応答の構造だけを残す。
-                    logger.warning("Gemini生成: 内部形式が混入した応答を破棄しました（検索: %s）。", "有効" if use_grounding else "無効")
+                    log_tokens_safely(self._usage, "内部形式による再生成", getattr(response, "usage_metadata", None))
+                    logger.warning(
+                        "Gemini生成: 内部形式が混入した応答を破棄しました（モデル: %s、検索: %s、%s）。",
+                        effective_model,
+                        "有効" if use_grounding else "無効",
+                        describe_response_parts(response),
+                    )
                     if regenerations_left <= 0:
                         logger.error("Gemini生成: 再生成の上限に達したため、応答を返しません。")
                         return GenerationResult(None, None, [], None)

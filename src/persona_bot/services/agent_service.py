@@ -27,6 +27,7 @@ from persona_bot.services.agent_plan import AgentPlan
 from persona_bot.services.prompting import build_agent_worker_prompt
 from persona_bot.utils.grounding import normalize_sources
 from persona_bot.utils.timeutil import format_prompt_now, resolve_timezone
+from persona_bot.utils.usage_graph import log_tokens_safely
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ class AgentService:
             result = await self._gemini.generate_with_metadata(
                 prompt, model_name, timeout=AGENT_STEP_TIMEOUT_SECONDS, grounding=True,
             )
-            self._usage.log_tokens("サブエージェント", result.usage)
+            log_tokens_safely(self._usage, "サブエージェント", result.usage)
             # 子には感情タグを禁じているが、混ざっても人格役へ渡す前に取り除く。
             text = strip_affinity_tag(result.text or "").strip()
             if not text:

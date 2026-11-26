@@ -7,6 +7,7 @@ from persona_bot.core.app_state import GuildSettings
 from persona_bot.config.choices import SUMMARY_PERIOD_CHOICES
 from persona_bot.services.content_moderator import ContentModerator
 from persona_bot.utils.discord_helpers import (
+    NO_MENTIONS,
     is_supported_message_channel,
     send_long_message,
 )
@@ -142,7 +143,7 @@ class RunSummaryButton(ui.Button):
                 # 結果を全員に: チャンネルへ投稿し、パネルは完了表示にする。
                 # 投稿の失敗だけは原因に合わせて案内する（権限不足か、途中まで投稿されたか）。
                 try:
-                    await send_long_message(channel, text, allowed_mentions=discord.AllowedMentions.none())
+                    await send_long_message(channel, text, allowed_mentions=NO_MENTIONS)
                 # Forbidden は HTTPException の派生クラスなので、必ず先に捕まえること。
                 except discord.Forbidden as error:
                     logger.warning("要約: チャンネルへの投稿を拒否されました。", exc_info=error)

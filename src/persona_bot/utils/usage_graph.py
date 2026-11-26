@@ -139,3 +139,24 @@ def log_conversation_safely(usage: UsageTracker | None, kind: str = "会話") ->
         log_fn(kind)
     except Exception as error:
         logger.warning("会話の記録に失敗しました: %s", type(error).__name__)
+
+
+def log_snapshot_safely(
+    usage: UsageTracker | None,
+    context_label: str,
+    question: str,
+    attachment_summary: str,
+    full_prompt: str,
+    response_text: str | None,
+    usage_info: Any | None,
+) -> None:
+    """利用者の発言への応答の利用量を安全に記録する。未接続や失敗で本処理を止めない（#497）。"""
+    if usage is None:
+        return
+    log_fn = getattr(usage, "log_snapshot", None)
+    if not callable(log_fn):
+        return
+    try:
+        log_fn(context_label, question, attachment_summary, full_prompt, response_text, usage_info)
+    except Exception as error:
+        logger.warning("利用量の記録に失敗しました: %s", type(error).__name__)

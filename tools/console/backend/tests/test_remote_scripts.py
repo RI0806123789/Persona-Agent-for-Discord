@@ -719,7 +719,7 @@ class DbSummaryScriptTests(unittest.TestCase):
             con = sqlite3.connect(path)
             try:
                 con.execute("CREATE TABLE feedback(guild_id INTEGER, created_at TEXT, rating INTEGER)")
-                con.execute("CREATE INDEX idx_feedback_guild_created ON feedback(guild_id, created_at)")
+                con.execute("CREATE INDEX idx_feedback_guild ON feedback(guild_id, created_at)")
                 stamps = con.execute(
                     "SELECT datetime('now', '+9 hours', 'start of day', '-9 hours'), "
                     "datetime('now', '+9 hours', 'start of day', '+1 day', '-9 hours')"
@@ -730,14 +730,17 @@ class DbSummaryScriptTests(unittest.TestCase):
                 con.commit()
             finally:
                 con.close()
+            original = path.read_bytes()
             connect = sqlite3.connect
             with patch.object(sqlite3, "connect", side_effect=lambda *args, **kwargs: connect(
                 *args, factory=TracedConnection, **kwargs,
             )):
                 data = db_summary.collect(str(path), str(root / "missing.json"))
+            self.assertEqual(data["feedback"], {"good": 2, "bad": 2})
             self.assertEqual(sum(day["good"] for day in data["feedback_by_day"]), 2)
             self.assertEqual(sum(day["bad"] for day in data["feedback_by_day"]), 0)
-        self.assertTrue(any("SEARCH feedback USING INDEX idx_feedback_guild_created" in plan
+            self.assertEqual(path.read_bytes(), original)
+        self.assertTrue(any("SEARCH feedback USING INDEX idx_feedback_guild" in plan
                             and "created_at>?" in plan and "created_at<?" in plan for plan in plans), plans)
 
     def summarize(self, root):

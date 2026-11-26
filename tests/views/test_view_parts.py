@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from persona_bot.views.view_parts import BackButton, PanelView, send_graph_ephemeral, swap_panel
+from persona_bot.views.view_parts import (
+    BackButton, PanelView, edit_panel_or_followup, send_graph_ephemeral, swap_panel,
+)
 from persona_bot.core.background import TaskOwner
 from discord import ui
 from tests.helpers.discord_mocks import ONLY_RESPONSE, make_followup, make_interaction, make_response
@@ -131,6 +133,65 @@ class PanelNavigationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIs(current.message, webhook)
                 await current.on_timeout()
                 webhook.edit.assert_awaited_once_with(content="時間切れです。", view=None)
+
+    async def test_swap_panel_stops_unadopted_panel_and_resolves_default_preview(self):
+        """順方向の遷移でも不採用・例外時に遷移先 View を止め、本文省略時は build_preview を使う（#511）。"""
+        hub, panel = self.make_panel(), self.make_panel()
+        panel.build_preview = Mock(return_value="既定のサブパネル")
+        interaction, _ = self.make_interaction()
+        await swap_panel(interaction, hub, panel)
+        interaction.response.edit_message.assert_awaited_once_with(content="既定のサブパネル", view=panel)
+        self.assertTrue(hub.is_finished())
+        self.assertFalse(panel.is_finished())
+
+        hub_expired, panel_expired = self.make_panel(), self.make_panel()
+        hub_expired.ensure_settings_current = AsyncMock(return_value=False)
+        interaction_expired, _ = self.make_interaction()
+        await swap_panel(interaction_expired, hub_expired, panel_expired, "サブパネル")
+        self.assertTrue(panel_expired.is_finished())
+        self.assertFalse(hub_expired.is_finished())
+
+        hub_failed, panel_failed = self.make_panel(), self.make_panel()
+        interaction_failed, _ = self.make_interaction()
+        with patch("persona_bot.views.view_parts.edit_panel_message", AsyncMock(return_value=False)):
+            await swap_panel(interaction_failed, hub_failed, panel_failed, "サブパネル")
+        self.assertTrue(panel_failed.is_finished())
+        self.assertFalse(hub_failed.is_finished())
+
+        hub_error, panel_error = self.make_panel(), self.make_panel()
+        interaction_error, _ = self.make_interaction()
+        with patch("persona_bot.views.view_parts.edit_panel_message", AsyncMock(side_effect=RuntimeError("架空の編集失敗"))):
+            with self.assertRaises(RuntimeError):
+                await swap_panel(interaction_error, hub_error, panel_error, "サブパネル")
+        self.assertTrue(panel_error.is_finished())
+        self.assertFalse(hub_error.is_finished())
+
+    async def test_edit_panel_or_followup_falls_back_to_ephemeral_followup_when_panel_expired(self):
+        """保留中のパネル更新が有効なら編集し、失効していれば本人限定の followup で伝える（#511）。"""
+        active = self.make_panel()
+        interaction_ok = make_interaction(
+            response=make_response("defer", "is_done", is_done=Mock(return_value=True)),
+            followup=make_followup(),
+            without=("original_response",),
+        )
+        self.assertTrue(
+            await edit_panel_or_followup(interaction_ok, content="更新しました。", view=active, source=active)
+        )
+        interaction_ok.edit_original_response.assert_awaited_once_with(content="更新しました。", view=active)
+        interaction_ok.followup.send.assert_not_awaited()
+
+        expired = self.make_panel()
+        expired.stop()
+        interaction_stale = make_interaction(
+            response=make_response("defer", "is_done", is_done=Mock(return_value=True)),
+            followup=make_followup(),
+            without=("original_response",),
+        )
+        self.assertFalse(
+            await edit_panel_or_followup(interaction_stale, content="完了しました。", view=expired, source=expired)
+        )
+        interaction_stale.edit_original_response.assert_not_awaited()
+        interaction_stale.followup.send.assert_awaited_once_with("完了しました。", ephemeral=True)
 
     async def test_graph_and_error_notice_failure_are_contained_and_buffer_is_closed(self):
         for followup in (False, True):

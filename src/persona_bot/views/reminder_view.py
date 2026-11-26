@@ -4,7 +4,7 @@ from discord import ui
 from persona_bot.config.constants import DISCORD_SELECT_MAX_OPTIONS, REMINDER_PANEL_MAX_LENGTH
 from persona_bot.services.reminder_service import ReminderService, ReminderStorageError
 from persona_bot.views.view_parts import (
-    begin_current_panel_operation, edit_panel_message, BackButton,
+    begin_current_panel_operation, edit_panel_message, edit_panel_or_followup, BackButton,
     HubFactory, PanelView, select_option_text,
 )
 
@@ -73,8 +73,7 @@ class ReminderCancelSelect(ui.Select):
                 "⚠️ リマインダーを取り消せませんでした。時間をおいて同じ予定を選び直してください。\n"
                 "パネルが時間切れの場合は /functions → ⏰ リマインダー から開き直してください。"
             )
-            if not await edit_panel_message(interaction, deferred=True, content=notice, view=view):
-                await interaction.followup.send(notice, ephemeral=True)
+            await edit_panel_or_followup(interaction, content=notice, view=view)
             return
         if canceled is None:
             await edit_panel_message(interaction, deferred=True,

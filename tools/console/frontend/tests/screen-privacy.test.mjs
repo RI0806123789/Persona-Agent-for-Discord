@@ -1,31 +1,22 @@
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import * as React from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import { renderToStaticMarkup } from "react-dom/server";
-import ts from "typescript";
+import { compile, readSource as source } from "./helpers/compile.mjs";
 import { nodes } from "./helpers/tree.mjs";
 
-const source = async (name) => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
 const sources = new Map();
 async function collect(directory = "") {
   for (const entry of await readdir(new URL(`../src/${directory}`, import.meta.url), {withFileTypes: true})) {
     const name = `${directory}${entry.name}`;
     if (entry.isDirectory()) await collect(`${name}/`);
-    else if (/\.tsx?$/.test(name)) sources.set(name, (await source(name)).replaceAll("\r\n", "\n"));
+    else if (/\.tsx?$/.test(name)) sources.set(name, await source(name));
   }
 }
 await collect();
-function compile(text, requireModule) {
-  const exports = {};
-  const output = ts.transpileModule(text, {compilerOptions: {
-    module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022,
-  }}).outputText;
-  new Function("require", "exports", output)(requireModule, exports);
-  return exports;
-}
 // 実TSXを依存先ごと読み込み、Reactのサーバー描画で表示文字列と全属性を検査する。
 function loader(overrides = {}) {
   const cache = new Map();
@@ -361,6 +352,9 @@ for (const action of ["stop", "restart", "deploy"]) {
 }
 test("#216 確認ダイアログ自体の題名・実行ラベル・確認入力案内にもredactを適用する", () => {
   const h = appHarness(); h.render().setPrivacyOn(true); h.render();
+  // 閉じた初期状態（request === null）では submit ボタンを無効にする（#511）。
+  const closed = h.dialog(null);
+  assert.equal(nodes(closed).find((node) => node.props?.type === "submit").props.disabled, true);
   const tree = h.dialog({title: `確認 ${label}`, body: () => "架空の説明", confirmLabel: `実行 ${deployBranch}`,
     tone: "danger", requireText: deployBranch, icon: "stop", onConfirm: noop});
   const text = dialogDisplay(tree);

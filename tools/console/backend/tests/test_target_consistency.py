@@ -1,11 +1,8 @@
 """接続先照合・状態更新とWebSocket終了を外部接続なしで確認する。"""
 import asyncio
 import ast
-import importlib.util
 from pathlib import Path
-import sqlite3
 import sys
-import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -227,40 +224,3 @@ class InsightsChoicesConsistencyTests(unittest.TestCase):
         self.assertEqual(effective["auto_topic_interval_hours"], constants["DEFAULT_AUTO_TOPIC_INTERVAL_HOURS"])
         for interval in collector.auto_topic_intervals:
             self.assertEqual(collector.describe_settings({"auto_topic_interval_hours": interval})["auto_topic_interval_hours"], interval)
-
-
-
-class SummaryIndexTests(unittest.TestCase):
-    def test_direct_import_uses_feedback_period_index_and_preserves_database(self):
-        script = Path(__file__).resolve().parents[1] / "remote_scripts/db_summary.py"
-        spec = importlib.util.spec_from_file_location("test_db_summary_module", script)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        with tempfile.TemporaryDirectory() as directory:
-            db_path = Path(directory) / "bot.db"
-            con = sqlite3.connect(db_path)
-            try:
-                con.executescript("CREATE TABLE feedback(guild_id INTEGER, created_at TEXT, rating INTEGER); CREATE INDEX idx_feedback_guild_created ON feedback(guild_id,created_at);")
-                con.execute("INSERT INTO feedback VALUES(1,datetime('now'),1)")
-                con.commit()
-            finally:
-                con.close()
-            original = db_path.read_bytes()
-            statements = []
-            connect = sqlite3.connect
-            def traced(*args, **kwargs):
-                connection = connect(*args, **kwargs)
-                connection.set_trace_callback(statements.append)
-                return connection
-            with patch.object(module.sqlite3, "connect", side_effect=traced):
-                result = module.collect(str(db_path), str(Path(directory) / "blacklist.json"))
-            self.assertEqual(result["feedback"], {"good": 1, "bad": 0})
-            query = next(sql for sql in statements if "SUM(rating = 1)" in sql)
-            con = connect(db_path)
-            try:
-                plans = " ".join(row[3] for row in con.execute("EXPLAIN QUERY PLAN " + query))
-                self.assertIn("SEARCH feedback USING INDEX idx_feedback_guild_created", plans)
-                self.assertIn("created_at>? AND created_at<?", plans)
-            finally:
-                con.close()
-            self.assertEqual(db_path.read_bytes(), original)

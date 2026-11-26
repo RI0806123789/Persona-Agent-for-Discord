@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import {readFile} from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { compileTs, readSource } from "./helpers/compile.mjs";
 
 test("ショートカットは最新状態を使い、終了時にリスナーとタイマーを回収する", async () => {
-  const source = await readFile(new URL("../src/useConsoleShortcuts.ts", import.meta.url), "utf8");
-  const output = ts.transpileModule(source, {compilerOptions: {module: ts.ModuleKind.CommonJS}}).outputText;
+  const source = await readSource("useConsoleShortcuts.ts");
   let state = false, handler, cleanup, timer, refs = [], index = 0;
   const react = {
     useState: () => [state, (value) => {state = value;}],
@@ -18,10 +16,9 @@ test("ショートカットは最新状態を使い、終了時にリスナー�
     setTimeout: (fn) => {timer = fn; return 1;}, clearTimeout: () => {timer = null;},
   };
   try {
-    const exports = {};
-    new Function("require", "exports", output)((name) => name === "react" ? react : {
+    const exports = compileTs(source, (name) => name === "react" ? react : {
       PAGES: [{id: "overview", goKey: "o"}, {id: "logs", goKey: "l"}],
-    }, exports);
+    });
     const pages = [], refreshed = [];
     const options = {page: "overview", connected: true, paused: false, setPaused() {}, confirmOpen: false,
       setConfirmOpen() {}, helpOpen: false, setHelpOpen() {}, modalRailOpen: false, setModalRailOpen() {},

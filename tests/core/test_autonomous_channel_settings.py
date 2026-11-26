@@ -92,7 +92,8 @@ class AutonomousChannelPersistenceTests(unittest.IsolatedAsyncioTestCase):
                 with patch("persona_bot.core.app_state.logger") as logged:
                     settings.apply_persisted({"autonomous_voice_channel_id": value})
                 self.assertIsNone(settings.autonomous_voice_channel_id)
-                self.assertIn("autonomous_voice_channel_id", logged.warning.call_args.args[0])
+                args = logged.warning.call_args.args
+                self.assertIn("autonomous_voice_channel_id", args[0] % args[1:] if len(args) > 1 else args[0])
         for value in (0, None):
             with self.subTest(value=value):
                 settings = GuildSettings()

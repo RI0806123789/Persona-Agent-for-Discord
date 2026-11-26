@@ -53,7 +53,7 @@ class VoiceModerationMixin:
 
         def _update_gate(self) -> None: ...
         def _end_activity(self, *, discard: bool = False) -> None: ...
-        def _remove_reservation(self, user_id: int) -> None: ...
+        def _clear_participant_state(self, user_id: int, reason: str) -> None: ...
         def _discard_response(self, utterance: _Utterance, reason: str, *, fade: bool = False) -> None: ...
 
     def _reject_input(self, utterance: _Utterance, reason: str) -> None:
@@ -79,12 +79,7 @@ class VoiceModerationMixin:
             await self._notify(text, member)
         if just_blocked and not self._stopped:
             # 3回目違反でブロックされた話者が次の発話を始めていたり予約を持っていたりしても残さない（#509）。
-            if self._speaker_state.active_user == user_id:
-                self._end_activity(discard=True)
-            if self._current is not None and self._current.user_id == user_id:
-                self._discard_response(self._current, "ブラックリスト登録")
-            self._speaker_state.participants.pop(user_id, None)
-            self._remove_reservation(user_id)
+            self._clear_participant_state(user_id, "ブラックリスト登録")
             self._update_gate()
 
     async def _judge_input(self, utterance: _Utterance) -> None:

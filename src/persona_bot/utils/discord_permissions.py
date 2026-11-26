@@ -48,7 +48,7 @@ async def is_current_bot_owner(interaction: discord.Interaction) -> bool:
     try:
         application = await interaction.client.application_info()
     except Exception as error:
-        logger.error(f'ボット所有者の再確認に失敗したため拒否します: {type(error).__name__}', exc_info=error)
+        logger.error("ボット所有者の再確認に失敗したため拒否します。", exc_info=error)
         return False
     return _is_application_owner(interaction.user.id, application)
 
@@ -70,7 +70,7 @@ async def is_current_administrator(interaction: discord.Interaction) -> bool:
     try:
         member = await user.guild.fetch_member(user.id)
     except Exception as error:
-        logger.error(f'管理者権限の再確認に失敗したため拒否します: {type(error).__name__}', exc_info=error)
+        logger.error("管理者権限の再確認に失敗したため拒否します。", exc_info=error)
         return False
     return is_administrator(member)
 

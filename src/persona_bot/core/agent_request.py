@@ -10,6 +10,7 @@ from persona_bot.core.app_state import ResponseSettings
 from persona_bot.services.agent_plan import AgentPlan, requests_subagent
 from persona_bot.services.agent_service import render_agent_line
 from persona_bot.services.prompting import build_agent_report_section
+from persona_bot.utils.discord_helpers import NO_MENTIONS
 from persona_bot.views.agent_thread import WorkThreadEntry, archive_work_thread, send_reopen_confirmation
 
 logger = logging.getLogger(__name__)
@@ -44,9 +45,9 @@ async def handle_agent_request(
     if not self.agent.try_acquire(user_id):
         logger.info('サブエージェント: 実行中の依頼があるため受け付けませんでした (user_id=<ID>)。')
         try:
-            await message.reply(render_agent_line(lines, "busy"), allowed_mentions=discord.AllowedMentions.none())
+            await message.reply(render_agent_line(lines, "busy"), allowed_mentions=NO_MENTIONS)
         except discord.DiscordException as error:
-            logger.error(f'サブエージェント: 受付できない旨を送れませんでした: {type(error).__name__}', exc_info=error)
+            logger.error("サブエージェント: 受付できない旨を送れませんでした。", exc_info=error)
         return None
     progress = None
     progress_finished = False

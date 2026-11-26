@@ -255,14 +255,14 @@ class LegacyDataImporter:
                     "UPDATE pending_log SET user_id = ? WHERE user_id = ''", (owner,)
                 )
                 if cursor.rowcount:
-                    logger.info(f'データベース: pending_log の未割当 {cursor.rowcount} 件を user_id=<ID> へ振り直しました。')
+                    logger.info("データベース: pending_log の未割当 %d 件を user_id=<ID> へ振り直しました。", cursor.rowcount)
             else:
                 # 引き継ぎ先が無いときは、旧・全体共有の会話ログも破棄する（profile と同じ方針）。
                 # 残すと user_id='' の「誰でもない利用者」として記憶圧縮の対象に数えられ、
                 # 誰も読まない記憶を作るために Gemini を呼び続ける。
                 cursor = self._conn.execute("DELETE FROM pending_log WHERE user_id = ''")
                 if cursor.rowcount:
-                    logger.warning(f'データベース: 引き継ぎ先が無いため、pending_log の未割当 {cursor.rowcount} 件を破棄しました。')
+                    logger.warning("データベース: 引き継ぎ先が無いため、pending_log の未割当 %d 件を破棄しました。", cursor.rowcount)
 
     # ---- 旧 JSON / テキストファイルの取り込み --------------------------------
 
@@ -284,10 +284,10 @@ class LegacyDataImporter:
                 backup_path = free_backup_path(path, self._backup_max_suffix())
                 importer(path)
                 path.replace(backup_path)
-                logger.info(f'データベース: {filename} を取り込み、{backup_path.name} に改名しました。')
+                logger.info("データベース: %s を取り込み、%s に改名しました。", filename, backup_path.name)
             except Exception as error:
                 # 取り込み失敗でも起動は続ける（ファイルが残るので次回起動時に再試行される）
-                logger.error(f'データベース: {filename} の取り込みに失敗しました: {type(error).__name__}', exc_info=error)
+                logger.error("データベース: %s の取り込みに失敗しました。", filename, exc_info=error)
 
     def import_affinity_json(self, path: Path) -> None:
         entries = load_legacy_user_entries(path)
@@ -322,7 +322,10 @@ class LegacyDataImporter:
             # 引き継ぎ先が無ければ取り込まない（migrate_profile_rows と同じく破棄する）。
             # ファイルは呼び出し元が .imported.bak へ改名して残すため、内容は失われない。
             if entries:
-                self._get_logger().info(f'データベース: 引き継ぎ先が無いため、pending_log.txt の {len(entries)} 件は取り込みません。')
+                self._get_logger().info(
+                    "データベース: 引き継ぎ先が無いため、pending_log.txt の %d 件は取り込みません。",
+                    len(entries),
+                )
             return
         with self._lock, self._conn:
             imported = self._conn.execute(
@@ -372,8 +375,12 @@ class LegacyDataImporter:
                 return
 
             self._write_json(path, {})
-            logger.info(f'データベース: profile.json から {len(absorbed)} 人分・{sum((len(keys) for keys in absorbed.values()))} 項目を profile テーブルへ追加しました。')
+            logger.info(
+                "データベース: profile.json から %d 人分・%d 項目を profile テーブルへ追加しました。",
+                len(absorbed),
+                sum(len(keys) for keys in absorbed.values()),
+            )
         except json.JSONDecodeError as error:
-            logger.error(f'データベース: profile.json が JSON として読めないため取り込みをスキップします: {type(error).__name__}', exc_info=error)
+            logger.error("データベース: profile.json が JSON として読めないため取り込みをスキップします。", exc_info=error)
         except Exception as error:
-            logger.error(f'データベース: profile.json の取り込みに失敗しました: {type(error).__name__}', exc_info=error)
+            logger.error("データベース: profile.json の取り込みに失敗しました。", exc_info=error)

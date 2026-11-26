@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import ts from "typescript";
 import { compileTs, readSource as source } from "./helpers/compile.mjs";
 
 const logs = compileTs(await source("logs.ts"));

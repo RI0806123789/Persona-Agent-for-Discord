@@ -16,18 +16,13 @@ from persona_bot.core.app_state import BotState
 from persona_bot.services import ng_word_service
 from persona_bot.services.blacklist_service import BlacklistService
 from persona_bot.services.ng_word_service import NgWordFilter
-from tests.helpers.message_handler_helpers import make_message_handler
+from tests.helpers.message_handler_helpers import close_coroutine, make_message_handler
 from tests.helpers.discord_mocks import make_spec_channel
 
 FICTIONAL_NG_WORD = "ふわもこ禁止語"
 BOT_USER_ID = 99
 GUILD_ID = 1
 VOICE_CHANNEL_ID = 20
-
-
-def close_coroutine(coro, **kwargs):
-    # 会話統計の記録など、裏で走らせる処理はこのテストの対象外なので実行せずに閉じる
-    coro.close()
 
 
 def make_channel(spec: type, channel_id: int) -> Mock:

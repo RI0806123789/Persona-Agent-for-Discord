@@ -22,16 +22,11 @@ from persona_bot.services.gemini_service import GenerationResult
 from persona_bot.views import agent_view
 from persona_bot.utils.discord_helpers import fetch_channel_history_text
 from tests.helpers.discord_mocks import make_spec_channel
-from tests.helpers.message_handler_helpers import make_message_handler
+from tests.helpers.message_handler_helpers import close_coroutine, make_message_handler
 from tests.helpers.persona_helpers import install_empty_persona_catalog
 
 PLAN = AgentPlan(True, "架空の調査担当", "架空の街のカフェを調べる", "箇条書き", ("候補の検索", "特徴の比較"))
 SOURCE = {"title": "架空の出典", "uri": "https://example.invalid/cafe"}
-
-
-def close_coroutine(coro, **kwargs):
-    # 会話統計の記録など、裏で走らせる処理はこのテストの対象外なので実行せずに閉じる
-    coro.close()
 
 
 class AgentDelegationTests(unittest.IsolatedAsyncioTestCase):

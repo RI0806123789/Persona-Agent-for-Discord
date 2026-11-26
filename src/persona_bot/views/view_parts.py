@@ -304,54 +304,62 @@ class BackButton(ui.Button):
         hub = make_parent(interaction)
         if isawaitable(hub):
             hub = await hub
-        adopted = False
-        try:
-            if isinstance(view, PanelView) and not await view.ensure_settings_current(interaction):
-                return
-            hub.blocked_user_check = getattr(view, "blocked_user_check", None)
-            if not await edit_panel_message(interaction, content=hub.build_preview(), view=hub, source=view):
-                return
-            adopted = True
-        finally:
-            # 生成済みの戻り先が不採用・例外・中断で表示されなかった場合は止めてタイマーを残さない。
-            if not adopted and hasattr(hub, "stop"):
-                hub.stop()
-        if view is not None:
-            view.stop()
-        # エフェメラルはチャンネル経由では編集できないためWebhookの参照を保持する。
-        await bind_panel_message(interaction, hub, previous_message=getattr(view, "message", None))
+        await swap_panel(interaction, view, hub)
 
 
 async def swap_panel(
     interaction: discord.Interaction,
-    hub: ui.View,
+    hub: ui.View | None,
     panel: PanelView,
-    content: str,
+    content: str | None = None,
 ) -> None:
-    """ハブが開いている（エフェメラルな）メッセージを、サブパネルへ差し替える。
+    """ハブが開いている（エフェメラルな）メッセージを、別のパネルへ差し替える。
 
     Discord の View は最大5行までのため機能を1枚に合体できない。そこで
     「同じメッセージの中身だけを入れ替える」方式で各パネルを行き来する。
 
     引数:
-        interaction: ハブのボタンが受け取った Interaction。
-        hub:         差し替え元のハブ View（差し替え後に停止する）。
-        panel:       差し替え先のサブパネル。
-        content:     差し替え後のメッセージ本文（通常は panel.build_preview()）。
+        interaction: ボタンが受け取った Interaction。
+        hub:         差し替え元の View（差し替え後に停止する）。
+        panel:       差し替え先のパネル（不採用・中断時はこの関数内で停止する）。
+        content:     差し替え後のメッセージ本文。省略時は `panel.build_preview()`。
     """
-    if isinstance(hub, PanelView) and not await hub.ensure_settings_current(interaction):
-        panel.stop()
-        return
-    panel.blocked_user_check = getattr(hub, "blocked_user_check", None)
-    if not hasattr(panel, "guild_settings") and hasattr(hub, "guild_settings"):
-        panel.guild_settings = hub.guild_settings
-    if not await edit_panel_message(interaction, content=content, view=panel, source=hub):
-        return
-    # ハブは役目を終えたので停止する。止めないとハブのタイムアウト処理が
+    adopted = False
+    try:
+        if isinstance(hub, PanelView) and not await hub.ensure_settings_current(interaction):
+            return
+        panel.blocked_user_check = getattr(hub, "blocked_user_check", None)
+        if not hasattr(panel, "guild_settings") and hasattr(hub, "guild_settings"):
+            panel.guild_settings = hub.guild_settings
+        resolved_content = panel.build_preview() if content is None else content
+        if not await edit_panel_message(interaction, content=resolved_content, view=panel, source=hub):
+            return
+        adopted = True
+    finally:
+        # 生成済みの遷移先が不採用・例外・中断で表示されなかった場合は止めてタイマーを残さない。
+        if not adopted and hasattr(panel, "stop"):
+            panel.stop()
+    # 差し替え元は役目を終えたので停止する。止めないと元のタイムアウト処理が
     # 後からメッセージを誤って上書きする（同じメッセージを共有しているため、
-    # 表示中のサブパネルが「機能パネルは時間切れです」に化けてしまう）。
-    hub.stop()
+    # 表示中のパネルが「時間切れです」に化けてしまう）。
+    if hub is not None:
+        hub.stop()
+    # エフェメラルはチャンネル経由では編集できないためWebhookの参照を保持する。
     await bind_panel_message(interaction, panel, previous_message=getattr(hub, "message", None))
+
+
+async def edit_panel_or_followup(
+    interaction: discord.Interaction,
+    *,
+    content: str,
+    view: ui.View | None = None,
+    source: ui.View | None = None,
+) -> bool:
+    """保留済みのパネルを更新し、時間切れや画面遷移で失効していれば本人限定の followup で伝える（#511）。"""
+    if await edit_panel_message(interaction, deferred=True, content=content, view=view, source=source):
+        return True
+    await interaction.followup.send(content, ephemeral=True)
+    return False
 
 
 async def send_panel_result(interaction: discord.Interaction, text: str, shown: list[bool], *, fallback: str = "") -> bool:

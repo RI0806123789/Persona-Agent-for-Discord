@@ -36,6 +36,7 @@ from persona_bot.services.voice_conversation import (
 )
 from persona_bot.services.voice_conversation_service import VoiceConversationService
 from persona_bot.services.voice_guard import VoiceGuard, release_and_disconnect
+from persona_bot.utils.discord_helpers import NO_MENTIONS
 from persona_bot.utils.voice_permissions import missing_voice_permissions
 
 
@@ -87,7 +88,7 @@ async def promote_stage_speaker(
             text = f"⚠️ {channel.name} で、ステージの発言者になれなかったため、声で会話できずに退出しました。{hint}"
         else:
             text = f"⚠️ {channel.name} へ接続していますが、ステージの発言者になれませんでした。{hint}"
-        await interaction.followup.send(text, allowed_mentions=discord.AllowedMentions.none())
+        await interaction.followup.send(text, allowed_mentions=NO_MENTIONS)
         return False
     return True
 
@@ -112,7 +113,7 @@ async def announce_voice_join(
             "\n🎙️ ボイスチャンネルの参加者全員が同意パネルの「同意して参加」を押すと、"
             "ボットと声で会話できます。"
         )
-    await interaction.followup.send(message, allowed_mentions=discord.AllowedMentions.none())
+    await interaction.followup.send(message, allowed_mentions=NO_MENTIONS)
 
 
 async def _cleanup_failed_voice_join(
@@ -263,7 +264,7 @@ class VoiceSessionCommands:
                 guild.id, voice_client, label="同時実行上限での切断",
                 failure_message="同時実行の上限に達した後の切断に失敗しました。",
             )
-            await interaction.followup.send(NOTICE_LIVE_CAPACITY, allowed_mentions=discord.AllowedMentions.none())
+            await interaction.followup.send(NOTICE_LIVE_CAPACITY, allowed_mentions=NO_MENTIONS)
             return
         handed_off = False
         try:
@@ -341,7 +342,7 @@ class VoiceSessionCommands:
                     guild.id, voice_client, label="同時実行上限での切断",
                     failure_message="同時実行の上限に達した後の切断に失敗しました。",
                 )
-                await interaction.followup.send(NOTICE_LIVE_CAPACITY, allowed_mentions=discord.AllowedMentions.none())
+                await interaction.followup.send(NOTICE_LIVE_CAPACITY, allowed_mentions=NO_MENTIONS)
                 return False
             if not await self._prepare_stage_or_disconnect(interaction, voice_client, voice_channel):
                 return False
@@ -400,7 +401,7 @@ class VoiceSessionCommands:
         reservation = live_voice.reserve(guild.id) if live_voice is not None and guild is not None else None
         if live_voice is not None and guild is not None and not reservation:
             # 同時に会話できる VC の上限。接続してから断ると無駄に出入りするため、先に確かめる。
-            await interaction.followup.send(NOTICE_LIVE_CAPACITY, allowed_mentions=discord.AllowedMentions.none())
+            await interaction.followup.send(NOTICE_LIVE_CAPACITY, allowed_mentions=NO_MENTIONS)
             return
         try:
             await self.connect_voice(interaction, voice_channel, reservation=reservation)
@@ -490,7 +491,7 @@ class VoiceSessionCommands:
                     failure_message="音声会話を始められなかった後の切断に失敗しました。",
                 )
         if not started:
-            await interaction.followup.send(notice, allowed_mentions=discord.AllowedMentions.none())
+            await interaction.followup.send(notice, allowed_mentions=NO_MENTIONS)
         return started
 
     async def connect_voice(
@@ -529,7 +530,7 @@ class VoiceSessionCommands:
             await interaction.followup.send(
                 f"⚠️ {voice_channel.name} への接続を拒否されました（権限不足）。"
                 "チャンネルの権限設定でボットに「接続」を許可してください。",
-                allowed_mentions=discord.AllowedMentions.none(),
+                allowed_mentions=NO_MENTIONS,
             )
         except asyncio.TimeoutError:
             logger.warning("ボイス接続がタイムアウトしました。", exc_info=True)

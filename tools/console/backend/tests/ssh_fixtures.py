@@ -23,9 +23,7 @@ from typing import Any
 import asyncssh
 
 from fake_ssh_server import FakeBot, start_fake_server
-from profiles import Profile
-
-DEFAULT_BOT_DIR = "/home/ubuntu/Persona-Chat-in-Discord"
+from profiles import DEFAULT_BOT_DIR, Profile
 
 
 def make_test_profile(port: int, key_dir: Path, **overrides: Any) -> Profile:

@@ -17,6 +17,7 @@ from persona_bot.services.content_moderator import ContentModerator
 from persona_bot.core.database import Database
 from persona_bot.services.auto_topic_anniversary import AnniversaryMixin
 from persona_bot.utils.discord_helpers import (
+    NO_MENTIONS,
     can_bot_send_messages,
     fetch_channel_history_text,
     send_long_message,
@@ -254,7 +255,7 @@ class AutoTopicService(AnniversaryMixin):
                 allowed_mentions=discord.AllowedMentions(users=[member], everyone=False, roles=False, replied_user=False),
             )
         else:
-            await send_long_message(channel, screened, allowed_mentions=discord.AllowedMentions.none())
+            await send_long_message(channel, screened, allowed_mentions=NO_MENTIONS)
         return True
 
     # ==========================================================================

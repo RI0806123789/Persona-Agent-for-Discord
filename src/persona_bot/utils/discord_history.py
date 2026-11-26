@@ -115,11 +115,11 @@ async def fetch_channel_history_text(
         logger.error('履歴の取得権限がありません（チャンネルID: <ID>）。「メッセージ履歴を読む」権限を確認してください。履歴なしで応答します。', exc_info=True)
         return ""
     except discord.HTTPException as error:
-        logger.error(f'履歴の取得に失敗しました（チャンネルID: <ID>）。履歴なしで応答します: {type(error).__name__}', exc_info=error)
+        logger.error("履歴の取得に失敗しました（チャンネルID: <ID>）。履歴なしで応答します。", exc_info=error)
         return ""
     except Exception as error:
         # 除外判定・本文整形が失敗しても、不明な履歴を使わず会話だけを続ける。
-        logger.error(f'履歴の取得・整形に失敗しました。履歴なしで応答します: {type(error).__name__}', exc_info=error)
+        logger.error("履歴の取得・整形に失敗しました。履歴なしで応答します。", exc_info=error)
         return ""
 
 

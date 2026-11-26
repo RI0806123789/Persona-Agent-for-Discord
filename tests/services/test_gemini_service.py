@@ -21,6 +21,7 @@ from tests.helpers.network_guard import block_network
 from persona_bot.services import gemini_service
 from persona_bot.services.gemini_service import GeminiService
 from persona_bot.services.genai_client import close_genai_client, create_genai_client
+from persona_bot.utils.usage_graph import UsageTracker
 
 
 def api_error(code: int, message: str) -> errors.APIError:
@@ -493,10 +494,32 @@ class GeminiInternalTextTests(GeminiRequestFixture):
         with self.assertLogs(gemini_service.logger, level="INFO") as recorded:
             await self.service.generate("架空の秘密の質問", "selected-model", timeout=30, grounding=True)
         logs = "\n".join(record.getMessage() for record in recorded.records)
-        self.assertIn("内部形式が混入した応答を破棄しました（検索: 有効）", logs)
+        self.assertIn(
+            "内部形式が混入した応答を破棄しました（モデル: selected-model、検索: 有効、終了理由: STOP、パート: text×1）。",
+            logs,
+        )
         self.assertIn("再生成の上限に達したため", logs)
-        for secret in ("架空の秘密の質問", "架空の天気", "I should answer", "架空の最終回答", "example.com", "selected-model"):
+        for secret in ("架空の秘密の質問", "架空の天気", "I should answer", "架空の最終回答", "example.com"):
             self.assertNotIn(secret, logs)
+
+    async def test_discarded_internal_text_records_usage_and_swallows_tracker_errors(self) -> None:
+        tracker = UsageTracker()
+        service = GeminiService(self.client, usage=tracker)
+        self.sdk_request.side_effect = [leaked_response(), self.response]
+        with self.assertLogs("persona_bot.utils.usage_graph", level="INFO") as usage_logs:
+            result = await service.generate("質問", "selected-model", timeout=30)
+        self.assertEqual(result, ("架空の応答", self.response.usage_metadata, []))
+        self.assertEqual(list(tracker.total_tokens), [99])
+        self.assertFalse([line for line in usage_logs.output if "User (" in line])
+
+        broken = SimpleNamespace(log_tokens=Mock(side_effect=RuntimeError("架空の非公開の値")))
+        broken_service = GeminiService(self.client, usage=broken)
+        self.sdk_request.side_effect = [leaked_response(), self.response]
+        with self.assertLogs("persona_bot.utils.usage_graph", level="WARNING") as warn_logs:
+            recovered = await broken_service.generate("質問", "selected-model", timeout=30)
+        self.assertEqual(recovered[0], "架空の応答")
+        self.assertIn("RuntimeError", warn_logs.output[0])
+        self.assertNotIn("架空の非公開の値", warn_logs.output[0])
 
     async def test_normal_words_code_examples_and_structured_thoughts_are_not_regenerated(self) -> None:
         normal = "I thought about it.\n```python\nprint('架空の出力')\n```\n`tool_code` は架空の語だよ。"
