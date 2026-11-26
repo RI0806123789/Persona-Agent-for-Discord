@@ -74,7 +74,13 @@ data/ng/blacklist.json
 # ---dev---
 memo/
 chatlog/
+# 手元の素材（assets/）は除外したまま、README のバナー画像（#528）だけを公開する。
+# 除外したフォルダの中のファイルは戻せないので、ルートの assets/ だけフォルダを戻してから中身を除外し直す
+# （ほかの場所の assets/ は従来どおり丸ごと除外する）。
 assets/
+!/assets/
+/assets/*
+!/assets/banner.png
 .claude/
 .codex/
 .vscode/
