@@ -91,3 +91,18 @@ export function useInView<T extends Element>(options: { once: boolean; threshold
 
   return [ref, inView] as const;
 }
+
+/**
+ * 読み込んだ時点の URL の #… の位置へ移動する。
+ * 本文は JavaScript で描画するので、ブラウザが最初に探す時点ではまだ行き先が無い（他のページや README から
+ * ./operations.html#data-migration のように直接開かれたとき、ページの先頭に留まってしまう）。描画の後に探し直す。
+ */
+export function useScrollToHash(): void {
+  useEffect(() => {
+    const id = decodeURIComponent(window.location.hash.slice(1));
+    if (!id) return;
+    const target = document.getElementById(id);
+    // 読み込み直後なので、なめらかに動かさずにすぐ移す（scroll-behavior: smooth を上書きする）
+    target?.scrollIntoView({ block: "start", behavior: "instant" });
+  }, []);
+}

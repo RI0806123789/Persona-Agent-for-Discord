@@ -21,5 +21,7 @@
 @import "./styles/howto.css";
 @import "./styles/tech.css";
 @import "./styles/changelog.css";
+@import "./styles/guide.css";
+@import "./styles/prose.css";
 @import "./styles/footer.css";
 @import "./styles/motion.css";

@@ -1,0 +1,233 @@
+/* 説明ページ（ガイド。Issue #528）の本文: 段落・箇条書き・小見出し・注意書き・表・コードの例。
+   読み込む順番は styles.css が決める。色は tokens.css のトークンから使う。 */
+/* --- 文 ----------------------------------------------------------------- */
+
+.guide-section > * + * {
+  margin-top: 16px;
+}
+
+.guide-section p,
+.prose-list li,
+.prose-table td {
+  overflow-wrap: anywhere;
+}
+
+.prose-heading {
+  margin-top: 32px;
+  font-size: 1.12rem;
+  font-weight: 700;
+}
+
+.prose-list {
+  display: grid;
+  gap: 8px;
+  padding-left: 1.4em;
+  list-style: disc;
+}
+
+.prose-list--ordered {
+  list-style: decimal;
+}
+
+.prose-list li::marker {
+  color: var(--accent-strong);
+}
+
+/* 文中のコード。長いパスやコマンドでも、行からはみ出さずに折り返す */
+.guide-section :not(pre) > code {
+  padding: 0.1em 0.4em;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-tint);
+  font-family: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, "DejaVu Sans Mono", "Noto Sans Mono", ui-monospace, monospace;
+  font-size: 0.88em;
+  font-feature-settings: normal;
+  font-variant-ligatures: none;
+  overflow-wrap: anywhere;
+}
+
+.inline-link {
+  color: var(--accent-strong);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 0.2em;
+  transition: text-decoration-color 0.25s var(--ease);
+}
+
+.inline-link:hover {
+  text-decoration-color: currentColor;
+}
+
+/* --- 注意書き ------------------------------------------------------------- */
+
+.prose-note {
+  display: grid;
+  gap: 4px;
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-s);
+  background: var(--accent-soft);
+}
+
+.prose-note--warning {
+  border-left-color: var(--warm);
+  background: var(--warm-soft);
+}
+
+.prose-note__title {
+  font-weight: 700;
+}
+
+/* --- 表 ----------------------------------------------------------------- */
+
+.prose-table {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+}
+
+.prose-table table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.prose-table th,
+.prose-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose-table th {
+  background: var(--bg-tint);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.prose-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.prose-table td:first-child {
+  font-weight: 600;
+}
+
+/* 表の中のコード（項目名やコマンド）は途中で折り返さない。入りきらない幅は表ごと横に送る */
+.prose-table :not(pre) > code {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+/* --- コードの例 ----------------------------------------------------------- */
+/* 等幅フォントは欧文のものを先に並べる。日本語の等幅フォントに落ちると、バックスラッシュが円記号（¥）で表示され、
+   Windows のパスの例（..\.venv\Scripts など）を読み違えるため */
+/* 疑似 Discord 画面と同じく、どちらの配色でも暗い地で見せる（コマンドの見分けやすさを優先する） */
+
+.code-block {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--dc-border);
+  border-radius: var(--radius-m);
+  background: var(--dc-bg);
+  box-shadow: var(--shadow);
+}
+
+.code-block__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 6px 8px 6px 16px;
+  border-bottom: 1px solid var(--dc-border);
+  background: var(--dc-side);
+}
+
+.code-block__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dc-text-soft);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+/* 札の頭に、種類ごとの色の点を付ける */
+.code-block__label::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--dc-accent);
+}
+
+.code-block__label--powershell::before,
+.code-block__label--json::before {
+  background: var(--dc-warm);
+}
+
+.code-block__label--text::before {
+  background: var(--dc-text-soft);
+}
+
+.code-block__copy {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--dc-border);
+  border-radius: 999px;
+  background: var(--dc-raised);
+  color: var(--dc-text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.25s var(--ease), color 0.25s var(--ease);
+}
+
+.code-block__copy:hover {
+  border-color: var(--dc-accent);
+}
+
+.code-block__copy.is-done {
+  border-color: var(--dc-accent);
+  color: var(--dc-accent);
+}
+
+.code-block__copy.is-failed {
+  border-color: var(--dc-warm);
+  color: var(--dc-warm);
+}
+
+.code-block__body {
+  margin: 0;
+  padding: 16px 18px;
+  overflow-x: auto;
+  color: var(--dc-text);
+  font-family: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, "DejaVu Sans Mono", "Noto Sans Mono", ui-monospace, monospace;
+  font-size: 0.86rem;
+  line-height: 1.7;
+  tab-size: 4;
+  /* 本文の詰め組み（palt）と合字を外す。-- が一本の線に見えたり、桁がずれたりしないように */
+  font-feature-settings: normal;
+  font-variant-ligatures: none;
+}
+
+/* ブラウザの既定のスタイルは code に monospace（日本語の環境では日本語の等幅フォント）を指定するので、
+   pre のフォントをそのまま使わせる（外すと、上の並びが効かずにバックスラッシュが ¥ になる） */
+.code-block__body code {
+  font-family: inherit;
+}
+
+.code-block__body:focus-visible {
+  outline-offset: -3px;
+}
+
+.code-comment {
+  color: var(--dc-text-soft);
+}

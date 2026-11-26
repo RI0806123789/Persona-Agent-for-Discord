@@ -268,7 +268,7 @@ class ConstraintsTests(unittest.TestCase):
         self.direct = merge_constraints.direct_dependency_names(_read(REQUIREMENTS_PATH))
 
     def test_requirements_reads_constraints(self) -> None:
-        # pip install -r requirements.txt（README・CI・デプロイ）だけで推移依存の固定版が効く
+        # pip install -r requirements.txt（セットアップの手順・CI・デプロイ）だけで推移依存の固定版が効く
         self.assertRegex(_read(REQUIREMENTS_PATH), r"(?m)^-c constraints\.txt$")
         self.assertTrue(CONSTRAINTS_PATH.exists())
 

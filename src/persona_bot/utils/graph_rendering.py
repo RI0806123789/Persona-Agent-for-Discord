@@ -27,7 +27,7 @@ def graph_font_context() -> dict[str, list[str]]:
     installed = {font.name for font in font_manager.fontManager.ttflist}
     families = [family for family in GRAPH_FONT_FAMILY
                 if family in installed or f"font.{family}" in rcParams]
-    # 日本語フォント未導入でも描画自体は継続する。字形の準備はREADMEの手順で行う。
+    # 日本語フォント未導入でも描画自体は継続する。字形の準備は紹介サイトの「運用」のページ（Site/src/guides/operations.ts）の手順で行う。
     return {"font.family": families or ["sans-serif"]}
 
 

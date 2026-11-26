@@ -9,7 +9,7 @@ const read = async (name) => (await readFile(new URL(`../src/${name}`, import.me
 // 分割前の styles.css と同じ並び。足したら、ここと styles.css の両方へ同じ位置に足す。
 const ORDER = [
   "tokens", "base", "header", "buttons", "hero", "demo", "sections", "features", "story", "howto", "tech",
-  "changelog", "footer", "motion",
+  "changelog", "guide", "prose", "footer", "motion",
 ];
 
 const withoutCommentsAndStrings = (css) => css

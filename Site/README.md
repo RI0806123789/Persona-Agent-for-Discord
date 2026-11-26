@@ -1,6 +1,6 @@
 # 紹介サイト（Site/）
 
-Persona Agent for Discord の紹介用ホームページです（Issue #410）。React + TypeScript + Vite で作った 1 ページの静的サイトで、GitHub Pages で公開します。ボット本体（`src/`）とは依存関係もビルドも分かれています。
+Persona Agent for Discord の紹介用ホームページ（Issue #410）と、README から移した説明ページ（ガイド。Issue #528）です。React + TypeScript + Vite で作った静的サイトで、GitHub Pages で公開します。ボット本体（`src/`）とは依存関係もビルドも分かれています。
 
 ## 決めたこと
 
@@ -14,6 +14,8 @@ Persona Agent for Discord の紹介用ホームページです（Issue #410）�
 | ボットの招待 | 載せない（自分でホストする前提の説明にとどめる） |
 | アクセスの計測 | 行わない。外部のスクリプト・フォント・画像も読み込まない |
 | 言語 | 日本語のみ |
+| 説明ページ（#528） | セットアップ・ペルソナの作り方・使い方・運用の 4 ページ。手順や使い方の詳細はここにだけ書き、README は概要とリンク集に絞る |
+| 外部へのリンク | 張らない。キーの取得先などの URL は文字で書く（#410・#528） |
 
 ## 開発
 
@@ -32,25 +34,32 @@ npm run preview  # http://127.0.0.1:4174 でビルド結果を確認
 
 ```text
 Site/
-├── index.html            # 最初の描画より前に配色を決めるスクリプトを含む
+├── index.html            # トップページ。最初の描画より前に配色を決めるスクリプトを含む
+├── setup.html ほか       # 説明ページ（setup・persona・usage・operations）。head は index.html と同じで、<body data-guide> でページを選ぶ
 ├── public/               # そのまま配信するファイル（favicon）
 ├── src/
-│   ├── content.ts        # 画面に出す文言の唯一の置き場所
+│   ├── content.ts        # トップページと全ページ共通の部分（ヘッダー・フッター・説明ページの一覧 GUIDES）の文言
+│   ├── guides/           # 説明ページの本文（setup.ts など）と、その型（types.ts）・文中の書式の読み分け（markup.ts）
+│   ├── guide.tsx         # 説明ページの入口（ページの id → 本文の対応表）
 │   ├── demoTimeline.ts   # 疑似 Discord 画面の再生順（表示に依存しない計算）
 │   ├── App.tsx           # ページの構成（ヘッダー・各セクション・フッター）
-│   ├── components/       # 疑似 Discord 画面（DiscordDemo.tsx がタブと全体、demo/ が発言の描画と場面の再生）・アイコン・出現アニメーション
+│   ├── components/       # 共通のヘッダー・フッター（SiteChrome.tsx）、説明ページの部品（guide/。目次・コードの例など）、疑似 Discord 画面（DiscordDemo.tsx がタブと全体、demo/ が発言の描画と場面の再生）・アイコン・出現アニメーション
 │   ├── hooks.ts          # 配色の切り替え・動きを減らす設定・画面内の判定
 │   ├── styles.css        # スタイルの入口。styles/ のファイルを @import するだけ（読み込む順番がカスケードの順番。入れ替えない）
-│   └── styles/           # tokens（配色のトークン）・base・header・buttons・hero・demo（疑似 Discord 画面）・各セクション・motion（動きを減らす設定。最後）
+│   └── styles/           # tokens（配色のトークン）・base・header・buttons・hero・demo（疑似 Discord 画面）・各セクション・guide と prose（説明ページ）・motion（動きを減らす設定。最後）
 └── tests/                # Node.js 標準のテスト
 ```
 
 ## 文言を直すとき
 
-- 画面の文言は **`src/content.ts` だけ**を直します。部品（`App.tsx` など）に文を直接書かないこと。
-- **ボットの機能を足したり既定値を変えたりしたら、README・ヘルプ（`src/persona_bot/views/help_view.py`）と合わせて `content.ts` も直します。**
+- 画面の文言は、トップページと共通の部分を **`src/content.ts`**、説明ページの本文を **`src/guides/<ページ>.ts`** で直します。部品（`App.tsx` など）に文を直接書かないこと。
+- **ボットの機能を足したり既定値を変えたりしたら、README・ヘルプ（`src/persona_bot/views/help_view.py`）と合わせて `content.ts` と説明ページも直します。** セットアップ・ペルソナの作り方・使い方・運用の手順は説明ページにだけ書き、README には書きません。
+- 説明ページの本文は、段落・箇条書き・小見出し・コードの例・注意書き・表のブロックで書きます。文中で使える書式は `` `コード` ``・`**強調**`・`[文字](行き先)` の 3 つだけです（Markdown を描画するライブラリは入れていません）。
+- **外部のサイトへはリンクしません。** キーの取得先などは `` `https://…` `` と文字で書き、`tests/guides.test.mjs` の `TEXT_ONLY_URLS` に足します。リンクの行き先にできるのは、サイト内のページ・節（`./setup.html#env`・`#env`）と、このリポジトリの中だけです。
+- 手順の例には実際のパス・ユーザー名・ホスト名を書かず、`<PROJECT_DIR>`・`<USER>`・`<HOST>` などで書きます。
+- 説明ページを足すときは、`content.ts` の `GUIDES`、`Site/` の直下の HTML（`index.html` と同じ head）、`src/guides/<id>.ts`、`src/guide.tsx` の対応表をそろえます（`vite.config.ts` は `GUIDES` からビルドの入口を作ります）。節の id は README などからも指しているので、変えるときは参照元も直します。
 - `content.ts` の「制作背景」「目的」（`STORY`・`PURPOSE`）は**仮の文**です。ボットの機能から言える範囲の下書きなので、公開する前に制作者が書き直してください。
-- 公開ページなので、個人情報・Discord の ID・API キー・サーバーの実パス・実際の会話や記憶・キャラ別のプロンプトを書かないこと。疑似 Discord 画面の登場人物と会話は架空のものにします。`tests/content.test.mjs` が、ID・メールアドレス・キー・招待 URL・リポジトリ外へのリンクに見える値を検出します。
+- 公開ページなので、個人情報・Discord の ID・API キー・サーバーの実パス・実際の会話や記憶・キャラ別のプロンプトを書かないこと。疑似 Discord 画面の登場人物と会話は架空のものにします。`tests/content.test.mjs` と `tests/guides.test.mjs` が、ID・メールアドレス・キー・招待 URL・リポジトリ外へのリンクに見える値を検出します。
 - 色は `styles/tokens.css` のトークン（`--accent` など）から使います。部品に直接の色を書くと、ライト／ダークの片方で読めなくなります。
 - スタイルを足すときは、意味の合う `styles/` のファイルへ書きます。ファイルを足したら `styles.css` へ `@import` を同じ位置に足します（`tests/styles-layout.test.mjs` が順番と取りこぼしを確かめます）。`motion.css`（動きを減らす設定）は最後に読み込まれることで上書きが効くので、順番を入れ替えないこと。
 

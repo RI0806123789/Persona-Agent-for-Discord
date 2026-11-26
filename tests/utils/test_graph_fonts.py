@@ -56,7 +56,7 @@ class JapaneseGraphRenderingTests(unittest.IsolatedAsyncioTestCase):
         japanese = linux or [name for name in ("Yu Gothic", "Meiryo") if name in available]
         if not japanese:
             if os.environ.get("REQUIRE_JAPANESE_GRAPH_FONT") == "1":
-                self.fail("日本語フォントが必要です。READMEのフォント導入手順を確認してください。")
+                self.fail("日本語フォントが必要です。紹介サイトの「運用」のページ（日本語グラフのフォント）の手順を確認してください。")
             self.skipTest("日本語フォント未導入のため、実描画の字形確認を省略します。")
         family = japanese[0]
         old_families = constants.GRAPH_FONT_FAMILY[:]

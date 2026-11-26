@@ -1,14 +1,10 @@
 import type { CSSProperties, ReactNode } from "react";
 import {
-  DISCLAIMER,
   FEATURES_INTRO,
   FEATURE_GROUPS,
-  FOOTER,
+  GUIDES,
   HERO,
-  LINKS,
-  NAV_ITEMS,
   PURPOSE,
-  SITE_NAME,
   STACK,
   START,
   STORY,
@@ -18,55 +14,13 @@ import {
 } from "./content";
 import { DiscordDemo } from "./components/DiscordDemo";
 import { Reveal } from "./components/Reveal";
-import { ArrowIcon, GitHubIcon, LogoMark, MoonIcon, SunIcon } from "./components/icons";
-import { useScrolled, useTheme } from "./hooks";
-
-/** ページの外（GitHub）へ出るリンクかどうか。外へ出るものだけ新しいタブで開く */
-function isExternal(href: string): boolean {
-  return href.startsWith("http");
-}
-
-function externalProps(href: string) {
-  return isExternal(href) ? { target: "_blank", rel: "noreferrer" } : {};
-}
+import { SiteFooter, SiteHeader, externalProps } from "./components/SiteChrome";
+import { ArrowIcon, GitHubIcon } from "./components/icons";
+import { useScrollToHash } from "./hooks";
 
 /** ファーストビューの要素を、上から順に少しずつ遅らせて出す（遅れは CSS が --hero-order から決める） */
 function heroOrder(order: number): CSSProperties {
   return { "--hero-order": order } as CSSProperties;
-}
-
-function Header() {
-  const [theme, toggleTheme] = useTheme();
-  const scrolled = useScrolled();
-  const nextLabel = theme === "dark" ? "明るい配色に切り替える" : "暗い配色に切り替える";
-  return (
-    <header className={`header${scrolled ? " is-scrolled" : ""}`}>
-      <div className="container header__inner">
-        <a className="brand" href="#top">
-          <LogoMark />
-          <span>{SITE_NAME}</span>
-        </a>
-        <nav className="nav" aria-label="ページ内の移動">
-          {NAV_ITEMS.map((item) => (
-            <a key={item.href} href={item.href}>
-              {item.label}
-            </a>
-          ))}
-        </nav>
-        <div className="header__actions">
-          <button type="button" className="icon-button" onClick={toggleTheme} aria-label={nextLabel} title={nextLabel}>
-            {/* key を変えて作り直し、切り替えのたびにアイコンを少し回しながら出す */}
-            <span key={theme} className="icon-swap">
-              {theme === "dark" ? <SunIcon /> : <MoonIcon />}
-            </span>
-          </button>
-          <a className="icon-button" href={LINKS.repository} aria-label="GitHub のリポジトリを開く" title="GitHub" {...externalProps(LINKS.repository)}>
-            <GitHubIcon />
-          </a>
-        </div>
-      </div>
-    </header>
-  );
 }
 
 function Hero() {
@@ -227,6 +181,30 @@ function Start() {
           </li>
         ))}
       </ol>
+      <div className="guide-cards">
+        <Reveal className="guide-cards__head">
+          <h3>{START.guidesTitle}</h3>
+          <p>{START.guidesLead}</p>
+        </Reveal>
+        <ul className="guide-cards__list">
+          {GUIDES.map((guide, index) => (
+            <li key={guide.id}>
+              <Reveal order={index} className="guide-card-wrap">
+                <a className="card guide-card" href={guide.href}>
+                  <span className="guide-card__icon" aria-hidden>
+                    {guide.icon}
+                  </span>
+                  <span className="guide-card__title">
+                    {guide.title}
+                    <ArrowIcon />
+                  </span>
+                  <span className="guide-card__summary">{guide.summary}</span>
+                </a>
+              </Reveal>
+            </li>
+          ))}
+        </ul>
+      </div>
     </Section>
   );
 }
@@ -300,48 +278,14 @@ function Updates() {
   );
 }
 
-function Footer() {
-  return (
-    <footer className="footer">
-      <div className="container">
-        <aside className="disclaimer" aria-labelledby="disclaimer-title">
-          <h2 id="disclaimer-title">{DISCLAIMER.title}</h2>
-          <p>{DISCLAIMER.body}</p>
-          <p>{DISCLAIMER.voiceNote}</p>
-        </aside>
-        <div className="footer__row">
-          <a className="brand" href="#top">
-            <LogoMark size={24} />
-            <span>{SITE_NAME}</span>
-          </a>
-          <nav className="footer__links" aria-label="関連するページ">
-            {FOOTER.links.map((link) => (
-              <a key={link.label} href={link.href} {...externalProps(link.href)}>
-                {link.label}
-              </a>
-            ))}
-          </nav>
-        </div>
-        <p className="footer__meta">
-          <a href={FOOTER.license.href} {...externalProps(FOOTER.license.href)}>
-            {FOOTER.license.label}
-          </a>
-          {FOOTER.notes.map((note) => (
-            <span key={note}>{note}</span>
-          ))}
-        </p>
-      </div>
-    </footer>
-  );
-}
-
 export function App() {
+  useScrollToHash();
   return (
     <>
       <a className="skip-link" href="#features">
         本文へ移動
       </a>
-      <Header />
+      <SiteHeader page="home" />
       <main>
         <Hero />
         <Features />
@@ -350,7 +294,7 @@ export function App() {
         <Stack />
         <Updates />
       </main>
-      <Footer />
+      <SiteFooter page="home" />
     </>
   );
 }

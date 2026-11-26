@@ -78,8 +78,8 @@ def _persona_notice(catalog: PersonaCatalog) -> str:
     if not catalog.personas:
         return (
             "\n\nℹ️ ペルソナが未登録のため、組み込みの標準プロンプトで応答しています。"
-            f"`prompts/{PROMPT_TEMPLATE_FILE_NAME}` をコピーして `prompts/<名前>.txt` を作ると、"
-            "このパネルを開き直したときに選べます（作り方は README の「ペルソナを作る」）。"
+            f"`prompts/{PROMPT_TEMPLATE_FILE_NAME}` をコピーして `prompts/<名前>.txt` を作り、"
+            "見本の各項目にキャラクターの設定と口調を書き込むと、このパネルを開き直したときに選べます。"
             f"表示名と声は `prompts/{PERSONA_SETTINGS_TEMPLATE_FILE_NAME}` を `prompts/personas.json` に"
             "コピーして決められます。"
         )

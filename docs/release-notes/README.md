@@ -2,7 +2,7 @@
 
 Persona Agent for Discord のリリースノートです。版ごとに 1 ファイルで、GitHub の [Releases](https://github.com/RI0806123789/Persona-Agent-for-Discord/releases) の本文にも同じ内容を使います。書き方とリリースの手順は [AGENTS.md](../../AGENTS.md#バージョンリリース) にあります。
 
-過去バージョンの記載にある `memory/`・`ng/` は当時の保存先です。現在の配置は [README のディレクトリ構成](../../README.md#-ディレクトリ構成) と [データの移行手順](../../README.md#data-directory-migration) を参照してください。
+過去バージョンの記載にある `memory/`・`ng/` は当時の保存先です。現在の配置は [README のディレクトリ構成](../../README.md#-ディレクトリ構成) と [データの移行手順](https://ri0806123789.github.io/Persona-Agent-for-Discord/operations.html#data-migration)（紹介サイトの「運用」）を参照してください。
 
 | 版 | 公開日 |
 | --- | --- |

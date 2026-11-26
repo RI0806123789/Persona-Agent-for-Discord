@@ -63,7 +63,8 @@
   transition: background-color 0.25s var(--ease), color 0.25s var(--ease);
 }
 
-.nav a:hover {
+.nav a:hover,
+.nav a.is-current {
   background: var(--accent-soft);
   color: var(--text);
 }
