@@ -124,10 +124,25 @@ class DocumentLinkTests(unittest.TestCase):
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
         match = re.search(r'<img src="([^"]+)" alt="([^"]+)"', readme)
         self.assertIsNotNone(match)
-        self.assertLess(match.start(), readme.index("# Persona Agent for Discord"))
+        title = re.search(r"^# .*Persona Agent for Discord$", readme, flags=re.M)
+        self.assertIsNotNone(title)
+        self.assertLess(match.start(), title.start())
         self.assertIn("Persona Agent for Discord", match.group(2))
         self.assertIn("呼べば答える。呼ばなくても、話しかけてくる。", match.group(2))
         self.assertTrue((PROJECT_ROOT / match.group(1)).is_file(), f"バナー画像を置いてください: {match.group(1)}")
+
+    def test_readme_title_icon_is_site_favicon(self) -> None:
+        # 見出しのアイコンは、紹介サイトのファビコンをそのまま使う（画像を 2 か所に持たない）。
+        # 見出しの文字がボット名を読み上げるので、アイコンは飾りとして alt を空にする
+        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+        title = re.search(r"^# (<img [^>]+>) Persona Agent for Discord$", readme, flags=re.M)
+        self.assertIsNotNone(title, "README の見出しの先頭にアイコンを置いてください")
+        icon = title.group(1)
+        self.assertIn('src="Site/public/favicon.svg"', icon)
+        self.assertIn('alt=""', icon)
+        self.assertTrue((PROJECT_ROOT / "Site" / "public" / "favicon.svg").is_file())
+        index = (PROJECT_ROOT / "Site" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('href="./favicon.svg"', index)
 
     def test_site_links_point_to_existing_pages_and_sections(self) -> None:
         found = 0

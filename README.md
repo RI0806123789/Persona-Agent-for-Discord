@@ -2,7 +2,7 @@
   <img src="assets/banner.png" alt="Persona Agent for Discord — 呼べば答える。呼ばなくても、話しかけてくる。">
 </p>
 
-# Persona Agent for Discord
+# <img src="Site/public/favicon.svg" width="40" height="40" align="top" alt=""> Persona Agent for Discord
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)
 
